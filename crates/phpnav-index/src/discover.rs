@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
+use crate::composer::VendorFilter;
+
 /// File extensions treated as PHP source, including the Drupal ones.
 pub const PHP_EXTENSIONS: &[&str] = &[
     "php", "module", "inc", "install", "theme", "profile", "engine",
@@ -35,9 +37,10 @@ impl Default for DiscoverOptions {
 ///
 /// Ignore files such as `.gitignore` are not honored, because Drupal projects ignore
 /// `vendor` and core in git while their code is still part of the project. Hidden
-/// directories and `node_modules` are skipped. Symlinks are followed; a file reachable
-/// through several paths is reported once, under its canonical path when that path is
-/// inside the root.
+/// directories and `node_modules` are skipped. Inside a Composer `vendor` directory only
+/// the autoload paths of installed packages are kept. Symlinks are followed; a file
+/// reachable through several paths is reported once, under its canonical path when
+/// that path is inside the root.
 pub fn discover(root: &Path, opts: &DiscoverOptions) -> anyhow::Result<Vec<PathBuf>> {
     let root = root.canonicalize()?;
     let exclude = build_globset(&opts.exclude)?;
@@ -98,7 +101,23 @@ pub fn discover(root: &Path, opts: &DiscoverOptions) -> anyhow::Result<Vec<PathB
             .or_insert(chosen);
     }
 
-    let mut files: Vec<PathBuf> = by_canonical.into_values().collect();
+    let mut vendor_filters: HashMap<PathBuf, Option<VendorFilter>> = HashMap::new();
+    let mut files: Vec<PathBuf> = by_canonical
+        .into_values()
+        .filter(|path| {
+            path.ancestors()
+                .skip(1)
+                .take_while(|dir| dir.starts_with(&root))
+                .filter(|dir| dir.file_name().is_some_and(|name| name == "vendor"))
+                .all(|vendor| {
+                    vendor_filters
+                        .entry(vendor.to_path_buf())
+                        .or_insert_with(|| VendorFilter::load(vendor))
+                        .as_ref()
+                        .is_none_or(|filter| filter.allows(path))
+                })
+        })
+        .collect();
     files.sort();
     Ok(files)
 }

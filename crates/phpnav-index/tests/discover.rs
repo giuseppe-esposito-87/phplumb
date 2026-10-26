@@ -148,3 +148,72 @@ fn accepts_a_non_canonical_root() {
 
     assert_eq!(found, vec![canonical_root(&dir).join("src/A.php")]);
 }
+
+fn composer_vendor(root: &Path, installed_json: &str) {
+    write(root, "vendor/composer/installed.json", installed_json);
+    for rel in [
+        "vendor/acme/lib/src/A.php",
+        "vendor/acme/lib/functions.php",
+        "vendor/acme/lib/tests/T.php",
+        "vendor/acme/old/lib/Old/B.php",
+        "vendor/acme/old/classes/C.php",
+        "vendor/acme/tool/src/D.php",
+        "vendor/composer/ClassLoader.php",
+        "vendor/composer/abc123/core/E.php",
+        "web/core/F.php",
+    ] {
+        write(root, rel, "<?php\n");
+    }
+}
+
+const PACKAGES: &str = r#"[
+    {"name": "acme/lib", "install-path": "../acme/lib",
+     "autoload": {"psr-4": {"Acme\\": "src/"}, "files": ["functions.php"]}},
+    {"name": "acme/old", "install-path": "../acme/old",
+     "autoload": {"psr-0": {"Old_": ["lib/"]}, "classmap": ["classes/"]}},
+    {"name": "acme/tool", "install-path": "../acme/tool", "autoload": {}}
+]"#;
+
+#[test]
+fn vendor_keeps_only_composer_autoload_paths() {
+    let dir = TempDir::new().unwrap();
+    let root = canonical_root(&dir);
+    composer_vendor(&root, &format!(r#"{{"packages": {PACKAGES}}}"#));
+
+    let found = discover(&root, &DiscoverOptions::default()).unwrap();
+
+    assert_eq!(
+        relative(&root, &found),
+        vec![
+            "vendor/acme/lib/functions.php",
+            "vendor/acme/lib/src/A.php",
+            "vendor/acme/old/classes/C.php",
+            "vendor/acme/old/lib/Old/B.php",
+            "vendor/composer/ClassLoader.php",
+            "web/core/F.php",
+        ]
+    );
+}
+
+#[test]
+fn vendor_reads_composer_1_installed_json() {
+    let dir = TempDir::new().unwrap();
+    let root = canonical_root(&dir);
+    composer_vendor(&root, PACKAGES);
+
+    let found = discover(&root, &DiscoverOptions::default()).unwrap();
+
+    assert!(!relative(&root, &found).contains(&"vendor/acme/lib/tests/T.php".to_string()));
+    assert!(relative(&root, &found).contains(&"vendor/acme/lib/src/A.php".to_string()));
+}
+
+#[test]
+fn vendor_without_installed_json_is_indexed_fully() {
+    let dir = TempDir::new().unwrap();
+    let root = canonical_root(&dir);
+    write(&root, "vendor/x/y/tests/A.php", "<?php\n");
+
+    let found = discover(&root, &DiscoverOptions::default()).unwrap();
+
+    assert_eq!(relative(&root, &found), vec!["vendor/x/y/tests/A.php"]);
+}

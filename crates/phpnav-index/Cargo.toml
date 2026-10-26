@@ -15,6 +15,7 @@ mago-names.workspace = true
 mago-span.workspace = true
 mago-syntax.workspace = true
 rayon.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
