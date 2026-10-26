@@ -18,7 +18,14 @@ pub struct Hover {
 pub(crate) fn hover(index: &mut Index, path: &Path, source: &[u8], offset: u32) -> Option<Hover> {
     let (start, end) = word_at(source, offset)?;
     let summary = summarize(source);
-    if let Some((name, ty)) = infer::variable_at(index, &summary, source, offset) {
+    // The `$name` of `Class::$name` is a property, not a variable.
+    let on_static_member = summary
+        .static_refs
+        .iter()
+        .any(|r| r.start <= offset && offset <= r.end);
+    if !on_static_member
+        && let Some((name, ty)) = infer::variable_at(index, &summary, source, offset)
+    {
         return (ty != TypeExpr::Other).then(|| Hover {
             start,
             end,

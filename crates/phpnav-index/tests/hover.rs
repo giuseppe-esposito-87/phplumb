@@ -66,3 +66,20 @@ fn hover_on_whitespace_is_none() {
 
     assert!(hover_at(&mut index, &root, "   \n}", 1).is_none());
 }
+
+#[test]
+fn hover_on_a_static_property_shows_the_property_not_a_local() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let source = "<?php\nnamespace Lib;\n\nclass Other {}\n\nclass Holder\n{\n    public static int $prop = 0;\n}\n\nfunction h(): void\n{\n    $prop = new Other();\n    echo Holder::$prop;\n}\n";
+    fs::write(root.join("Holder.php"), source).unwrap();
+    let mut index = Index::build(&root, &DiscoverOptions::default()).unwrap().0;
+    let offset = source.find("Holder::$prop").unwrap() + "Holder::$".len();
+
+    let markdown = index
+        .hover(&root.join("Holder.php"), source.as_bytes(), offset as u32)
+        .unwrap()
+        .markdown;
+
+    assert!(markdown.contains("Lib\\Holder::$prop"), "{markdown}");
+}
