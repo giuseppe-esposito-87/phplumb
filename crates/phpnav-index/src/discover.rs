@@ -128,10 +128,17 @@ fn has_php_extension(path: &Path) -> bool {
         .is_some_and(|ext| PHP_EXTENSIONS.contains(&ext))
 }
 
+/// Invalid patterns are reported on stderr and skipped, so a typo in the settings
+/// does not stop indexing.
 fn build_globset(patterns: &[String]) -> anyhow::Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        builder.add(Glob::new(pattern)?);
+        match Glob::new(pattern) {
+            Ok(glob) => {
+                builder.add(glob);
+            }
+            Err(err) => eprintln!("php-navigator: ignoring exclude pattern {pattern:?}: {err}"),
+        }
     }
     Ok(builder.build()?)
 }

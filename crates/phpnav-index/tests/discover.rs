@@ -217,3 +217,19 @@ fn vendor_without_installed_json_is_indexed_fully() {
 
     assert_eq!(relative(&root, &found), vec!["vendor/x/y/tests/A.php"]);
 }
+
+#[test]
+fn skips_invalid_exclude_globs() {
+    let dir = TempDir::new().unwrap();
+    let root = canonical_root(&dir);
+    write(&root, "skip/A.php", "<?php\n");
+    write(&root, "keep/B.php", "<?php\n");
+    let opts = DiscoverOptions {
+        exclude: vec!["vendor/{a".to_string(), "skip/**".to_string()],
+        ..DiscoverOptions::default()
+    };
+
+    let found = discover(&root, &opts).unwrap();
+
+    assert_eq!(relative(&root, &found), vec!["keep/B.php"]);
+}
