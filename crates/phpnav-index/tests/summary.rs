@@ -1,4 +1,8 @@
-use phpnav_index::summary::{FileSummary, NameKind, NameRef, SymbolKind, summarize};
+use phpnav_index::phpdoc::TypeExpr;
+use phpnav_index::summary::{
+    ClassShape, Declaration, FileSummary, Member, MemberKind, NameKind, NameRef, SymbolKind,
+    summarize,
+};
 
 fn php(body: &str) -> Vec<u8> {
     format!("<?php\n{body}").into_bytes()
@@ -186,4 +190,119 @@ fn parses_php_8_4_and_8_5_syntax() {
 
     assert!(!summary.has_parse_errors);
     assert!(summary.declarations.iter().any(|d| d.fqn == "After"));
+}
+
+fn class<'a>(summary: &'a FileSummary, fqn: &str) -> &'a Declaration {
+    summary
+        .declarations
+        .iter()
+        .find(|d| d.fqn == fqn)
+        .unwrap_or_else(|| panic!("no declaration {fqn}"))
+}
+
+fn shape<'a>(summary: &'a FileSummary, fqn: &str) -> &'a ClassShape {
+    class(summary, fqn).class.as_ref().expect("a class shape")
+}
+
+fn member<'a>(shape: &'a ClassShape, name: &str) -> &'a Member {
+    shape
+        .members
+        .iter()
+        .find(|m| m.name == name)
+        .unwrap_or_else(|| panic!("no member {name}"))
+}
+
+fn named(fqn: &str) -> Option<TypeExpr> {
+    Some(TypeExpr::Named(fqn.to_string()))
+}
+
+#[test]
+fn class_shape_lists_parent_interfaces_and_traits() {
+    let summary = summarize(&php(
+        "namespace App; use Lib\\Base; class Foo extends Base implements \\Countable, Bar { use T1, \\Lib\\T2; }",
+    ));
+
+    let foo = shape(&summary, "App\\Foo");
+    assert_eq!(foo.parent.as_deref(), Some("Lib\\Base"));
+    assert_eq!(foo.interfaces, vec!["Countable", "App\\Bar"]);
+    assert_eq!(foo.traits, vec!["App\\T1", "Lib\\T2"]);
+}
+
+#[test]
+fn members_with_types() {
+    let source = php(
+        "namespace App;\nclass Foo {\n  const A = 1;\n  public static ?Bar $p;\n  /** @var Baz[] */\n  protected array $list;\n  public function __construct(private Qux $q) {}\n  /** @return static */\n  public function make(): self {}\n}",
+    );
+    let summary = summarize(&source);
+    let foo = shape(&summary, "App\\Foo");
+
+    assert_eq!(member(foo, "A").kind, MemberKind::Constant);
+    let p = member(foo, "p");
+    assert_eq!(
+        (p.kind, p.is_static, p.ty.clone()),
+        (MemberKind::Property, true, named("App\\Bar"))
+    );
+    assert_eq!(
+        member(foo, "list").ty,
+        Some(TypeExpr::ArrayOf(Box::new(TypeExpr::Named(
+            "App\\Baz".to_string()
+        ))))
+    );
+    let q = member(foo, "q");
+    assert_eq!(
+        (q.kind, q.ty.clone()),
+        (MemberKind::Property, named("App\\Qux"))
+    );
+    let make = member(foo, "make");
+    assert_eq!(
+        (make.kind, make.ty.clone()),
+        (MemberKind::Method, Some(TypeExpr::StaticType))
+    );
+    assert_eq!(
+        &source[make.name_start as usize..make.name_end as usize],
+        b"make"
+    );
+    assert_eq!(make.signature, "public function make(): self");
+    assert_eq!(
+        member(foo, "__construct").params,
+        vec![("q".to_string(), named("App\\Qux"))]
+    );
+}
+
+#[test]
+fn enum_cases_and_interface_extends() {
+    let summary = summarize(&php(
+        "namespace App; enum Suit: string { case Hearts = 'h'; } interface I extends J, K {}",
+    ));
+
+    assert_eq!(
+        member(shape(&summary, "App\\Suit"), "Hearts").kind,
+        MemberKind::EnumCase
+    );
+    assert_eq!(
+        shape(&summary, "App\\I").interfaces,
+        vec!["App\\J", "App\\K"]
+    );
+}
+
+#[test]
+fn function_returns_and_signatures() {
+    let summary = summarize(&php(
+        "namespace App;\n/**\n * Builds.\n * @return Foo\n */\nfunction build(int $a = 1): ?object {}",
+    ));
+
+    let build = class(&summary, "App\\build");
+    assert_eq!(build.returns, named("App\\Foo"));
+    assert_eq!(build.signature, "function build(int $a = 1): ?object");
+    assert!(build.doc.as_deref().unwrap().contains("Builds."));
+}
+
+#[test]
+fn global_constants() {
+    let summary = summarize(&php(
+        "namespace App; const LIMIT = 10; define('GLOBAL_LIMIT', 5);",
+    ));
+
+    assert_eq!(class(&summary, "App\\LIMIT").kind, SymbolKind::Constant);
+    assert_eq!(class(&summary, "GLOBAL_LIMIT").kind, SymbolKind::Constant);
 }

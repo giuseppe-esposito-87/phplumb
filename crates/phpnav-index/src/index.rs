@@ -55,6 +55,7 @@ pub struct Index {
     ids: HashMap<PathBuf, u32>,
     classes: HashMap<String, Vec<Entry>>,
     functions: HashMap<String, Vec<Entry>>,
+    constants: HashMap<String, Vec<Entry>>,
 }
 
 impl Index {
@@ -113,6 +114,7 @@ impl Index {
             ids: HashMap::new(),
             classes: HashMap::new(),
             functions: HashMap::new(),
+            constants: HashMap::new(),
         };
         for file in files.into_iter().flatten() {
             stats.files_with_parse_errors += usize::from(file.has_errors);
@@ -236,7 +238,19 @@ impl Index {
                     _ => (key, found),
                 }
             }
-            NameKind::Constant => (String::new(), &[]),
+            NameKind::Constant => {
+                let key = symbol_key(SymbolKind::Constant, &name.fqn);
+                let found = lookup(&self.constants, &key);
+                match name.fqn.rsplit_once('\\') {
+                    // Unqualified constants fall back to the global one, like functions.
+                    Some((_, global)) if found.is_empty() && !name.qualified && !name.imported => {
+                        let global = global.to_string();
+                        let entries = lookup(&self.constants, &global);
+                        (global, entries)
+                    }
+                    _ => (key, found),
+                }
+            }
         };
 
         let expected = short_name(&key);
@@ -303,7 +317,7 @@ impl Index {
         let id = self.files.len() as u32;
         for declaration in &file.declarations {
             self.table_mut(declaration.kind)
-                .entry(declaration.fqn.to_ascii_lowercase())
+                .entry(symbol_key(declaration.kind, &declaration.fqn))
                 .or_default()
                 .push(Entry {
                     file: id,
@@ -321,7 +335,7 @@ impl Index {
         };
         self.ids.remove(&file.path);
         for declaration in &file.declarations {
-            let key = declaration.fqn.to_ascii_lowercase();
+            let key = symbol_key(declaration.kind, &declaration.fqn);
             let table = self.table_mut(declaration.kind);
             if let Some(entries) = table.get_mut(&key) {
                 entries.retain(|e| e.file != id);
@@ -335,6 +349,7 @@ impl Index {
     fn table_mut(&mut self, kind: SymbolKind) -> &mut HashMap<String, Vec<Entry>> {
         match kind {
             SymbolKind::Function => &mut self.functions,
+            SymbolKind::Constant => &mut self.constants,
             _ => &mut self.classes,
         }
     }
@@ -342,6 +357,18 @@ impl Index {
 
 fn lookup<'a>(table: &'a HashMap<String, Vec<Entry>>, key: &str) -> &'a [Entry] {
     table.get(key).map(Vec::as_slice).unwrap_or_default()
+}
+
+/// The table key of a symbol: lowercased for classes and functions, which PHP
+/// matches case-insensitively; for constants only the namespace part is lowercased.
+fn symbol_key(kind: SymbolKind, fqn: &str) -> String {
+    match (kind, fqn.rsplit_once('\\')) {
+        (SymbolKind::Constant, Some((namespace, name))) => {
+            format!("{}\\{name}", namespace.to_ascii_lowercase())
+        }
+        (SymbolKind::Constant, None) => fqn.to_string(),
+        _ => fqn.to_ascii_lowercase(),
+    }
 }
 
 fn short_name(fqn: &str) -> String {
@@ -365,6 +392,20 @@ fn name_at(names: &[NameRef], offset: u32) -> Option<&NameRef> {
         .or_else(|| names.iter().find(|n| n.end == offset))
 }
 
+/// A declaration without the text only hover shows: signatures and docblocks are
+/// read again from the file when needed, which keeps the index and its cache small.
+fn lean(mut declaration: Declaration) -> Declaration {
+    declaration.signature = String::new();
+    declaration.doc = None;
+    if let Some(class) = &mut declaration.class {
+        for member in &mut class.members {
+            member.signature = String::new();
+            member.doc = None;
+        }
+    }
+    declaration
+}
+
 /// Size and modification time in nanoseconds.
 fn stamp(path: &Path) -> Option<(u64, u64)> {
     let meta = std::fs::metadata(path).ok()?;
@@ -383,7 +424,8 @@ fn read_files(paths: &[PathBuf]) -> Vec<CachedFile> {
             let (declarations, has_errors) = match std::fs::read(path) {
                 Ok(source) => {
                     let summary = summarize(&source);
-                    (summary.declarations, summary.has_parse_errors)
+                    let declarations = summary.declarations.into_iter().map(lean).collect();
+                    (declarations, summary.has_parse_errors)
                 }
                 Err(_) => (Vec::<Declaration>::new(), false),
             };

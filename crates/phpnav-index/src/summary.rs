@@ -1,4 +1,4 @@
-//! Declarations and resolved names of one PHP file.
+//! Declarations, class shapes and resolved names of one PHP file.
 
 use std::collections::{HashMap, HashSet};
 
@@ -6,13 +6,18 @@ use mago_allocator::LocalArena;
 use mago_database::file::FileId;
 use mago_names::resolver::NameResolver;
 use mago_span::HasSpan;
+use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Class, Constant, ConstantAccess, Enum, Expression, Function, FunctionCall,
-    FunctionPartialApplication, Interface, Namespace, Trait, Use, UseItems, UseType,
+    Argument, Class, ClassLikeMember, Constant, ConstantAccess, Enum, EnumCaseItem, Expression,
+    Function, FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
+    FunctionPartialApplication, Hint, Interface, Literal, Method, Modifier, Namespace, Program,
+    Property, PropertyItem, Sequence, Trait, Use, UseItems, UseType,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
 use serde::{Deserialize, Serialize};
+
+use crate::phpdoc::{NameContext, TypeExpr, parse_docblock, parse_type};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
@@ -21,6 +26,7 @@ pub enum SymbolKind {
     Trait,
     Enum,
     Function,
+    Constant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,6 +44,51 @@ pub struct Declaration {
     pub fqn: String,
     pub name_start: u32,
     pub name_end: u32,
+    /// The declaration head on one line, without the body.
+    #[serde(default)]
+    pub signature: String,
+    /// The raw docblock text.
+    #[serde(default)]
+    pub doc: Option<String>,
+    /// Functions: the return type, PHPDoc first when it names a class.
+    #[serde(default)]
+    pub returns: Option<TypeExpr>,
+    /// Class-likes: parent, interfaces, traits and members.
+    #[serde(default)]
+    pub class: Option<ClassShape>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ClassShape {
+    pub parent: Option<String>,
+    /// `implements` for classes and enums, `extends` for interfaces.
+    pub interfaces: Vec<String>,
+    pub traits: Vec<String>,
+    pub members: Vec<Member>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemberKind {
+    Method,
+    Property,
+    Constant,
+    EnumCase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Member {
+    pub kind: MemberKind,
+    /// Properties without `$`.
+    pub name: String,
+    pub is_static: bool,
+    pub name_start: u32,
+    pub name_end: u32,
+    pub signature: String,
+    pub doc: Option<String>,
+    /// Property type or method return type, PHPDoc first when it names a class.
+    pub ty: Option<TypeExpr>,
+    /// Methods: parameter names without `$`, with their types.
+    pub params: Vec<(String, Option<TypeExpr>)>,
 }
 
 /// A use of a name, resolved against the file's namespace and imports.
@@ -53,11 +104,87 @@ pub struct NameRef {
     pub imported: bool,
 }
 
+/// The namespaces and class imports of a file, for resolving names written in
+/// docblocks and type hints.
+#[derive(Clone, Debug)]
+pub struct FileNames {
+    scopes: Vec<NameScope>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct NameScope {
+    start: u32,
+    end: u32,
+    namespace: String,
+    /// Lowercased alias to fully qualified name.
+    imports: HashMap<String, String>,
+}
+
+impl Default for FileNames {
+    fn default() -> Self {
+        FileNames {
+            scopes: vec![NameScope {
+                end: u32::MAX,
+                ..NameScope::default()
+            }],
+        }
+    }
+}
+
+impl FileNames {
+    /// The names in effect at `offset`.
+    pub fn at(&self, offset: u32) -> ScopeNames<'_> {
+        ScopeNames {
+            scope: self.scope_index(offset).map(|i| &self.scopes[i]),
+        }
+    }
+
+    fn scope_index(&self, offset: u32) -> Option<usize> {
+        self.scopes
+            .iter()
+            .rposition(|s| s.start <= offset && offset <= s.end)
+    }
+}
+
+pub struct ScopeNames<'a> {
+    scope: Option<&'a NameScope>,
+}
+
+impl ScopeNames<'_> {
+    pub fn namespace(&self) -> &str {
+        self.scope.map_or("", |s| s.namespace.as_str())
+    }
+}
+
+impl NameContext for ScopeNames<'_> {
+    fn resolve_class(&self, name: &str) -> String {
+        let Some(scope) = self.scope else {
+            return name.to_string();
+        };
+        let (first, rest) = match name.split_once('\\') {
+            Some((first, rest)) => (first, Some(rest)),
+            None => (name, None),
+        };
+        if let Some(target) = scope.imports.get(&first.to_ascii_lowercase()) {
+            return match rest {
+                Some(rest) => format!("{target}\\{rest}"),
+                None => target.clone(),
+            };
+        }
+        if scope.namespace.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}\\{name}", scope.namespace)
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct FileSummary {
     pub declarations: Vec<Declaration>,
     pub names: Vec<NameRef>,
     pub has_parse_errors: bool,
+    pub file_names: FileNames,
 }
 
 /// Parses `source` and returns its declarations and resolved names. Parsing is
@@ -67,31 +194,46 @@ pub fn summarize(source: &[u8]) -> FileSummary {
     let program = parse_file_content(&arena, FileId::zero(), source);
     let resolved = NameResolver::new(&arena).resolve(program);
 
-    let mut collector = Collector::default();
+    let mut collector = Collector {
+        source,
+        program,
+        names: FileNames::default(),
+        pending: Vec::new(),
+        functions: HashSet::new(),
+        constants: HashSet::new(),
+        not_refs: HashSet::new(),
+    };
     SyntaxVisitor.walk_program(program, &mut collector);
 
     let resolved: HashMap<u32, (u32, &[u8], bool)> = resolved
         .iter()
         .map(|(start, end, fqn, imported)| (start, (end, fqn, imported)))
         .collect();
+    let fqn_at = |start: u32| resolved.get(&start).map(|(_, fqn, _)| to_fqn(fqn));
 
+    let declaration_starts: HashSet<u32> = collector.pending.iter().map(|p| p.start).collect();
     let declarations: Vec<Declaration> = collector
-        .declarations
-        .iter()
-        .filter_map(|&(kind, start, end)| {
-            let (_, fqn, _) = resolved.get(&start)?;
+        .pending
+        .into_iter()
+        .filter_map(|pending| {
+            let fqn = pending.fqn.or_else(|| fqn_at(pending.start))?;
+            let class = pending.shape.map(|shape| ClassShape {
+                parent: shape.parent.and_then(fqn_at),
+                interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
+                traits: shape.traits.into_iter().filter_map(fqn_at).collect(),
+                members: shape.members,
+            });
             Some(Declaration {
-                kind,
-                fqn: to_fqn(fqn),
-                name_start: start,
-                name_end: end,
+                kind: pending.kind,
+                fqn,
+                name_start: pending.start,
+                name_end: pending.end,
+                signature: pending.signature,
+                doc: pending.doc,
+                returns: pending.returns,
+                class,
             })
         })
-        .collect();
-    let declaration_starts: HashSet<u32> = collector
-        .declarations
-        .iter()
-        .map(|&(_, start, _)| start)
         .collect();
 
     let names = resolved
@@ -123,6 +265,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         declarations,
         names,
         has_parse_errors: program.has_errors(),
+        file_names: collector.names,
     }
 }
 
@@ -131,111 +274,577 @@ fn to_fqn(name: &[u8]) -> String {
     String::from_utf8_lossy(name).into_owned()
 }
 
-/// Facts the name resolver does not expose: which resolved names are declarations,
-/// functions, constants, or not symbol references at all. Keyed by start offset.
-#[derive(Default)]
-struct Collector {
-    declarations: Vec<(SymbolKind, u32, u32)>,
+/// PHPDoc wins when it names a class; otherwise the declared type, when it names
+/// anything navigable.
+pub(crate) fn pick_type(doc: Option<TypeExpr>, declared: Option<TypeExpr>) -> Option<TypeExpr> {
+    match doc {
+        Some(doc) if names_a_class(&doc) => Some(doc),
+        _ => declared.filter(|ty| *ty != TypeExpr::Other),
+    }
+}
+
+fn names_a_class(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Named(_) | TypeExpr::SelfType | TypeExpr::StaticType | TypeExpr::ParentType => {
+            true
+        }
+        TypeExpr::ArrayOf(element) => names_a_class(element),
+        TypeExpr::Union(members) => members.iter().any(names_a_class),
+        TypeExpr::Other => false,
+    }
+}
+
+/// A declaration found during the walk, before its names are resolved.
+struct Pending {
+    kind: SymbolKind,
+    start: u32,
+    end: u32,
+    /// Set when the resolver does not know the name, as for `define()`.
+    fqn: Option<String>,
+    signature: String,
+    doc: Option<String>,
+    returns: Option<TypeExpr>,
+    shape: Option<PendingShape>,
+}
+
+/// Parent, interfaces and traits as offsets of names the resolver resolved.
+struct PendingShape {
+    parent: Option<u32>,
+    interfaces: Vec<u32>,
+    traits: Vec<u32>,
+    members: Vec<Member>,
+}
+
+/// Where a class-like declaration's parts are, as offsets.
+struct ClassHead {
+    kind: SymbolKind,
+    node_start: u32,
+    head_start: u32,
+    name: (u32, u32),
+    left_brace: u32,
+    parent: Option<u32>,
+    interfaces: Vec<u32>,
+}
+
+struct Collector<'a> {
+    source: &'a [u8],
+    program: &'a Program<'a>,
+    names: FileNames,
+    pending: Vec<Pending>,
     functions: HashSet<u32>,
     constants: HashSet<u32>,
     /// Namespace names, which the resolver records but which name no symbol.
     not_refs: HashSet<u32>,
 }
 
+impl Collector<'_> {
+    fn text(&self, start: u32, end: u32) -> String {
+        let bytes = self
+            .source
+            .get(start as usize..end as usize)
+            .unwrap_or_default();
+        collapse(&String::from_utf8_lossy(bytes))
+    }
+
+    fn doc(&self, start: u32) -> Option<String> {
+        get_docblock_before_position(self.program.trivia.as_slice(), start)
+            .map(|trivia| String::from_utf8_lossy(trivia.value).into_owned())
+    }
+
+    fn hint_type(&self, hint: &Hint<'_>) -> TypeExpr {
+        let span = hint.span();
+        let text = self.text(span.start.offset, span.end.offset);
+        parse_type(&text, &self.names.at(span.start.offset))
+    }
+
+    fn doc_tags(&self, doc: Option<&str>, offset: u32) -> crate::phpdoc::DocBlock {
+        doc.map(|doc| parse_docblock(doc, &self.names.at(offset)))
+            .unwrap_or_default()
+    }
+
+    fn class_like(&mut self, head: ClassHead, members: &Sequence<'_, ClassLikeMember<'_>>) {
+        let (members, traits) = self.members(members);
+        self.pending.push(Pending {
+            kind: head.kind,
+            start: head.name.0,
+            end: head.name.1,
+            fqn: None,
+            signature: self.text(head.head_start, head.left_brace),
+            doc: self.doc(head.node_start),
+            returns: None,
+            shape: Some(PendingShape {
+                parent: head.parent,
+                interfaces: head.interfaces,
+                traits,
+                members,
+            }),
+        });
+    }
+
+    fn members(&self, members: &Sequence<'_, ClassLikeMember<'_>>) -> (Vec<Member>, Vec<u32>) {
+        let mut out = Vec::new();
+        let mut traits = Vec::new();
+        for member in members.iter() {
+            match member {
+                ClassLikeMember::TraitUse(trait_use) => {
+                    traits.extend(trait_use.trait_names.iter().map(|n| n.span().start.offset));
+                }
+                ClassLikeMember::Constant(constant) => {
+                    let start = constant.span().start.offset;
+                    let doc = self.doc(start);
+                    for item in constant.items.iter() {
+                        let name = String::from_utf8_lossy(item.name.value).into_owned();
+                        out.push(Member {
+                            kind: MemberKind::Constant,
+                            signature: format!("const {name}"),
+                            name,
+                            is_static: true,
+                            name_start: item.name.span.start.offset,
+                            name_end: item.name.span.end.offset,
+                            doc: doc.clone(),
+                            ty: None,
+                            params: Vec::new(),
+                        });
+                    }
+                }
+                ClassLikeMember::Property(property) => self.property(property, &mut out),
+                ClassLikeMember::EnumCase(case) => {
+                    let name = match &case.item {
+                        EnumCaseItem::Unit(item) => &item.name,
+                        EnumCaseItem::Backed(item) => &item.name,
+                    };
+                    let text = String::from_utf8_lossy(name.value).into_owned();
+                    out.push(Member {
+                        kind: MemberKind::EnumCase,
+                        signature: format!("case {text}"),
+                        name: text,
+                        is_static: true,
+                        name_start: name.span.start.offset,
+                        name_end: name.span.end.offset,
+                        doc: self.doc(case.span().start.offset),
+                        ty: None,
+                        params: Vec::new(),
+                    });
+                }
+                ClassLikeMember::Method(method) => self.method(method, &mut out),
+            }
+        }
+        (out, traits)
+    }
+
+    fn property(&self, property: &Property<'_>, out: &mut Vec<Member>) {
+        let (modifiers, hint, items): (_, _, Vec<&PropertyItem<'_>>) = match property {
+            Property::Plain(plain) => (
+                &plain.modifiers,
+                plain.hint.as_ref(),
+                plain.items.iter().collect(),
+            ),
+            Property::Hooked(hooked) => {
+                (&hooked.modifiers, hooked.hint.as_ref(), vec![&hooked.item])
+            }
+        };
+        let start = property.span().start.offset;
+        let doc = self.doc(start);
+        let tags = self.doc_tags(doc.as_deref(), start);
+        let declared = hint.map(|h| self.hint_type(h));
+        let first_item = items
+            .first()
+            .map(|item| variable_of(item).span.start.offset);
+        let prefix = first_item.map_or_else(String::new, |end| {
+            let head = modifiers
+                .first()
+                .map(|m| m.span().start.offset)
+                .unwrap_or(start);
+            self.text(head, end)
+        });
+        for item in items {
+            let variable = variable_of(item);
+            let name = String::from_utf8_lossy(variable.name)
+                .trim_start_matches('$')
+                .to_string();
+            let doc_type = tags
+                .var
+                .iter()
+                .find(|(var, _)| var.as_deref().is_none_or(|v| v == name))
+                .map(|(_, ty)| ty.clone());
+            out.push(Member {
+                kind: MemberKind::Property,
+                signature: format!("{prefix} ${name}").trim().to_string(),
+                is_static: has_static(modifiers),
+                name_start: variable.span.start.offset + 1,
+                name_end: variable.span.end.offset,
+                doc: doc.clone(),
+                ty: pick_type(doc_type, declared.clone()),
+                params: Vec::new(),
+                name,
+            });
+        }
+    }
+
+    fn method(&self, method: &Method<'_>, out: &mut Vec<Member>) {
+        let start = method.span().start.offset;
+        let doc = self.doc(start);
+        let tags = self.doc_tags(doc.as_deref(), start);
+        let head = method
+            .modifiers
+            .first()
+            .map(|m| m.span().start.offset)
+            .unwrap_or(method.function.span.start.offset);
+        let end = head_end(&method.parameter_list, method.return_type_hint.as_ref());
+        let params = self.params(&method.parameter_list, &tags);
+        let name = String::from_utf8_lossy(method.name.value).into_owned();
+
+        if name.eq_ignore_ascii_case("__construct") {
+            for (param, (param_name, ty)) in method.parameter_list.parameters.iter().zip(&params) {
+                if param.modifiers.is_empty() {
+                    continue;
+                }
+                let head = param.span().start.offset;
+                out.push(Member {
+                    kind: MemberKind::Property,
+                    name: param_name.clone(),
+                    is_static: false,
+                    name_start: param.variable.span.start.offset + 1,
+                    name_end: param.variable.span.end.offset,
+                    signature: self.text(head, param.variable.span.end.offset),
+                    doc: None,
+                    ty: ty.clone(),
+                    params: Vec::new(),
+                });
+            }
+        }
+
+        out.push(Member {
+            kind: MemberKind::Method,
+            is_static: has_static(&method.modifiers),
+            name_start: method.name.span.start.offset,
+            name_end: method.name.span.end.offset,
+            signature: self.text(head, end),
+            ty: pick_type(
+                tags.returns.clone(),
+                method
+                    .return_type_hint
+                    .as_ref()
+                    .map(|r| self.hint_type(&r.hint)),
+            ),
+            doc,
+            params,
+            name,
+        });
+    }
+
+    fn params(
+        &self,
+        list: &FunctionLikeParameterList<'_>,
+        tags: &crate::phpdoc::DocBlock,
+    ) -> Vec<(String, Option<TypeExpr>)> {
+        list.parameters
+            .iter()
+            .map(|param| {
+                let name = String::from_utf8_lossy(param.variable.name)
+                    .trim_start_matches('$')
+                    .to_string();
+                let doc_type = tags
+                    .params
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, ty)| ty.clone());
+                let declared = param.hint.as_ref().map(|h| self.hint_type(h));
+                let ty = pick_type(doc_type, declared);
+                (name, ty)
+            })
+            .collect()
+    }
+}
+
+fn variable_of<'a>(item: &'a PropertyItem<'_>) -> &'a mago_syntax::cst::DirectVariable<'a> {
+    match item {
+        PropertyItem::Abstract(item) => &item.variable,
+        PropertyItem::Concrete(item) => &item.variable,
+    }
+}
+
+fn has_static(modifiers: &Sequence<'_, Modifier<'_>>) -> bool {
+    modifiers.iter().any(|m| matches!(m, Modifier::Static(_)))
+}
+
+/// Where a function-like head ends: after the return type, or after the parameters.
+fn head_end(
+    params: &FunctionLikeParameterList<'_>,
+    returns: Option<&FunctionLikeReturnTypeHint<'_>>,
+) -> u32 {
+    returns
+        .map(|r| r.span().end.offset)
+        .unwrap_or(params.right_parenthesis.end.offset)
+}
+
+/// Collapses runs of whitespace to single spaces.
+fn collapse(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 struct SyntaxVisitor;
 
-impl<'ast, 'arena> Walker<'ast, 'arena, Collector> for SyntaxVisitor {
-    fn walk_in_namespace(&self, namespace: &'ast Namespace<'arena>, c: &mut Collector) {
+impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
+    fn walk_in_namespace(&self, namespace: &'ast Namespace<'arena>, c: &mut Collector<'arena>) {
+        let span = namespace.span();
+        let name = namespace
+            .name
+            .as_ref()
+            .map(|name| to_fqn(name.value()))
+            .unwrap_or_default();
         if let Some(name) = &namespace.name {
             c.not_refs.insert(name.span().start.offset);
         }
+        c.names.scopes.push(NameScope {
+            start: span.start.offset,
+            end: span.end.offset,
+            namespace: name,
+            imports: HashMap::new(),
+        });
     }
 
-    fn walk_in_class(&self, class: &'ast Class<'arena>, c: &mut Collector) {
-        let span = class.name.span;
-        c.declarations
-            .push((SymbolKind::Class, span.start.offset, span.end.offset));
+    fn walk_in_use(&self, r#use: &'ast Use<'arena>, c: &mut Collector<'arena>) {
+        let offset = r#use.span().start.offset;
+        let mut imports: Vec<(String, String)> = Vec::new();
+        match &r#use.items {
+            UseItems::Sequence(seq) => {
+                for item in seq.items.iter() {
+                    imports.push(import(
+                        item.name.value(),
+                        item.alias.as_ref().map(|a| a.identifier.value),
+                        None,
+                    ));
+                }
+            }
+            UseItems::TypedSequence(seq) => {
+                for item in seq.items.iter() {
+                    mark_use_item(c, Some(&seq.r#type), item.name.span().start.offset);
+                }
+            }
+            UseItems::TypedList(list) => {
+                c.not_refs.insert(list.namespace.span().start.offset);
+                for item in list.items.iter() {
+                    mark_use_item(c, Some(&list.r#type), item.name.span().start.offset);
+                }
+            }
+            UseItems::MixedList(list) => {
+                c.not_refs.insert(list.namespace.span().start.offset);
+                for mixed in list.items.iter() {
+                    mark_use_item(
+                        c,
+                        mixed.r#type.as_ref(),
+                        mixed.item.name.span().start.offset,
+                    );
+                    if mixed.r#type.is_none() {
+                        imports.push(import(
+                            mixed.item.name.value(),
+                            mixed.item.alias.as_ref().map(|a| a.identifier.value),
+                            Some(list.namespace.value()),
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(index) = c.names.scope_index(offset) {
+            c.names.scopes[index].imports.extend(imports);
+        }
     }
 
-    fn walk_in_interface(&self, interface: &'ast Interface<'arena>, c: &mut Collector) {
-        let span = interface.name.span;
-        c.declarations
-            .push((SymbolKind::Interface, span.start.offset, span.end.offset));
+    fn walk_in_class(&self, class: &'ast Class<'arena>, c: &mut Collector<'arena>) {
+        let head = class
+            .modifiers
+            .first()
+            .map(|m| m.span().start.offset)
+            .unwrap_or(class.class.span.start.offset);
+        let parent = class
+            .extends
+            .as_ref()
+            .and_then(|e| e.types.iter().next())
+            .map(|t| t.span().start.offset);
+        let interfaces = class
+            .implements
+            .as_ref()
+            .map(|i| i.types.iter().map(|t| t.span().start.offset).collect())
+            .unwrap_or_default();
+        c.class_like(
+            ClassHead {
+                kind: SymbolKind::Class,
+                node_start: class.span().start.offset,
+                head_start: head,
+                name: (class.name.span.start.offset, class.name.span.end.offset),
+                left_brace: class.left_brace.start.offset,
+                parent,
+                interfaces,
+            },
+            &class.members,
+        );
     }
 
-    fn walk_in_trait(&self, r#trait: &'ast Trait<'arena>, c: &mut Collector) {
-        let span = r#trait.name.span;
-        c.declarations
-            .push((SymbolKind::Trait, span.start.offset, span.end.offset));
+    fn walk_in_interface(&self, interface: &'ast Interface<'arena>, c: &mut Collector<'arena>) {
+        let interfaces = interface
+            .extends
+            .as_ref()
+            .map(|e| e.types.iter().map(|t| t.span().start.offset).collect())
+            .unwrap_or_default();
+        c.class_like(
+            ClassHead {
+                kind: SymbolKind::Interface,
+                node_start: interface.span().start.offset,
+                head_start: interface.interface.span.start.offset,
+                name: (
+                    interface.name.span.start.offset,
+                    interface.name.span.end.offset,
+                ),
+                left_brace: interface.left_brace.start.offset,
+                parent: None,
+                interfaces,
+            },
+            &interface.members,
+        );
     }
 
-    fn walk_in_enum(&self, r#enum: &'ast Enum<'arena>, c: &mut Collector) {
-        let span = r#enum.name.span;
-        c.declarations
-            .push((SymbolKind::Enum, span.start.offset, span.end.offset));
+    fn walk_in_trait(&self, r#trait: &'ast Trait<'arena>, c: &mut Collector<'arena>) {
+        c.class_like(
+            ClassHead {
+                kind: SymbolKind::Trait,
+                node_start: r#trait.span().start.offset,
+                head_start: r#trait.r#trait.span.start.offset,
+                name: (r#trait.name.span.start.offset, r#trait.name.span.end.offset),
+                left_brace: r#trait.left_brace.start.offset,
+                parent: None,
+                interfaces: Vec::new(),
+            },
+            &r#trait.members,
+        );
     }
 
-    fn walk_in_function(&self, function: &'ast Function<'arena>, c: &mut Collector) {
-        let span = function.name.span;
-        c.declarations
-            .push((SymbolKind::Function, span.start.offset, span.end.offset));
+    fn walk_in_enum(&self, r#enum: &'ast Enum<'arena>, c: &mut Collector<'arena>) {
+        let interfaces = r#enum
+            .implements
+            .as_ref()
+            .map(|i| i.types.iter().map(|t| t.span().start.offset).collect())
+            .unwrap_or_default();
+        c.class_like(
+            ClassHead {
+                kind: SymbolKind::Enum,
+                node_start: r#enum.span().start.offset,
+                head_start: r#enum.r#enum.span.start.offset,
+                name: (r#enum.name.span.start.offset, r#enum.name.span.end.offset),
+                left_brace: r#enum.left_brace.start.offset,
+                parent: None,
+                interfaces,
+            },
+            &r#enum.members,
+        );
     }
 
-    fn walk_in_constant(&self, constant: &'ast Constant<'arena>, c: &mut Collector) {
-        for item in &constant.items {
+    fn walk_in_function(&self, function: &'ast Function<'arena>, c: &mut Collector<'arena>) {
+        let start = function.span().start.offset;
+        let doc = c.doc(start);
+        let tags = c.doc_tags(doc.as_deref(), start);
+        let end = head_end(&function.parameter_list, function.return_type_hint.as_ref());
+        let returns = pick_type(
+            tags.returns,
+            function
+                .return_type_hint
+                .as_ref()
+                .map(|r| c.hint_type(&r.hint)),
+        );
+        c.pending.push(Pending {
+            kind: SymbolKind::Function,
+            start: function.name.span.start.offset,
+            end: function.name.span.end.offset,
+            fqn: None,
+            signature: c.text(function.function.span.start.offset, end),
+            doc,
+            returns,
+            shape: None,
+        });
+    }
+
+    fn walk_in_constant(&self, constant: &'ast Constant<'arena>, c: &mut Collector<'arena>) {
+        let doc = c.doc(constant.span().start.offset);
+        for item in constant.items.iter() {
             c.constants.insert(item.name.span.start.offset);
+            c.pending.push(Pending {
+                kind: SymbolKind::Constant,
+                start: item.name.span.start.offset,
+                end: item.name.span.end.offset,
+                fqn: None,
+                signature: format!("const {}", String::from_utf8_lossy(item.name.value)),
+                doc: doc.clone(),
+                returns: None,
+                shape: None,
+            });
         }
     }
 
-    fn walk_in_function_call(&self, call: &'ast FunctionCall<'arena>, c: &mut Collector) {
-        if let Expression::Identifier(identifier) = call.function {
-            c.functions.insert(identifier.span().start.offset);
+    fn walk_in_function_call(&self, call: &'ast FunctionCall<'arena>, c: &mut Collector<'arena>) {
+        let Expression::Identifier(identifier) = call.function else {
+            return;
+        };
+        c.functions.insert(identifier.span().start.offset);
+        if !identifier.value().eq_ignore_ascii_case(b"define") {
+            return;
         }
+        let first = call.argument_list.arguments.iter().next();
+        let Some(Argument::Positional(argument)) = first else {
+            return;
+        };
+        let Expression::Literal(Literal::String(literal)) = argument.value else {
+            return;
+        };
+        let Some(value) = literal.value else {
+            return;
+        };
+        let name = String::from_utf8_lossy(value).into_owned();
+        c.pending.push(Pending {
+            kind: SymbolKind::Constant,
+            start: literal.span.start.offset + 1,
+            end: literal.span.end.offset.saturating_sub(1),
+            signature: format!("define('{name}')"),
+            fqn: Some(name.trim_start_matches('\\').to_string()),
+            doc: c.doc(call.span().start.offset),
+            returns: None,
+            shape: None,
+        });
     }
 
     fn walk_in_function_partial_application(
         &self,
         application: &'ast FunctionPartialApplication<'arena>,
-        c: &mut Collector,
+        c: &mut Collector<'arena>,
     ) {
         if let Expression::Identifier(identifier) = application.function {
             c.functions.insert(identifier.span().start.offset);
         }
     }
 
-    fn walk_in_constant_access(&self, access: &'ast ConstantAccess<'arena>, c: &mut Collector) {
+    fn walk_in_constant_access(
+        &self,
+        access: &'ast ConstantAccess<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
         c.constants.insert(access.name.span().start.offset);
-    }
-
-    fn walk_in_use(&self, r#use: &'ast Use<'arena>, c: &mut Collector) {
-        match &r#use.items {
-            UseItems::Sequence(_) => {}
-            UseItems::TypedSequence(seq) => {
-                for item in &seq.items {
-                    mark_use_item(c, Some(&seq.r#type), item.name.span().start.offset);
-                }
-            }
-            UseItems::TypedList(list) => {
-                c.not_refs.insert(list.namespace.span().start.offset);
-                for item in &list.items {
-                    mark_use_item(c, Some(&list.r#type), item.name.span().start.offset);
-                }
-            }
-            UseItems::MixedList(list) => {
-                c.not_refs.insert(list.namespace.span().start.offset);
-                for mixed in &list.items {
-                    mark_use_item(
-                        c,
-                        mixed.r#type.as_ref(),
-                        mixed.item.name.span().start.offset,
-                    );
-                }
-            }
-        }
     }
 }
 
-fn mark_use_item(c: &mut Collector, use_type: Option<&UseType<'_>>, start: u32) {
+/// An import as (lowercased alias, fully qualified name).
+fn import(name: &[u8], alias: Option<&[u8]>, prefix: Option<&[u8]>) -> (String, String) {
+    let name = to_fqn(name);
+    let fqn = match prefix {
+        Some(prefix) => format!("{}\\{name}", to_fqn(prefix)),
+        None => name,
+    };
+    let alias = match alias {
+        Some(alias) => String::from_utf8_lossy(alias).into_owned(),
+        None => fqn.rsplit('\\').next().unwrap_or(&fqn).to_string(),
+    };
+    (alias.to_ascii_lowercase(), fqn)
+}
+
+fn mark_use_item(c: &mut Collector<'_>, use_type: Option<&UseType<'_>>, start: u32) {
     match use_type {
         Some(UseType::Function(_)) => {
             c.functions.insert(start);
