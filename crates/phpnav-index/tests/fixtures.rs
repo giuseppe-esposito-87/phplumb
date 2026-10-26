@@ -10,6 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use phpnav_index::Location;
 use phpnav_index::discover::{DiscoverOptions, discover};
 use phpnav_index::index::Index;
 
@@ -65,6 +66,18 @@ fn line_of(text: &[u8], offset: usize) -> usize {
 }
 
 fn run_fixture(name: &str) {
+    run_with(name, |index, path, source, offset| {
+        index.definition(path, source, offset)
+    });
+}
+
+fn run_implementation_fixture(name: &str) {
+    run_with(name, |index, path, source, offset| {
+        index.implementations(path, source, offset)
+    });
+}
+
+fn run_with(name: &str, query: impl Fn(&mut Index, &Path, &[u8], u32) -> Vec<Location>) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
@@ -96,8 +109,7 @@ fn run_fixture(name: &str) {
     let mut failures = Vec::new();
     for (id, path, offset) in &cursors {
         let source = fs::read(path).unwrap();
-        let actual: BTreeSet<(String, u32)> = index
-            .definition(path, &source, *offset as u32)
+        let actual: BTreeSet<(String, u32)> = query(&mut index, path, &source, *offset as u32)
             .into_iter()
             .map(|loc| (rel(&loc.path), loc.start))
             .collect();
@@ -151,4 +163,9 @@ fn inference() {
 #[test]
 fn scopes() {
     run_fixture("scopes");
+}
+
+#[test]
+fn implementations() {
+    run_implementation_fixture("implementations");
 }

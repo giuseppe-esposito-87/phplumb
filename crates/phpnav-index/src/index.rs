@@ -389,6 +389,96 @@ impl Index {
             .collect()
     }
 
+    /// Implementations of what the cursor is on. On a class-like, declared or
+    /// referenced: its non-abstract subtypes, transitively. On a method: for each
+    /// non-abstract subtype of the declaring class, the non-abstract declaration that
+    /// subtype uses, when it is not the original. Sorted and deduplicated; stale
+    /// targets are re-indexed like definitions.
+    pub fn implementations(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
+        let targets = self.definition(path, source, offset);
+        let found = self.implementation_targets(&targets);
+        let mut stale: Vec<PathBuf> = found
+            .iter()
+            .filter(|(location, name)| !holds_name(location, name))
+            .map(|(location, _)| location.path.clone())
+            .collect();
+        stale.sort();
+        stale.dedup();
+        if stale.is_empty() {
+            return found.into_iter().map(|(location, _)| location).collect();
+        }
+        self.update(&stale, &[]);
+        self.implementation_targets(&targets)
+            .into_iter()
+            .map(|(location, _)| location)
+            .collect()
+    }
+
+    fn implementation_targets(&self, targets: &[Location]) -> Vec<(Location, String)> {
+        let mut found: Vec<(Location, String)> = Vec::new();
+        let mut push = |path: &Path, start: u32, end: u32, name: &str| {
+            let location = Location {
+                path: path.to_path_buf(),
+                start,
+                end,
+            };
+            if !found.iter().any(|(l, _)| *l == location) {
+                found.push((location, name.to_ascii_lowercase()));
+            }
+        };
+        for target in targets {
+            let Some(file) = self
+                .ids
+                .get(&target.path)
+                .and_then(|&id| self.files[id as usize].as_ref())
+            else {
+                continue;
+            };
+            for declaration in &file.declarations {
+                let Some(shape) = &declaration.class else {
+                    continue;
+                };
+                if declaration.name_start == target.start {
+                    for sub in self.all_subtypes(&declaration.fqn) {
+                        if is_concrete(sub.declaration) {
+                            let d = sub.declaration;
+                            push(sub.path, d.name_start, d.name_end, &short_name(&d.fqn));
+                        }
+                    }
+                    continue;
+                }
+                let Some(method) = shape
+                    .members
+                    .iter()
+                    .find(|m| m.kind == MemberKind::Method && m.name_start == target.start)
+                else {
+                    continue;
+                };
+                for sub in self.all_subtypes(&declaration.fqn) {
+                    if !is_concrete(sub.declaration) {
+                        continue;
+                    }
+                    for (declaring, member) in
+                        self.find_member(&sub.declaration.fqn, MemberKind::Method, &method.name)
+                    {
+                        let original = declaring.path == file.path.as_path()
+                            && member.name_start == method.name_start;
+                        if !member.is_abstract && !original {
+                            push(
+                                declaring.path,
+                                member.name_start,
+                                member.name_end,
+                                &member.name,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        found.sort_by(|(a, _), (b, _)| (&a.path, a.start).cmp(&(&b.path, b.start)));
+        found
+    }
+
     /// Each target with the lowercased short name the index expects at its range.
     fn resolve(&self, path: &Path, source: &[u8], offset: u32) -> Vec<(Location, String)> {
         let summary = summarize(source);
@@ -404,6 +494,21 @@ impl Index {
                 end: declaration.name_end,
             };
             return vec![(location, short_name(&declaration.fqn))];
+        }
+
+        let declared_member = summary
+            .declarations
+            .iter()
+            .filter_map(|d| d.class.as_ref())
+            .flat_map(|shape| shape.members.iter())
+            .find(|m| m.name_start <= offset && offset <= m.name_end);
+        if let Some(member) = declared_member {
+            let location = Location {
+                path: path.to_path_buf(),
+                start: member.name_start,
+                end: member.name_end,
+            };
+            return vec![(location, member.name.to_ascii_lowercase())];
         }
 
         let covers = |start: u32, end: u32| start <= offset && offset <= end;
@@ -601,6 +706,15 @@ impl Index {
             _ => &mut self.classes,
         }
     }
+}
+
+/// A class or enum that is not abstract.
+fn is_concrete(declaration: &Declaration) -> bool {
+    matches!(declaration.kind, SymbolKind::Class | SymbolKind::Enum)
+        && declaration
+            .class
+            .as_ref()
+            .is_some_and(|shape| !shape.is_abstract)
 }
 
 /// The parent and interfaces a class-like declaration names.
