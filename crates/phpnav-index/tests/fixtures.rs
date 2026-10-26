@@ -142,3 +142,8 @@ fn tolerant() {
 fn static_members() {
     run_fixture("static_members");
 }
+
+#[test]
+fn inference() {
+    run_fixture("inference");
+}

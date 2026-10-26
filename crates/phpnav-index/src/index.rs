@@ -9,7 +9,9 @@ use rayon::prelude::*;
 use crate::cache::{self, CachedFile};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
+use crate::infer;
 use crate::members;
+use crate::phpdoc::TypeExpr;
 use crate::summary::{
     ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, SymbolKind, summarize,
 };
@@ -210,6 +212,27 @@ impl Index {
         members::find_member(self, class, kind, name)
     }
 
+    /// The return types of the functions a call to `name` reaches, with PHP's global
+    /// fallback for unqualified, non-imported names.
+    pub(crate) fn function_returns(&self, name: &NameRef) -> Vec<TypeExpr> {
+        let key = name.fqn.to_ascii_lowercase();
+        let mut entries = lookup(&self.functions, &key);
+        if entries.is_empty()
+            && !name.qualified
+            && !name.imported
+            && let Some((_, global)) = key.rsplit_once('\\')
+        {
+            entries = lookup(&self.functions, global);
+        }
+        entries
+            .iter()
+            .filter_map(|entry| {
+                let file = self.files[entry.file as usize].as_ref()?;
+                file.declarations.get(entry.decl as usize)?.returns.clone()
+            })
+            .collect()
+    }
+
     /// Targets of members of `classes`, each with the name expected at its range.
     fn member_targets(
         &self,
@@ -315,6 +338,9 @@ impl Index {
             return class_of(&member.class)
                 .map(|class| self.member_targets(&[class], member.kind, &member.name))
                 .unwrap_or_default();
+        }
+        if let Some((classes, kind, name)) = infer::member_at(self, &summary, source, offset) {
+            return self.member_targets(&classes, kind, &name);
         }
 
         let Some(name) = name_at(&summary.names, offset) else {

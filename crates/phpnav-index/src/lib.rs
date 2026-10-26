@@ -5,6 +5,7 @@ mod composer;
 pub mod discover;
 pub mod filter;
 pub mod index;
+mod infer;
 pub mod line_index;
 mod members;
 pub mod phpdoc;
