@@ -77,6 +77,12 @@ fn run_implementation_fixture(name: &str) {
     });
 }
 
+fn run_reference_fixture(name: &str) {
+    run_with(name, |index, path, source, offset| {
+        index.references(path, source, offset, false)
+    });
+}
+
 fn run_with(name: &str, query: impl Fn(&mut Index, &Path, &[u8], u32) -> Vec<Location>) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -173,4 +179,9 @@ fn implementations() {
 #[test]
 fn inheritdoc() {
     run_fixture("inheritdoc");
+}
+
+#[test]
+fn references() {
+    run_reference_fixture("references");
 }

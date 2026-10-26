@@ -89,6 +89,33 @@ pub(crate) fn variable_at(
     Some((name, ty))
 }
 
+/// Every instance member access named `name` in the file, resolved with one parse:
+/// start and end of the member name, receiver, and kind.
+pub(crate) fn member_accesses_named(
+    index: &Index,
+    summary: &FileSummary,
+    source: &[u8],
+    name: &str,
+) -> Vec<(u32, u32, Receiver, MemberKind)> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    let ctx = Ctx::new(index, summary, program, source, &facts);
+    facts
+        .accesses
+        .iter()
+        .filter(|a| crate::references::same_name(&a.name, name, a.kind))
+        .map(|access| {
+            let receiver = match ctx.anonymous_this(access.object, access.start) {
+                Some(range) => Receiver::Anonymous(range),
+                None => Receiver::Classes(class_names(&ctx.expr(access.object, access.start, 0))),
+            };
+            (access.start, access.end, receiver, access.kind)
+        })
+        .collect()
+}
+
 /// The start offsets of every instance member name accessed in the file.
 pub(crate) fn member_access_starts(source: &[u8]) -> Vec<u32> {
     let arena = LocalArena::new();

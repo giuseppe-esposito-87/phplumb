@@ -13,6 +13,7 @@ use crate::hover::{self, Hover};
 use crate::infer::{self, Receiver};
 use crate::members;
 use crate::phpdoc::TypeExpr;
+use crate::references::{self, Symbol};
 use crate::summary::{
     ClassRange, ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, RefKey, SymbolKind,
     summarize,
@@ -203,6 +204,133 @@ impl Index {
         hover::hover(self, path, source, offset)
     }
 
+    /// References of what the cursor is on: every occurrence across the index that
+    /// resolves to it, project code first. With `include_declaration`, the
+    /// declarations themselves are listed too.
+    pub fn references(
+        &mut self,
+        path: &Path,
+        source: &[u8],
+        offset: u32,
+        include_declaration: bool,
+    ) -> Vec<Location> {
+        let targets = self.definition(path, source, offset);
+        let mut found: Vec<Location> = Vec::new();
+        for target in &targets {
+            if let Some(symbol) = self.symbol_at(target) {
+                found.extend(references::scan(self, &symbol));
+            }
+        }
+        if include_declaration {
+            found.extend(targets);
+        }
+        found.sort_by(|a, b| {
+            (references::rank(&a.path), &a.path, a.start).cmp(&(
+                references::rank(&b.path),
+                &b.path,
+                b.start,
+            ))
+        });
+        found.dedup();
+        found
+    }
+
+    /// The symbol declared at `target`: a class-like, function, constant or member.
+    fn symbol_at(&self, target: &Location) -> Option<Symbol> {
+        let file = self.files[*self.ids.get(&target.path)? as usize].as_ref()?;
+        for declaration in &file.declarations {
+            if declaration.name_start == target.start {
+                return Some(match declaration.kind {
+                    SymbolKind::Function => Symbol::Function(declaration.fqn.clone()),
+                    SymbolKind::Constant => Symbol::Constant(declaration.fqn.clone()),
+                    _ => Symbol::Class(declaration.fqn.clone()),
+                });
+            }
+            let Some(member) = declaration
+                .class
+                .iter()
+                .flat_map(|shape| shape.members.iter())
+                .find(|m| m.name_start == target.start)
+            else {
+                continue;
+            };
+            let kind = match member.kind {
+                MemberKind::EnumCase => MemberKind::Constant,
+                kind => kind,
+            };
+            return Some(Symbol::Member {
+                family: self.family(&declaration.fqn, kind, &member.name, target),
+                name: member.name.clone(),
+                kind,
+            });
+        }
+        None
+    }
+
+    /// `own` and every declaration of the member above `class`, through parents and
+    /// interfaces.
+    fn family(&self, class: &str, kind: MemberKind, name: &str, own: &Location) -> Vec<Location> {
+        let mut family = vec![own.clone()];
+        let mut seen: HashSet<String> = HashSet::from([class.to_ascii_lowercase()]);
+        let mut queue: Vec<String> = vec![class.to_string()];
+        while let Some(next) = queue.pop() {
+            for supertype in self.supertypes(&next) {
+                if !seen.insert(supertype.declaration.fqn.to_ascii_lowercase()) {
+                    continue;
+                }
+                let members = supertype
+                    .declaration
+                    .class
+                    .iter()
+                    .flat_map(|s| s.members.iter());
+                for member in members.filter(|m| members::matches(m, kind, name)) {
+                    family.push(Location {
+                        path: supertype.path.to_path_buf(),
+                        start: member.name_start,
+                        end: member.name_end,
+                    });
+                }
+                queue.push(supertype.declaration.fqn.clone());
+            }
+        }
+        family
+    }
+
+    /// Whether the function name `name` reaches the function `fqn`, directly or
+    /// through PHP's global fallback.
+    pub(crate) fn function_matches(&self, name: &NameRef, fqn: &str) -> bool {
+        if name.fqn.eq_ignore_ascii_case(fqn) {
+            return true;
+        }
+        let fallback = !name.qualified && !name.imported && !fqn.contains('\\');
+        fallback
+            && name
+                .fqn
+                .rsplit_once('\\')
+                .is_some_and(|(_, short)| short.eq_ignore_ascii_case(fqn))
+            && lookup(&self.functions, &name.fqn.to_ascii_lowercase()).is_empty()
+    }
+
+    /// Whether the constant name `name` reaches the constant `fqn`, directly or
+    /// through PHP's global fallback.
+    pub(crate) fn constant_matches(&self, name: &NameRef, fqn: &str) -> bool {
+        let wanted = symbol_key(SymbolKind::Constant, fqn);
+        if symbol_key(SymbolKind::Constant, &name.fqn) == wanted {
+            return true;
+        }
+        let fallback = !name.qualified && !name.imported && !fqn.contains('\\');
+        fallback
+            && name
+                .fqn
+                .rsplit_once('\\')
+                .is_some_and(|(_, short)| short == fqn)
+            && lookup(
+                &self.constants,
+                &symbol_key(SymbolKind::Constant, &name.fqn),
+            )
+            .is_empty()
+    }
+
     /// Files that mention `key`, possibly with false positives, never false negatives.
     pub fn candidate_files(&self, key: &RefKey) -> Vec<&Path> {
         self.candidates
@@ -330,7 +458,7 @@ impl Index {
     }
 
     /// Targets of members of `classes`, each with the name expected at its range.
-    fn member_targets(
+    pub(crate) fn member_targets(
         &self,
         classes: &[String],
         kind: MemberKind,
@@ -355,7 +483,7 @@ impl Index {
 
     /// Targets of member `name` on the anonymous class `range` of the file at `path`:
     /// its own declaration, or else the one its parent provides.
-    fn anonymous_member_targets(
+    pub(crate) fn anonymous_member_targets(
         &self,
         path: &Path,
         range: &ClassRange,
