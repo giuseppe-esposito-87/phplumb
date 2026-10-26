@@ -199,6 +199,19 @@ impl Index {
         hover::hover(self, path, source, offset)
     }
 
+    /// The class-like declared with its name starting at `start` in `path`.
+    pub fn class_declared_at(&self, path: &Path, start: u32) -> Option<ClassRef<'_>> {
+        let file = self.files[*self.ids.get(path)? as usize].as_ref()?;
+        let declaration = file
+            .declarations
+            .iter()
+            .find(|d| d.class.is_some() && d.name_start == start)?;
+        Some(ClassRef {
+            path: &file.path,
+            declaration,
+        })
+    }
+
     /// Every class-like declaration named `fqn`, matched case-insensitively.
     pub fn classes_named(&self, fqn: &str) -> Vec<ClassRef<'_>> {
         self.class_refs(lookup(&self.classes, &fqn.to_ascii_lowercase()))

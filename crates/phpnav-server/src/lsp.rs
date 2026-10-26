@@ -7,20 +7,24 @@ use std::time::Duration;
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{DidChangeWatchedFiles, LogMessage, Notification as _, Progress};
 use lsp_types::request::{
-    GotoDefinition, HoverRequest, RegisterCapability, Request as _, Shutdown,
+    GotoDefinition, GotoImplementation, GotoImplementationParams, HoverRequest, RegisterCapability,
+    Request as _, Shutdown, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
     WorkDoneProgressCreate,
 };
 use lsp_types::{
     DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions, FileChangeType,
     FileEvent, FileSystemWatcher, GlobPattern, GotoDefinitionParams, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, Location, LogMessageParams,
-    MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf, Position, ProgressParams,
-    ProgressParamsValue, Range, Registration, RegistrationParams, ServerCapabilities, WatchKind,
-    WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
+    HoverParams, HoverProviderCapability, ImplementationProviderCapability, InitializeParams,
+    Location, LogMessageParams, MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf,
+    Position, ProgressParams, ProgressParamsValue, Range, Registration, RegistrationParams,
+    ServerCapabilities, SymbolKind, TypeHierarchyItem, TypeHierarchyPrepareParams,
+    TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, WatchKind, WorkDoneProgress,
+    WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
 };
 use phpnav_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
 use phpnav_index::line_index::LineIndex;
-use phpnav_index::{Index, IndexStats};
+use phpnav_index::summary::SymbolKind as IndexSymbolKind;
+use phpnav_index::{ClassRef, Index, IndexStats};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -56,8 +60,12 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
     let capabilities = ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
         ..ServerCapabilities::default()
     };
+    // lsp-types 0.97 has no field for the type hierarchy capability.
+    let mut capabilities = serde_json::to_value(capabilities)?;
+    capabilities["typeHierarchyProvider"] = json!(true);
     connection.initialize_finish(
         id,
         json!({
@@ -168,6 +176,41 @@ impl Server<'_> {
                         ErrorCode::InvalidParams as i32,
                         err.to_string(),
                     ),
+                }
+            }
+            GotoImplementation::METHOD => {
+                match serde_json::from_value::<GotoImplementationParams>(request.params) {
+                    Ok(params) => {
+                        Response::new_ok(request.id, implementation(self.index.as_mut(), params))
+                    }
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            TypeHierarchyPrepare::METHOD => {
+                match serde_json::from_value::<TypeHierarchyPrepareParams>(request.params) {
+                    Ok(params) => Response::new_ok(
+                        request.id,
+                        prepare_type_hierarchy(self.index.as_mut(), params),
+                    ),
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            TypeHierarchySupertypes::METHOD => {
+                match serde_json::from_value::<TypeHierarchySupertypesParams>(request.params) {
+                    Ok(params) => Response::new_ok(
+                        request.id,
+                        hierarchy_items(self.index.as_ref(), &params.item, Direction::Up),
+                    ),
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            TypeHierarchySubtypes::METHOD => {
+                match serde_json::from_value::<TypeHierarchySubtypesParams>(request.params) {
+                    Ok(params) => Response::new_ok(
+                        request.id,
+                        hierarchy_items(self.index.as_ref(), &params.item, Direction::Down),
+                    ),
+                    Err(err) => invalid(request.id, err),
                 }
             }
             HoverRequest::METHOD => match serde_json::from_value::<HoverParams>(request.params) {
@@ -383,25 +426,108 @@ fn summary_message(stats: &IndexStats) -> String {
     format!("Indexed {} files in {} ms", stats.files, stats.elapsed_ms)
 }
 
-/// Reads the requested file from disk, so the query sees what the agent last wrote.
+/// The file and byte offset a text document position names, read from disk so the
+/// query sees what the agent last wrote.
+fn cursor(position: &lsp_types::TextDocumentPositionParams) -> Option<(PathBuf, Vec<u8>, u32)> {
+    let path = uri_to_path(&position.text_document.uri)?;
+    let source = std::fs::read(&path).ok()?;
+    let offset = LineIndex::new(&source).offset(
+        &source,
+        position.position.line,
+        position.position.character,
+    )?;
+    Some((path, source, offset))
+}
+
 fn definition(index: Option<&mut Index>, params: GotoDefinitionParams) -> Vec<Location> {
-    let Some(index) = index else {
-        return Vec::new();
-    };
-    let position = params.text_document_position_params;
-    let Some(path) = uri_to_path(&position.text_document.uri) else {
-        return Vec::new();
-    };
-    let Ok(source) = std::fs::read(&path) else {
-        return Vec::new();
-    };
-    let lines = LineIndex::new(&source);
-    let Some(offset) = lines.offset(&source, position.position.line, position.position.character)
+    let (Some(index), Some((path, source, offset))) =
+        (index, cursor(&params.text_document_position_params))
     else {
         return Vec::new();
     };
-    index
-        .definition(&path, &source, offset)
+    to_locations(&index.definition(&path, &source, offset))
+}
+
+fn implementation(index: Option<&mut Index>, params: GotoImplementationParams) -> Vec<Location> {
+    let (Some(index), Some((path, source, offset))) =
+        (index, cursor(&params.text_document_position_params))
+    else {
+        return Vec::new();
+    };
+    to_locations(&index.implementations(&path, &source, offset))
+}
+
+/// One type hierarchy item per class-like the cursor resolves to.
+fn prepare_type_hierarchy(
+    index: Option<&mut Index>,
+    params: TypeHierarchyPrepareParams,
+) -> Option<Vec<TypeHierarchyItem>> {
+    let index = index?;
+    let (path, source, offset) = cursor(&params.text_document_position_params)?;
+    let targets = index.definition(&path, &source, offset);
+    let items: Vec<TypeHierarchyItem> = targets
+        .iter()
+        .filter_map(|target| index.class_declared_at(&target.path, target.start))
+        .filter_map(|class| hierarchy_item(&class))
+        .collect();
+    (!items.is_empty()).then_some(items)
+}
+
+enum Direction {
+    Up,
+    Down,
+}
+
+fn hierarchy_items(
+    index: Option<&Index>,
+    item: &TypeHierarchyItem,
+    direction: Direction,
+) -> Option<Vec<TypeHierarchyItem>> {
+    let index = index?;
+    let fqn = item.data.as_ref()?.get("fqn")?.as_str()?;
+    let classes = match direction {
+        Direction::Up => index.supertypes(fqn),
+        Direction::Down => index.subtypes(fqn),
+    };
+    Some(classes.iter().filter_map(hierarchy_item).collect())
+}
+
+fn hierarchy_item(class: &ClassRef<'_>) -> Option<TypeHierarchyItem> {
+    let declaration = class.declaration;
+    let text = std::fs::read(class.path).ok()?;
+    let lines = LineIndex::new(&text);
+    let (start_line, start_col) = lines.position(&text, declaration.name_start);
+    let (end_line, end_col) = lines.position(&text, declaration.name_end);
+    let range = Range::new(
+        Position::new(start_line, start_col),
+        Position::new(end_line, end_col),
+    );
+    let kind = match declaration.kind {
+        IndexSymbolKind::Interface => SymbolKind::INTERFACE,
+        IndexSymbolKind::Enum => SymbolKind::ENUM,
+        IndexSymbolKind::Trait => SymbolKind::STRUCT,
+        _ => SymbolKind::CLASS,
+    };
+    Some(TypeHierarchyItem {
+        name: declaration
+            .fqn
+            .rsplit('\\')
+            .next()
+            .unwrap_or(&declaration.fqn)
+            .to_string(),
+        kind,
+        tags: None,
+        detail: Some(declaration.fqn.clone()),
+        uri: path_to_uri(class.path),
+        range,
+        selection_range: range,
+        data: Some(json!({"fqn": declaration.fqn})),
+    })
+}
+
+/// Index locations as LSP locations, with positions read from each target file.
+fn to_locations(targets: &[phpnav_index::Location]) -> Vec<Location> {
+    targets
         .iter()
         .filter_map(|target| {
             let text = std::fs::read(&target.path).ok()?;
@@ -417,6 +543,10 @@ fn definition(index: Option<&mut Index>, params: GotoDefinitionParams) -> Vec<Lo
             })
         })
         .collect()
+}
+
+fn invalid(id: RequestId, err: serde_json::Error) -> Response {
+    Response::new_err(id, ErrorCode::InvalidParams as i32, err.to_string())
 }
 
 /// Hover markdown for the word under the cursor, read from the file on disk.

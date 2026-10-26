@@ -119,4 +119,14 @@ suite("definition", () => {
       .join("\n");
     assert.ok(text.includes("class Target"), text);
   });
+
+  test("go to implementations reaches the implementing class", async () => {
+    const document = await open("src/Shape.php");
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+
+    const targets = await vscode.commands.executeCommand<Target[]>("vscode.executeImplementationProvider", document.uri, new vscode.Position(2, 10));
+
+    assert.strictEqual(targets.length, 1);
+    assert.ok(uriOf(targets[0]).path.endsWith("src/Square.php"), uriOf(targets[0]).toString());
+  });
 });
