@@ -299,6 +299,16 @@ impl FileSummary {
             .filter(|r| r.start <= offset && offset <= r.end)
             .max_by_key(|r| r.start)
     }
+
+    /// The named class a `self`, `static` or `parent` keyword stands for, from the
+    /// class around it.
+    pub fn keyword_class(&self, keyword: &KeywordRef) -> Option<String> {
+        let range = self.enclosing_class(keyword.start)?;
+        match keyword.class {
+            ClassSel::ParentKw => range.parent.clone(),
+            _ => range.fqn.clone(),
+        }
+    }
 }
 
 /// Parses `source` and returns its declarations and resolved names. Parsing is

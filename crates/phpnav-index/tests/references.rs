@@ -96,3 +96,118 @@ fn declaration_ranges_cover_bodies() {
         String::from_utf8_lossy(text)
     );
 }
+
+/// References of the name found at `needle` (plus `shift`) in `file`, each as
+/// `file:text`, where `text` is the source the location covers.
+fn references_at(
+    index: &mut Index,
+    root: &Path,
+    file: &str,
+    needle: &str,
+    shift: usize,
+) -> Vec<String> {
+    let path = root.join(file);
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+    let offset = text.find(needle).expect("needle in file") + shift;
+    let mut found: Vec<String> = index
+        .references(&path, &source, offset as u32, false)
+        .into_iter()
+        .map(|l| {
+            let content = fs::read_to_string(&l.path).unwrap();
+            let name = l.path.strip_prefix(root).unwrap().display().to_string();
+            format!("{name}:{}", &content[l.start as usize..l.end as usize])
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+const PARENTS: &str = "class P { public function __construct($a) {} public function save() {} }
+class C1 extends P { public function __construct($a) { parent::__construct($a); } public function save() { parent::save(); } }
+class C2 extends P { public function __construct($a) { parent::__construct($a); } public function save() { parent::save(); } }
+class P2 { private function go() {} public function run() { $this->go(); } }
+class C3 extends P2 { public function go() {} }";
+
+#[test]
+fn static_calls_reach_only_their_exact_declaration() {
+    let (_dir, root, mut index) = workspace(&[("P.php", PARENTS)]);
+
+    let c1_construct = references_at(&mut index, &root, "P.php", "__construct($a) { parent", 0);
+    let c1_save = references_at(
+        &mut index,
+        &root,
+        "P.php",
+        "save() { parent::save(); } }\nclass C2",
+        0,
+    );
+    let p_save = references_at(&mut index, &root, "P.php", "save() {} }", 0);
+
+    assert_eq!(c1_construct, Vec::<String>::new());
+    assert_eq!(c1_save, Vec::<String>::new());
+    assert_eq!(p_save, vec!["P.php:save", "P.php:save"]);
+}
+
+#[test]
+fn private_ancestor_members_are_not_in_the_family() {
+    let (_dir, root, mut index) = workspace(&[("P.php", PARENTS)]);
+
+    let c3_go = references_at(&mut index, &root, "P.php", "go() {} }", 0);
+    let p2_go = references_at(&mut index, &root, "P.php", "go() {} public", 0);
+
+    assert_eq!(c3_go, Vec::<String>::new());
+    assert_eq!(p2_go, vec!["P.php:go"]);
+}
+
+const TRAITS: &str = "interface OwnerI { public function getOwner(); }
+interface NodeI extends OwnerI {}
+interface Unrel { public function getOwner(); }
+trait OwnerT { public function getOwner() {} }
+class Node implements NodeI { use OwnerT; }
+class Over implements Unrel { use OwnerT; public function getOwner() {} }
+function f(NodeI $n, Node $m, OwnerI $o, Unrel $u) { $n->getOwner(); $m->getOwner(); $o->getOwner(); $u->getOwner(); }
+trait SaveT { public function persist() {} }
+class Base { use SaveT; }
+class Leaf extends Base { public function persist() {} }
+function g(Base $b) { $b->persist(); }";
+
+#[test]
+fn trait_methods_find_calls_through_their_users_supertypes() {
+    let (_dir, root, mut index) = workspace(&[("T.php", TRAITS)]);
+
+    let trait_method = references_at(&mut index, &root, "T.php", "getOwner() {} }\nclass Node", 0);
+
+    assert_eq!(trait_method, vec!["T.php:getOwner"; 3]);
+}
+
+#[test]
+fn overrides_find_calls_on_a_parent_using_a_trait() {
+    let (_dir, root, mut index) = workspace(&[("T.php", TRAITS)]);
+
+    let leaf = references_at(&mut index, &root, "T.php", "persist() {} }\nfunction g", 0);
+
+    assert_eq!(leaf, vec!["T.php:persist"]);
+}
+
+const CONSTRUCTORS: &str = "class X { public function __construct() {} public static function create() { return new static(); } }
+class Y extends X {}
+class Z extends X { public function __construct() { parent::__construct(); } }
+function make() { new X(); new Y; new Z(); }";
+
+#[test]
+fn constructors_are_referenced_by_new() {
+    let (_dir, root, mut index) = workspace(&[("X.php", CONSTRUCTORS)]);
+
+    let x = references_at(
+        &mut index,
+        &root,
+        "X.php",
+        "__construct() {} public static",
+        0,
+    );
+
+    assert_eq!(
+        x,
+        vec!["X.php:X", "X.php:Y", "X.php:__construct", "X.php:static"]
+    );
+}

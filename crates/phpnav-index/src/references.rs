@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use rayon::prelude::*;
 
+use crate::calls::after_new;
 use crate::index::{Index, Location};
 use crate::infer::{self, Receiver};
 use crate::summary::{ClassSel, FileSummary, MemberKind, NameKind, NameRef, RefKey, summarize};
@@ -14,50 +15,97 @@ pub(crate) enum Symbol {
     Class(String),
     Function(String),
     Constant(String),
-    /// A member, with its family: its own declaration and every declaration of the
-    /// same name it overrides or implements.
+    /// A member: its own declaration, the declarations calls may reach it through
+    /// (those it overrides or implements, each labeled `Class::member`), and, for a
+    /// constructor, the classes `new` builds with it.
     Member {
         name: String,
         kind: MemberKind,
-        family: Vec<Location>,
+        own: Location,
+        family: Vec<(Location, String)>,
+        constructed: Vec<String>,
     },
 }
 
 impl Symbol {
-    fn key(&self) -> RefKey {
+    fn keys(&self) -> Vec<RefKey> {
         match self {
-            Symbol::Class(fqn) => RefKey::Class(fqn.clone()),
-            Symbol::Function(fqn) => RefKey::Function(fqn.clone()),
-            Symbol::Constant(fqn) => RefKey::Constant(fqn.clone()),
-            Symbol::Member { name, .. } => RefKey::Member(name.clone()),
+            Symbol::Class(fqn) => vec![RefKey::Class(fqn.clone())],
+            Symbol::Function(fqn) => vec![RefKey::Function(fqn.clone())],
+            Symbol::Constant(fqn) => vec![RefKey::Constant(fqn.clone())],
+            Symbol::Member {
+                name, constructed, ..
+            } => std::iter::once(RefKey::Member(name.clone()))
+                .chain(constructed.iter().map(|fqn| RefKey::Class(fqn.clone())))
+                .collect(),
         }
     }
 }
 
+/// An occurrence of a symbol. `via` labels a member reached through a declaration
+/// it overrides or implements.
+pub(crate) struct Found {
+    pub location: Location,
+    pub via: Option<String>,
+}
+
 /// References of `symbol` across its candidate files, scanned in parallel.
 pub(crate) fn scan(index: &Index, symbol: &Symbol) -> Vec<Location> {
-    let files: Vec<PathBuf> = index
-        .candidate_files(&symbol.key())
-        .into_iter()
-        .map(Path::to_path_buf)
-        .collect();
+    scan_with(index, symbol, |_, _, _, found| {
+        found.into_iter().map(|f| f.location).collect()
+    })
+}
+
+/// Runs `each` on every candidate file of `symbol` that has occurrences, in
+/// parallel, with the file's source and summary.
+pub(crate) fn scan_with<R: Send>(
+    index: &Index,
+    symbol: &Symbol,
+    each: impl Fn(&Path, &[u8], &FileSummary, Vec<Found>) -> Vec<R> + Sync,
+) -> Vec<R> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for key in symbol.keys() {
+        files.extend(
+            index
+                .candidate_files(&key)
+                .into_iter()
+                .map(Path::to_path_buf),
+        );
+    }
+    files.sort();
+    files.dedup();
     files
         .par_iter()
-        .flat_map_iter(|path| scan_file(index, path, symbol))
+        .flat_map_iter(|path| {
+            let Ok(source) = std::fs::read(path) else {
+                return Vec::new();
+            };
+            let summary = summarize(&source);
+            let found = scan_file(index, path, &source, &summary, symbol);
+            if found.is_empty() {
+                return Vec::new();
+            }
+            each(path, &source, &summary, found)
+        })
         .collect()
 }
 
-fn scan_file(index: &Index, path: &Path, symbol: &Symbol) -> Vec<Location> {
-    let Ok(source) = std::fs::read(path) else {
-        return Vec::new();
+fn scan_file(
+    index: &Index,
+    path: &Path,
+    source: &[u8],
+    summary: &FileSummary,
+    symbol: &Symbol,
+) -> Vec<Found> {
+    let at = |start: u32, end: u32| Found {
+        location: Location {
+            path: path.to_path_buf(),
+            start,
+            end,
+        },
+        via: None,
     };
-    let summary = summarize(&source);
-    let at = |start: u32, end: u32| Location {
-        path: path.to_path_buf(),
-        start,
-        end,
-    };
-    let names = |kind: NameKind, matches: &dyn Fn(&NameRef) -> bool| -> Vec<Location> {
+    let names = |kind: NameKind, matches: &dyn Fn(&NameRef) -> bool| -> Vec<Found> {
         summary
             .names
             .iter()
@@ -69,22 +117,49 @@ fn scan_file(index: &Index, path: &Path, symbol: &Symbol) -> Vec<Location> {
         Symbol::Class(fqn) => names(NameKind::ClassLike, &|n| n.fqn.eq_ignore_ascii_case(fqn)),
         Symbol::Function(fqn) => names(NameKind::Function, &|n| index.function_matches(n, fqn)),
         Symbol::Constant(fqn) => names(NameKind::Constant, &|n| index.constant_matches(n, fqn)),
-        Symbol::Member { name, kind, family } => {
-            let in_family = |targets: Vec<(Location, String)>| {
-                targets.iter().any(|(target, _)| family.contains(target))
+        Symbol::Member {
+            name,
+            kind,
+            own,
+            family,
+            constructed,
+        } => {
+            // Whether a dispatched occurrence reaches `own`, and through what.
+            let reached = |targets: &[(Location, String)]| -> Option<Option<String>> {
+                if targets.iter().any(|(target, _)| target == own) {
+                    return Some(None);
+                }
+                targets.iter().find_map(|(target, _)| {
+                    family
+                        .iter()
+                        .find(|(member, _)| member == target)
+                        .map(|(_, label)| Some(label.clone()))
+                })
             };
             let mut found = Vec::new();
             for static_ref in &summary.static_refs {
                 if static_ref.kind != *kind || !same_name(&static_ref.name, name, *kind) {
                     continue;
                 }
-                let targets = static_targets(index, path, &summary, static_ref, *kind, name);
-                if in_family(targets) {
-                    found.push(at(static_ref.start, static_ref.end));
+                let targets = static_targets(index, path, summary, static_ref, *kind, name);
+                // Only `static::` dispatches; `self::`, `parent::` and a named class
+                // run the one declaration they resolve to.
+                let via = match static_ref.class {
+                    ClassSel::StaticKw => reached(&targets),
+                    _ => targets
+                        .iter()
+                        .any(|(target, _)| target == own)
+                        .then_some(None),
+                };
+                if let Some(via) = via {
+                    found.push(Found {
+                        via,
+                        ..at(static_ref.start, static_ref.end)
+                    });
                 }
             }
             for (start, end, receiver, access_kind) in
-                infer::member_accesses_named(index, &summary, &source, name)
+                infer::member_accesses_named(index, summary, source, name)
             {
                 if access_kind != *kind {
                     continue;
@@ -95,13 +170,43 @@ fn scan_file(index: &Index, path: &Path, symbol: &Symbol) -> Vec<Location> {
                         index.anonymous_member_targets(path, &summary.class_ranges[i], *kind, name)
                     }
                 };
-                if in_family(targets) {
-                    found.push(at(start, end));
+                if let Some(via) = reached(&targets) {
+                    found.push(Found {
+                        via,
+                        ..at(start, end)
+                    });
                 }
+            }
+            if !constructed.is_empty() {
+                found.extend(constructions(summary, source, constructed).map(|(s, e)| at(s, e)));
             }
             found
         }
     }
+}
+
+/// Ranges of the class names and keywords after `new` that build one of `classes`.
+fn constructions<'a>(
+    summary: &'a FileSummary,
+    source: &'a [u8],
+    classes: &'a [String],
+) -> impl Iterator<Item = (u32, u32)> + 'a {
+    let builds = |fqn: &str| classes.iter().any(|c| c.eq_ignore_ascii_case(fqn));
+    let named = summary
+        .names
+        .iter()
+        .filter(move |n| {
+            n.kind == NameKind::ClassLike && after_new(source, n.start) && builds(&n.fqn)
+        })
+        .map(|n| (n.start, n.end));
+    let keywords = summary
+        .keywords
+        .iter()
+        .filter(move |k| {
+            after_new(source, k.start) && summary.keyword_class(k).is_some_and(|fqn| builds(&fqn))
+        })
+        .map(|k| (k.start, k.end));
+    named.chain(keywords)
 }
 
 fn static_targets(

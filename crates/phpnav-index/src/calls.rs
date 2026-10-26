@@ -1,6 +1,5 @@
 //! Call hierarchy: the callers and the callees of functions and methods.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::index::{Index, Location};
@@ -31,11 +30,13 @@ pub enum CallKind {
 
 pub type Calls = Vec<(CallItem, Vec<(u32, u32)>)>;
 
-/// Callers of `item`, each with the call ranges inside it.
+/// Callers of `item`, each with the call ranges inside it. A caller reaching `item`
+/// through a declaration it overrides or implements is a separate entry whose
+/// detail names that declaration.
 pub(crate) fn incoming(index: &mut Index, item: &CallItem) -> Calls {
-    if item.kind == CallKind::File {
+    let Some((item, _, _)) = current(item) else {
         return Vec::new();
-    }
+    };
     let target = Location {
         path: item.path.clone(),
         start: item.selection.0,
@@ -44,39 +45,36 @@ pub(crate) fn incoming(index: &mut Index, item: &CallItem) -> Calls {
     let Some(symbol) = index.symbol_at(&target) else {
         return Vec::new();
     };
-    let mut by_file: BTreeMap<PathBuf, Vec<Location>> = BTreeMap::new();
-    for reference in references::scan(index, &symbol) {
-        by_file
-            .entry(reference.path.clone())
-            .or_default()
-            .push(reference);
-    }
+    let mut found = references::scan_with(index, &symbol, |path, source, summary, found| {
+        found
+            .into_iter()
+            .filter(|f| is_call(source, f.location.end) || after_new(source, f.location.start))
+            .map(|f| {
+                let mut caller = caller_at(path, summary, f.location.start, source.len() as u32);
+                if let Some(via) = f.via {
+                    caller.detail = if caller.detail.is_empty() {
+                        format!("via {via}")
+                    } else {
+                        format!("{} (via {via})", caller.detail)
+                    };
+                }
+                (caller, (f.location.start, f.location.end))
+            })
+            .collect()
+    });
+    found.sort_by(|(a, ra), (b, rb)| (&a.path, ra.0).cmp(&(&b.path, rb.0)));
     let mut calls: Calls = Vec::new();
-    for (path, references) in by_file {
-        let Ok(source) = std::fs::read(&path) else {
-            continue;
-        };
-        let summary = summarize(&source);
-        for reference in references {
-            if !is_call(&source, reference.end) {
-                continue;
-            }
-            let caller = caller_at(&path, &summary, reference.start, source.len() as u32);
-            add(&mut calls, caller, (reference.start, reference.end));
-        }
+    for (caller, range) in found {
+        add(&mut calls, caller, range);
     }
     calls
 }
 
 /// Functions and methods called inside `item`'s body, each with the call ranges.
 pub(crate) fn outgoing(index: &mut Index, item: &CallItem) -> Calls {
-    if item.kind == CallKind::File {
-        return Vec::new();
-    }
-    let Ok(source) = std::fs::read(&item.path) else {
+    let Some((item, source, summary)) = current(item) else {
         return Vec::new();
     };
-    let summary = summarize(&source);
     let inside = |offset: u32| item.range.0 <= offset && offset <= item.range.1;
 
     let mut sites: Vec<(u32, u32)> = summary
@@ -108,25 +106,44 @@ pub(crate) fn outgoing(index: &mut Index, item: &CallItem) -> Calls {
             }
         }
     }
-    for name in &summary.names {
-        if name.kind != NameKind::ClassLike
-            || !inside(name.start)
-            || !after_new(&source, name.start)
-        {
+    let named = summary
+        .names
+        .iter()
+        .filter(|n| n.kind == NameKind::ClassLike)
+        .map(|n| (n.start, n.end, Some(n.fqn.clone())));
+    let keywords = summary
+        .keywords
+        .iter()
+        .map(|k| (k.start, k.end, summary.keyword_class(k)));
+    for (start, end, class) in named.chain(keywords) {
+        let Some(class) = class.filter(|_| inside(start) && after_new(&source, start)) else {
             continue;
-        }
-        for (class, member) in index.find_member(&name.fqn, MemberKind::Method, "__construct") {
+        };
+        for (class, member) in index.find_member(&class, MemberKind::Method, "__construct") {
             let target = Location {
                 path: class.path.to_path_buf(),
                 start: member.name_start,
                 end: member.name_end,
             };
             if let Some(callee) = index.call_item_at(&target) {
-                add(&mut calls, callee, (name.start, name.end));
+                add(&mut calls, callee, (start, end));
             }
         }
     }
     calls
+}
+
+/// `item` as its file now declares it, with the file's source and summary; nothing
+/// when the file no longer has a function or method of that name and kind there.
+fn current(item: &CallItem) -> Option<(CallItem, Vec<u8>, FileSummary)> {
+    if item.kind == CallKind::File {
+        return None;
+    }
+    let source = std::fs::read(&item.path).ok()?;
+    let summary = summarize(&source);
+    let found = caller_at(&item.path, &summary, item.selection.0, source.len() as u32);
+    (found.kind == item.kind && found.name == item.name && found.selection == item.selection)
+        .then_some((found, source, summary))
 }
 
 fn add(calls: &mut Calls, item: CallItem, range: (u32, u32)) {
@@ -141,16 +158,21 @@ fn add(calls: &mut Calls, item: CallItem, range: (u32, u32)) {
 }
 
 /// Whether the name ending at `end` is called: an opening parenthesis follows.
-fn is_call(source: &[u8], end: u32) -> bool {
-    source[end as usize..]
+pub(crate) fn is_call(source: &[u8], end: u32) -> bool {
+    source
+        .get(end as usize..)
+        .unwrap_or_default()
         .iter()
         .find(|b| !b.is_ascii_whitespace())
         .is_some_and(|&b| b == b'(')
 }
 
 /// Whether the name starting at `start` follows the `new` keyword.
-fn after_new(source: &[u8], start: u32) -> bool {
-    let before = source[..start as usize].trim_ascii_end();
+pub(crate) fn after_new(source: &[u8], start: u32) -> bool {
+    let Some(before) = source.get(..start as usize) else {
+        return false;
+    };
+    let before = before.trim_ascii_end();
     before.len() >= 3
         && before[before.len() - 3..].eq_ignore_ascii_case(b"new")
         && before
@@ -222,4 +244,15 @@ pub(crate) fn method_item(path: &Path, class: &str, member: &crate::summary::Mem
 /// A fully qualified name split into its namespace and its short name.
 pub(crate) fn split(fqn: &str) -> (&str, &str) {
     fqn.rsplit_once('\\').unwrap_or(("", fqn))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{after_new, is_call};
+
+    #[test]
+    fn offsets_past_the_end_are_neither_calls_nor_new() {
+        assert!(!is_call(b"f()", 10));
+        assert!(!after_new(b"new X", 10));
+    }
 }

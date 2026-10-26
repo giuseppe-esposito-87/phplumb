@@ -305,42 +305,120 @@ impl Index {
                 MemberKind::EnumCase => MemberKind::Constant,
                 kind => kind,
             };
+            let name = member.name.as_str();
+            // A trait member belongs to the classes using it.
+            let owners: Vec<String> = if declaration.kind == SymbolKind::Trait {
+                self.trait_users(&declaration.fqn)
+                    .into_iter()
+                    .filter(|user| self.resolves_to(user, kind, name, target))
+                    .collect()
+            } else {
+                vec![declaration.fqn.clone()]
+            };
+            // A private member overrides and implements nothing.
+            let family = if member.is_private {
+                Vec::new()
+            } else {
+                self.family(&owners, kind, name, target)
+            };
+            let constructed =
+                if kind == MemberKind::Method && name.eq_ignore_ascii_case("__construct") {
+                    owners
+                        .iter()
+                        .flat_map(|owner| {
+                            let subtypes = self.all_subtypes(owner);
+                            std::iter::once(owner.clone())
+                                .chain(subtypes.into_iter().map(|s| s.declaration.fqn.clone()))
+                        })
+                        .filter(|class| self.resolves_to(class, kind, name, target))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             return Some(Symbol::Member {
-                family: self.family(&declaration.fqn, kind, &member.name, target),
-                name: member.name.clone(),
+                name: name.to_string(),
                 kind,
+                own: target.clone(),
+                family,
+                constructed,
             });
         }
         None
     }
 
-    /// `own` and every declaration of the member above `class`, through parents and
-    /// interfaces.
-    fn family(&self, class: &str, kind: MemberKind, name: &str, own: &Location) -> Vec<Location> {
-        let mut family = vec![own.clone()];
-        let mut seen: HashSet<String> = HashSet::from([class.to_ascii_lowercase()]);
-        let mut queue: Vec<String> = vec![class.to_string()];
+    /// Every non-private declaration the supertypes of `owners` resolve the member
+    /// to, other than `own`, labeled `Class::member`: calls typed as one of those
+    /// supertypes may run `own`.
+    fn family(
+        &self,
+        owners: &[String],
+        kind: MemberKind,
+        name: &str,
+        own: &Location,
+    ) -> Vec<(Location, String)> {
+        let mut family: Vec<(Location, String)> = Vec::new();
+        let mut seen: HashSet<String> = owners.iter().map(|o| o.to_ascii_lowercase()).collect();
+        let mut queue: Vec<String> = owners.to_vec();
         while let Some(next) = queue.pop() {
             for supertype in self.supertypes(&next) {
-                if !seen.insert(supertype.declaration.fqn.to_ascii_lowercase()) {
+                let fqn = supertype.declaration.fqn.clone();
+                if !seen.insert(fqn.to_ascii_lowercase()) {
                     continue;
                 }
-                let members = supertype
-                    .declaration
-                    .class
-                    .iter()
-                    .flat_map(|s| s.members.iter());
-                for member in members.filter(|m| members::matches(m, kind, name)) {
-                    family.push(Location {
-                        path: supertype.path.to_path_buf(),
+                for (class, member) in self.find_member(&fqn, kind, name) {
+                    let location = Location {
+                        path: class.path.to_path_buf(),
                         start: member.name_start,
                         end: member.name_end,
-                    });
+                    };
+                    if member.is_private
+                        || location == *own
+                        || family.iter().any(|(l, _)| *l == location)
+                    {
+                        continue;
+                    }
+                    let (_, short) = calls::split(&class.declaration.fqn);
+                    family.push((location, format!("{short}::{}", member.name)));
                 }
-                queue.push(supertype.declaration.fqn.clone());
+                queue.push(fqn);
             }
         }
         family
+    }
+
+    /// Whether `class` resolves member `name` to the declaration at `own`.
+    fn resolves_to(&self, class: &str, kind: MemberKind, name: &str, own: &Location) -> bool {
+        self.find_member(class, kind, name)
+            .iter()
+            .any(|(c, m)| c.path == own.path && m.name_start == own.start)
+    }
+
+    /// Classes and enums using the trait `fqn`, directly or through other traits.
+    fn trait_users(&self, fqn: &str) -> Vec<String> {
+        let mut users = Vec::new();
+        let mut seen: HashSet<String> = HashSet::from([fqn.to_ascii_lowercase()]);
+        let mut queue: Vec<String> = vec![fqn.to_string()];
+        while let Some(next) = queue.pop() {
+            let declarations = self
+                .files
+                .iter()
+                .flatten()
+                .flat_map(|f| f.declarations.iter());
+            for declaration in declarations {
+                let uses = declaration.class.as_ref().is_some_and(|shape| {
+                    shape.traits.iter().any(|t| t.eq_ignore_ascii_case(&next))
+                });
+                if !uses || !seen.insert(declaration.fqn.to_ascii_lowercase()) {
+                    continue;
+                }
+                if declaration.kind == SymbolKind::Trait {
+                    queue.push(declaration.fqn.clone());
+                } else {
+                    users.push(declaration.fqn.clone());
+                }
+            }
+        }
+        users
     }
 
     /// Whether the function name `name` reaches the function `fqn`, directly or
