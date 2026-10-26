@@ -71,7 +71,7 @@ impl Index {
         cache: &Path,
     ) -> anyhow::Result<(Index, IndexStats)> {
         let filter = PathFilter::new(root, opts)?;
-        let cached = cache::load(cache, &filter);
+        let cached = cache::load(cache, &filter, cache::ENGINE);
         Self::build_from(root, opts, cached)
     }
 
@@ -126,7 +126,7 @@ impl Index {
     /// Writes the index to `cache` for a later `build_with_cache`.
     pub fn save_cache(&self, cache: &Path) -> anyhow::Result<()> {
         let files = self.files.iter().flatten().cloned().collect();
-        cache::save(cache, &self.filter, files)
+        cache::save(cache, &self.filter, cache::ENGINE, files)
     }
 
     /// Applies file system changes. `changed` holds created or modified files or
