@@ -1,0 +1,3 @@
+<?php
+
+function /*@target:hook*/my_module_help() {}
