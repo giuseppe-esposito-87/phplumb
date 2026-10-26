@@ -220,3 +220,21 @@ fn definition_heals_a_stale_target() {
         )]
     );
 }
+
+#[test]
+fn healing_a_file_with_two_same_name_declarations_keeps_one_entry_each() {
+    let conditional = "<?php\nnamespace App;\nif (true) {\n    class Target {}\n} else {\n    class Target {}\n}\n";
+    let ws = Workspace::new(&[("src/A.php", conditional), ("src/Use.php", USE)]);
+    let mut index = ws.index(&DiscoverOptions::default());
+    ws.write("src/A.php", &conditional.replace("<?php\n", "<?php\n\n\n"));
+
+    let healed = ws.definition(&mut index, "src/Use.php", "Target");
+    fs::remove_file(ws.path("src/A.php")).unwrap();
+    index.update(&[], &[ws.path("src/A.php")]);
+
+    assert_eq!(healed.len(), 2);
+    assert!(
+        ws.definition(&mut index, "src/Use.php", "Target")
+            .is_empty()
+    );
+}

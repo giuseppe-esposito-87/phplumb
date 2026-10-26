@@ -147,6 +147,9 @@ impl Index {
             }
         }
 
+        // A path given twice must be read and inserted once.
+        fresh.sort();
+        fresh.dedup();
         stats.removed += self.remove_paths(&gone);
         for path in &fresh {
             if let Some(&id) = self.ids.get(path) {
@@ -169,11 +172,13 @@ impl Index {
     /// changed since it was indexed: it is indexed again and the query runs once more.
     pub fn definition(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
         let found = self.resolve(path, source, offset);
-        let stale: Vec<PathBuf> = found
+        let mut stale: Vec<PathBuf> = found
             .iter()
             .filter(|(location, name)| !holds_name(location, name))
             .map(|(location, _)| location.path.clone())
             .collect();
+        stale.sort();
+        stale.dedup();
         if stale.is_empty() {
             return found.into_iter().map(|(location, _)| location).collect();
         }
