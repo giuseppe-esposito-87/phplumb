@@ -7,24 +7,28 @@ use std::time::Duration;
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{DidChangeWatchedFiles, LogMessage, Notification as _, Progress};
 use lsp_types::request::{
-    GotoDefinition, GotoImplementation, GotoImplementationParams, HoverRequest, RegisterCapability,
+    CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare, GotoDefinition,
+    GotoImplementation, GotoImplementationParams, HoverRequest, References, RegisterCapability,
     Request as _, Shutdown, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
     WorkDoneProgressCreate,
 };
 use lsp_types::{
-    DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions, FileChangeType,
-    FileEvent, FileSystemWatcher, GlobPattern, GotoDefinitionParams, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, ImplementationProviderCapability, InitializeParams,
-    Location, LogMessageParams, MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf,
-    Position, ProgressParams, ProgressParamsValue, Range, Registration, RegistrationParams,
-    ServerCapabilities, SymbolKind, TypeHierarchyItem, TypeHierarchyPrepareParams,
-    TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, WatchKind, WorkDoneProgress,
-    WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
+    CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
+    CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
+    CallHierarchyServerCapability, DidChangeWatchedFilesParams,
+    DidChangeWatchedFilesRegistrationOptions, FileChangeType, FileEvent, FileSystemWatcher,
+    GlobPattern, GotoDefinitionParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    ImplementationProviderCapability, InitializeParams, Location, LogMessageParams, MarkupContent,
+    MarkupKind, MessageType, NumberOrString, OneOf, Position, ProgressParams, ProgressParamsValue,
+    Range, ReferenceParams, Registration, RegistrationParams, ServerCapabilities, SymbolKind,
+    TypeHierarchyItem, TypeHierarchyPrepareParams, TypeHierarchySubtypesParams,
+    TypeHierarchySupertypesParams, WatchKind, WorkDoneProgress, WorkDoneProgressBegin,
+    WorkDoneProgressCreateParams, WorkDoneProgressEnd,
 };
 use phpnav_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
 use phpnav_index::line_index::LineIndex;
 use phpnav_index::summary::SymbolKind as IndexSymbolKind;
-use phpnav_index::{ClassRef, Index, IndexStats};
+use phpnav_index::{CallItem, CallKind, ClassRef, Index, IndexStats};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -61,6 +65,8 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+        references_provider: Some(OneOf::Left(true)),
+        call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
         ..ServerCapabilities::default()
     };
     // lsp-types 0.97 has no field for the type hierarchy capability.
@@ -210,6 +216,35 @@ impl Server<'_> {
                         request.id,
                         hierarchy_items(self.index.as_ref(), &params.item, Direction::Down),
                     ),
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            References::METHOD => match serde_json::from_value::<ReferenceParams>(request.params) {
+                Ok(params) => Response::new_ok(request.id, references(self.index.as_mut(), params)),
+                Err(err) => invalid(request.id, err),
+            },
+            CallHierarchyPrepare::METHOD => {
+                match serde_json::from_value::<CallHierarchyPrepareParams>(request.params) {
+                    Ok(params) => Response::new_ok(
+                        request.id,
+                        prepare_call_hierarchy(self.index.as_mut(), params),
+                    ),
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            CallHierarchyIncomingCalls::METHOD => {
+                match serde_json::from_value::<CallHierarchyIncomingCallsParams>(request.params) {
+                    Ok(params) => {
+                        Response::new_ok(request.id, incoming_calls(self.index.as_mut(), params))
+                    }
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            CallHierarchyOutgoingCalls::METHOD => {
+                match serde_json::from_value::<CallHierarchyOutgoingCallsParams>(request.params) {
+                    Ok(params) => {
+                        Response::new_ok(request.id, outgoing_calls(self.index.as_mut(), params))
+                    }
                     Err(err) => invalid(request.id, err),
                 }
             }
@@ -455,6 +490,145 @@ fn implementation(index: Option<&mut Index>, params: GotoImplementationParams) -
         return Vec::new();
     };
     to_locations(&index.implementations(&path, &source, offset))
+}
+
+fn references(index: Option<&mut Index>, params: ReferenceParams) -> Vec<Location> {
+    let (Some(index), Some((path, source, offset))) =
+        (index, cursor(&params.text_document_position))
+    else {
+        return Vec::new();
+    };
+    let include = params.context.include_declaration;
+    to_locations(&index.references(&path, &source, offset, include))
+}
+
+fn prepare_call_hierarchy(
+    index: Option<&mut Index>,
+    params: CallHierarchyPrepareParams,
+) -> Option<Vec<CallHierarchyItem>> {
+    let index = index?;
+    let (path, source, offset) = cursor(&params.text_document_position_params)?;
+    let items: Vec<CallHierarchyItem> = index
+        .call_items(&path, &source, offset)
+        .iter()
+        .filter_map(call_item)
+        .collect();
+    (!items.is_empty()).then_some(items)
+}
+
+fn incoming_calls(
+    index: Option<&mut Index>,
+    params: CallHierarchyIncomingCallsParams,
+) -> Option<Vec<CallHierarchyIncomingCall>> {
+    let index = index?;
+    let item = from_call_item(&params.item)?;
+    Some(
+        index
+            .incoming_calls(&item)
+            .iter()
+            .filter_map(|(caller, ranges)| {
+                Some(CallHierarchyIncomingCall {
+                    from: call_item(caller)?,
+                    from_ranges: ranges_in(&caller.path, ranges)?,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn outgoing_calls(
+    index: Option<&mut Index>,
+    params: CallHierarchyOutgoingCallsParams,
+) -> Option<Vec<CallHierarchyOutgoingCall>> {
+    let index = index?;
+    let item = from_call_item(&params.item)?;
+    Some(
+        index
+            .outgoing_calls(&item)
+            .iter()
+            .filter_map(|(callee, ranges)| {
+                Some(CallHierarchyOutgoingCall {
+                    to: call_item(callee)?,
+                    from_ranges: ranges_in(&item.path, ranges)?,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// An index call item as an LSP item; `data` carries what rebuilding it needs.
+fn call_item(item: &CallItem) -> Option<CallHierarchyItem> {
+    let ranges = ranges_in(&item.path, &[item.range, item.selection])?;
+    let kind = match item.kind {
+        CallKind::Function => SymbolKind::FUNCTION,
+        CallKind::Method => SymbolKind::METHOD,
+        CallKind::File => SymbolKind::FILE,
+    };
+    let kind_name = match item.kind {
+        CallKind::Function => "function",
+        CallKind::Method => "method",
+        CallKind::File => "file",
+    };
+    Some(CallHierarchyItem {
+        name: item.name.clone(),
+        kind,
+        tags: None,
+        detail: Some(item.detail.clone()),
+        uri: path_to_uri(&item.path),
+        range: ranges[0],
+        selection_range: ranges[1],
+        data: Some(json!({
+            "path": item.path,
+            "range": [item.range.0, item.range.1],
+            "selection": [item.selection.0, item.selection.1],
+            "kind": kind_name,
+            "name": item.name,
+            "detail": item.detail,
+        })),
+    })
+}
+
+fn from_call_item(item: &CallHierarchyItem) -> Option<CallItem> {
+    let data = item.data.as_ref()?;
+    let pair = |key: &str| -> Option<(u32, u32)> {
+        let values = data.get(key)?.as_array()?;
+        Some((
+            values.first()?.as_u64()? as u32,
+            values.get(1)?.as_u64()? as u32,
+        ))
+    };
+    let kind = match data.get("kind")?.as_str()? {
+        "function" => CallKind::Function,
+        "method" => CallKind::Method,
+        _ => CallKind::File,
+    };
+    Some(CallItem {
+        name: data.get("name")?.as_str()?.to_string(),
+        kind,
+        detail: data.get("detail")?.as_str()?.to_string(),
+        path: PathBuf::from(data.get("path")?.as_str()?),
+        range: pair("range")?,
+        selection: pair("selection")?,
+    })
+}
+
+/// Byte ranges of the file at `path` as LSP ranges.
+fn ranges_in(path: &Path, ranges: &[(u32, u32)]) -> Option<Vec<Range>> {
+    let text = std::fs::read(path).ok()?;
+    let lines = LineIndex::new(&text);
+    Some(
+        ranges
+            .iter()
+            .map(|(start, end)| {
+                let (start_line, start_col) = lines.position(&text, *start);
+                let (end_line, end_col) = lines.position(&text, *end);
+                Range::new(
+                    Position::new(start_line, start_col),
+                    Position::new(end_line, end_col),
+                )
+            })
+            .collect(),
+    )
 }
 
 /// One type hierarchy item per class-like the cursor resolves to.

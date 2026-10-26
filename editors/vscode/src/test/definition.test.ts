@@ -129,4 +129,13 @@ suite("definition", () => {
     assert.strictEqual(targets.length, 1);
     assert.ok(uriOf(targets[0]).path.endsWith("src/Square.php"), uriOf(targets[0]).toString());
   });
+
+  test("find references lists the uses of Target", async () => {
+    const document = await open("src/Target.php");
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+
+    const locations = await vscode.commands.executeCommand<vscode.Location[]>("vscode.executeReferenceProvider", document.uri, new vscode.Position(2, 6));
+
+    assert.ok(locations.some((location) => location.uri.path.endsWith("src/Use.php")), JSON.stringify(locations));
+  });
 });
