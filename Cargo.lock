@@ -611,6 +611,7 @@ dependencies = [
  "mago-allocator",
  "mago-database",
  "mago-names",
+ "mago-span",
  "mago-syntax",
  "rayon",
  "tempfile",
