@@ -41,7 +41,14 @@ pub fn discover(root: &Path, opts: &DiscoverOptions) -> anyhow::Result<Vec<PathB
 
 pub(crate) fn discover_with(filter: &mut PathFilter) -> Vec<PathBuf> {
     let root = filter.root().to_path_buf();
-    let walker = WalkBuilder::new(&root)
+    discover_in(filter, &root)
+}
+
+/// The PHP files under `start`, a directory under the filter's root, with the same
+/// rules and path choice as a full discovery.
+pub(crate) fn discover_in(filter: &mut PathFilter, start: &Path) -> Vec<PathBuf> {
+    let root = filter.root().to_path_buf();
+    let walker = WalkBuilder::new(start)
         .hidden(true)
         .parents(false)
         .ignore(false)

@@ -266,3 +266,44 @@ fn many_unindexed_paths_are_handled_in_linear_time() {
         started.elapsed().as_millis()
     );
 }
+
+#[test]
+fn update_indexes_a_renamed_directory() {
+    let ws = Workspace::new(&[
+        ("lib/Target.php", TARGET),
+        (
+            "lib/sub/Other.php",
+            "<?php\nnamespace App;\nclass Other {}\n",
+        ),
+        (
+            "src/Use.php",
+            "<?php\nnamespace App;\nnew Target(); new Other();\n",
+        ),
+    ]);
+    let mut index = ws.index(&DiscoverOptions::default());
+    fs::rename(ws.path("lib"), ws.path("lib2")).unwrap();
+
+    let stats = index.update(&[ws.path("lib2")], &[ws.path("lib")]);
+
+    assert_eq!((stats.reparsed, stats.removed), (2, 2));
+    assert_eq!(
+        starts(&ws.definition(&mut index, "src/Use.php", "Target")),
+        vec![(
+            ws.path("lib2/Target.php"),
+            offset_of(&ws.path("lib2/Target.php"), "Target")
+        )]
+    );
+    assert_eq!(ws.definition(&mut index, "src/Use.php", "Other").len(), 1);
+}
+
+#[test]
+fn update_skips_created_hidden_and_node_modules_directories() {
+    let ws = Workspace::new(&[("src/Use.php", "<?php\nnew A(); new B();\n")]);
+    let mut index = ws.index(&DiscoverOptions::default());
+    ws.write(".cache/A.php", "<?php\nclass A {}\n");
+    ws.write("node_modules/pkg/B.php", "<?php\nclass B {}\n");
+
+    let stats = index.update(&[ws.path(".cache"), ws.path("node_modules/pkg")], &[]);
+
+    assert_eq!(stats.reparsed, 0);
+}

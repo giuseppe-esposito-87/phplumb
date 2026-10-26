@@ -7,7 +7,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use rayon::prelude::*;
 
 use crate::cache::{self, CachedFile};
-use crate::discover::{self, DiscoverOptions, discover_with};
+use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
 use crate::summary::{Declaration, NameKind, NameRef, SymbolKind, summarize};
 
@@ -129,9 +129,10 @@ impl Index {
         cache::save(cache, &self.filter, files)
     }
 
-    /// Applies file system changes. `changed` holds created or modified paths;
-    /// `removed` holds deleted files or directories. Changed paths that no longer
-    /// exist or that the filter rejects are treated as removed.
+    /// Applies file system changes. `changed` holds created or modified files or
+    /// directories; a directory is walked like a discovery. `removed` holds deleted
+    /// files or directories. Changed files that no longer exist or that the filter
+    /// rejects are treated as removed.
     pub fn update(&mut self, changed: &[PathBuf], removed: &[PathBuf]) -> UpdateStats {
         let started = Instant::now();
         let mut stats = UpdateStats::default();
@@ -143,6 +144,11 @@ impl Index {
             let path = self.filter.under_root(path);
             let chosen = discover::chosen_path(self.filter.root(), &path).map(|(_, chosen)| chosen);
             match chosen {
+                Some(chosen) if chosen.is_dir() => {
+                    if self.filter.accepts_dir(&chosen) {
+                        fresh.extend(discover_in(&mut self.filter, &chosen));
+                    }
+                }
                 Some(chosen) if self.filter.accepts(&chosen) => fresh.push(chosen),
                 _ => rejected.push(path),
             }

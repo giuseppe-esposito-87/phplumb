@@ -107,6 +107,8 @@ fn registers_file_watchers() {
             .len(),
         3
     );
+    // The catch-all watcher reports created and deleted directories: Create | Delete.
+    assert_eq!(registration["registerOptions"]["watchers"][2]["kind"], 5);
     client.reply_null(&request);
     client.shutdown();
 }
@@ -210,4 +212,41 @@ fn writes_the_cache_dir() {
     client.shutdown();
 
     assert!(cache_dir.join("index-v1.bin").exists());
+}
+
+#[test]
+fn applies_a_renamed_directory() {
+    let ws = Workspace::new(&[
+        ("lib/Target.php", "<?php\nnamespace App;\nclass Target {}\n"),
+        ("src/Use.php", "<?php\nnamespace App;\nnew Target();\n"),
+    ]);
+    let mut client = ws.start_indexed(json!({}));
+    std::fs::rename(ws.root.join("lib"), ws.root.join("lib2")).unwrap();
+
+    changes(&mut client, vec![(ws.uri("lib"), 3), (ws.uri("lib2"), 1)]);
+    let found = definition(&mut client, &ws.uri("src/Use.php"), 2, 4);
+
+    assert_eq!(found.len(), 1);
+    assert!(ends_with(&found[0], "/lib2/Target.php"));
+    client.shutdown();
+}
+
+#[test]
+fn does_not_log_batches_that_change_nothing() {
+    let ws = Workspace::new(&[("src/Use.php", "<?php\nnew A();\n")]);
+    let mut client = ws.start_indexed(json!({}));
+
+    changes(&mut client, vec![(ws.uri(".git/index.lock"), 3)]);
+    let (_, notifications) = client.request_collecting(
+        2,
+        "textDocument/definition",
+        json!({"textDocument": {"uri": ws.uri("src/Use.php")}, "position": {"line": 1, "character": 4}}),
+    );
+
+    assert!(
+        notifications
+            .iter()
+            .all(|n| n["method"] != "window/logMessage")
+    );
+    client.shutdown();
 }

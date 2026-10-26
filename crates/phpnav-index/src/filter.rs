@@ -62,23 +62,23 @@ impl PathFilter {
                 .is_ok_and(|meta| meta.is_file() && meta.len() <= self.max_file_bytes)
     }
 
+    /// Whether files inside `dir`, a directory under the canonical root, can belong
+    /// to the index: it is inside the root and neither hidden nor `node_modules`.
+    pub(crate) fn accepts_dir(&self, dir: &Path) -> bool {
+        dir.strip_prefix(&self.root)
+            .is_ok_and(|relative| !has_skipped_component(relative))
+    }
+
     /// The path rules alone, without touching the file itself. `path` is under the
     /// canonical root.
     pub(crate) fn accepts_path(&mut self, path: &Path) -> bool {
         let Ok(relative) = path.strip_prefix(&self.root) else {
             return false;
         };
-        if !has_php_extension(path) || self.exclude.is_match(relative) {
-            return false;
-        }
-        let skipped = relative.components().any(|component| match component {
-            Component::Normal(name) => {
-                name.to_string_lossy().starts_with('.')
-                    || SKIPPED_DIR_NAMES.iter().any(|skipped| name == *skipped)
-            }
-            _ => false,
-        });
-        if skipped {
+        if !has_php_extension(path)
+            || self.exclude.is_match(relative)
+            || has_skipped_component(relative)
+        {
             return false;
         }
         let root = &self.root;
@@ -103,6 +103,17 @@ impl PathFilter {
     pub(crate) fn max_file_bytes(&self) -> u64 {
         self.max_file_bytes
     }
+}
+
+/// Whether a component of `relative` is hidden or a directory never indexed.
+fn has_skipped_component(relative: &Path) -> bool {
+    relative.components().any(|component| match component {
+        Component::Normal(name) => {
+            name.to_string_lossy().starts_with('.')
+                || SKIPPED_DIR_NAMES.iter().any(|skipped| name == *skipped)
+        }
+        _ => false,
+    })
 }
 
 fn has_php_extension(path: &Path) -> bool {

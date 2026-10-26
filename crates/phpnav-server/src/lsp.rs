@@ -222,6 +222,9 @@ impl Server<'_> {
         let changed: Vec<PathBuf> = changed.into_iter().collect();
         let removed: Vec<PathBuf> = removed.into_iter().collect();
         let stats = index.update(&changed, &removed);
+        if stats.reparsed == 0 && stats.removed == 0 {
+            return Ok(());
+        }
         self.log_info(format!(
             "Reindexed {} files, removed {} in {} ms",
             stats.reparsed, stats.removed, stats.elapsed_ms
@@ -237,8 +240,11 @@ impl Server<'_> {
             watchers: vec![
                 watcher(format!("**/*.{{{}}}", PHP_EXTENSIONS.join(",")), None),
                 watcher("**/vendor/composer/installed.json".to_string(), None),
-                // Deleting a directory reports only the directory itself.
-                watcher("**/*".to_string(), Some(WatchKind::Delete)),
+                // Creating, moving or deleting a directory reports only the directory.
+                watcher(
+                    "**/*".to_string(),
+                    Some(WatchKind::Create | WatchKind::Delete),
+                ),
             ],
         };
         let registration = Registration {
