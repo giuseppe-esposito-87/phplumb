@@ -6,6 +6,7 @@ pub mod discover;
 pub mod filter;
 pub mod index;
 pub mod line_index;
+pub mod phpdoc;
 pub mod summary;
 
 pub use filter::PathFilter;
