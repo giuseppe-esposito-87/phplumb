@@ -149,3 +149,39 @@ fn bench_runs_implementation_cases() {
     assert_eq!(report["cases_passed"], 1, "{report}");
     assert!(report["implementation_ms"].is_number(), "{report}");
 }
+
+#[test]
+fn bench_runs_reference_cases() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../phpnav-index/tests/fixtures/references")
+        .canonicalize()
+        .unwrap();
+    let global = std::fs::read_to_string(root.join("global.php")).unwrap();
+    let uses = std::fs::read_to_string(root.join("app/Use.php")).unwrap();
+    let at = format!("global.php:{}", position_of(&global, "ghelper()"));
+    let call = format!("app/Use.php:{}", position_of(&uses, "ghelper();"));
+    let cases_dir = tempfile::TempDir::new().unwrap();
+    let cases = cases_dir.path().join("cases.toml");
+    std::fs::write(
+        &cases,
+        format!(
+            "[[case]]\nname = \"global function\"\nkind = \"references\"\nat = \"{at}\"\nexpect = [\"{call}\"]\n\n\
+             [[case]]\nname = \"wrong on purpose\"\nkind = \"references\"\nat = \"{at}\"\nexpect = []\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .arg("--cases")
+        .arg(&cases)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["cases_passed"], 1, "{report}");
+    assert!(report["references_ms"].is_number(), "{report}");
+}

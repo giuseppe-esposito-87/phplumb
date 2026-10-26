@@ -2,6 +2,21 @@
 
 Results of `php-navigator bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-26, step 2d references and call hierarchy
+
+Same machine and project. Each indexed file now records hashes of the names it mentions, so a references query parses only the files that can contain a match.
+
+| Metric                                  | Value                                                       | Target        |
+| --------------------------------------- | ----------------------------------------------------------- | ------------- |
+| Cold index                              | 2.8 s                                                       | under 10 s    |
+| Peak resident memory                    | 381 MB                                                      | under 1024 MB |
+| Slowest references case                 | 108 ms (1,033 references of `EntityStorageInterface::load`) | under 1 s     |
+| Slowest implementation case             | 11 ms                                                       | under 1 s     |
+| All cases                               | 48 passed, 0 failed                                         | all pass      |
+| Member coverage in `web/modules/custom` | 41,894 of 46,204 accesses (90.7%)                           | 90.7% before  |
+
+The custom references cases match an independent text search exactly. They cover two classes named `ImportStatisticsTracker` in different modules, where each class and its `trackCreated` method must list only its own uses, and a global function whose docblock mentions are not references. The expected list of the `load` case comes from the engine, with 20 sampled entries checked by hand.
+
 ## 2026-10-26, step 2c implementations and type hierarchy
 
 Same machine and project. Members documented with `{@inheritdoc}` and no type of their own now take the nearest typed ancestor's type.

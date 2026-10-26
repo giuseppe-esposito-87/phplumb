@@ -2,6 +2,7 @@
 //!
 //! Case positions are `relative/path:line:column`, 1-based, with columns in UTF-16
 //! units, pointing at the start of a name. An empty `expect` means "nothing".
+//! References cases exclude the declaration.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -82,6 +83,9 @@ pub struct Report {
     /// The slowest implementation case, when the case file has any.
     #[serde(skip_serializing_if = "Option::is_none")]
     implementation_ms: Option<u128>,
+    /// The slowest references case, when the case file has any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    references_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     coverage: Option<Coverage>,
     peak_rss_mb: u64,
@@ -128,6 +132,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         update_one_ms: None,
         update_1000_ms: None,
         implementation_ms: None,
+        references_ms: None,
         coverage: None,
         peak_rss_mb: 0,
         cases_passed: 0,
@@ -169,6 +174,15 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
                 let found = query_case(&mut index, &root, &case.at, Index::implementations);
                 let elapsed = started.elapsed().as_millis();
                 report.implementation_ms = report.implementation_ms.max(Some(elapsed));
+                found
+            }
+            "references" => {
+                let started = std::time::Instant::now();
+                let found = query_case(&mut index, &root, &case.at, |index, path, source, at| {
+                    index.references(path, source, at, false)
+                });
+                let elapsed = started.elapsed().as_millis();
+                report.references_ms = report.references_ms.max(Some(elapsed));
                 found
             }
             other => Err(anyhow::anyhow!("unsupported case kind {other}")),
