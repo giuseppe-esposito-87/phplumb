@@ -87,7 +87,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         exclude: args.exclude.clone(),
         ..DiscoverOptions::default()
     };
-    let (index, stats) = Index::build(&root, &opts)?;
+    let (mut index, stats) = Index::build(&root, &opts)?;
 
     let mut report = Report {
         files: stats.files,
@@ -109,7 +109,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
     for case in file.cases {
         let expected: BTreeSet<String> = case.expect.iter().cloned().collect();
         let actual = match case.kind.as_str() {
-            "definition" => definition_case(&index, &root, &case.at),
+            "definition" => definition_case(&mut index, &root, &case.at),
             other => Err(anyhow::anyhow!("unsupported case kind {other}")),
         };
         match actual {
@@ -135,7 +135,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
     Ok(report)
 }
 
-fn definition_case(index: &Index, root: &Path, at: &str) -> anyhow::Result<BTreeSet<String>> {
+fn definition_case(index: &mut Index, root: &Path, at: &str) -> anyhow::Result<BTreeSet<String>> {
     let (path, line, col) = parse_position(root, at)?;
     let source = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let offset = LineIndex::new(&source)

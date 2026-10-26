@@ -68,7 +68,7 @@ fn run_fixture(name: &str) {
         .join(name)
         .canonicalize()
         .unwrap();
-    let (index, _) = Index::build(&root, &DiscoverOptions::default()).unwrap();
+    let (mut index, _) = Index::build(&root, &DiscoverOptions::default()).unwrap();
     let rel = |path: &Path| path.strip_prefix(&root).unwrap().display().to_string();
 
     let mut cursors: Vec<(String, PathBuf, usize)> = Vec::new();

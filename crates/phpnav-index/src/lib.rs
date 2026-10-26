@@ -1,5 +1,6 @@
 //! PHP source indexing: file discovery, parsing and symbol lookup.
 
+mod cache;
 mod composer;
 pub mod discover;
 pub mod filter;

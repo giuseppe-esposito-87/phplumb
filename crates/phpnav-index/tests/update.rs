@@ -193,3 +193,30 @@ fn update_accepts_paths_under_a_non_canonical_root() {
 
     assert_eq!(ws.definition(&mut index, "src/Use.php", "Fresh").len(), 1);
 }
+
+#[test]
+fn definition_heals_a_stale_target() {
+    let ws = Workspace::new(&[("src/A.php", TARGET), ("src/Use.php", USE)]);
+    let mut index = ws.index(&DiscoverOptions::default());
+    let original = fs::metadata(ws.path("src/A.php"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    ws.write("src/A.php", TARGET_MOVED);
+    fs::File::options()
+        .write(true)
+        .open(ws.path("src/A.php"))
+        .unwrap()
+        .set_modified(original)
+        .unwrap();
+
+    let found = ws.definition(&mut index, "src/Use.php", "Target");
+
+    assert_eq!(
+        starts(&found),
+        vec![(
+            ws.path("src/A.php"),
+            offset_of(&ws.path("src/A.php"), "Target")
+        )]
+    );
+}

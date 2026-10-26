@@ -23,6 +23,7 @@ pub struct PathFilter {
     root: PathBuf,
     given_root: PathBuf,
     exclude: GlobSet,
+    exclude_patterns: Vec<String>,
     max_file_bytes: u64,
     vendor_filters: HashMap<PathBuf, Option<VendorFilter>>,
 }
@@ -33,6 +34,7 @@ impl PathFilter {
             root: root.canonicalize()?,
             given_root: root.to_path_buf(),
             exclude: build_globset(&opts.exclude)?,
+            exclude_patterns: opts.exclude.clone(),
             max_file_bytes: opts.max_file_bytes,
             vendor_filters: HashMap::new(),
         })
@@ -92,6 +94,10 @@ impl PathFilter {
                     .as_ref()
                     .is_none_or(|filter| filter.allows(path))
             })
+    }
+
+    pub(crate) fn exclude_patterns(&self) -> &[String] {
+        &self.exclude_patterns
     }
 
     pub(crate) fn max_file_bytes(&self) -> u64 {

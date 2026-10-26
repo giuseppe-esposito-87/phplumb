@@ -64,7 +64,7 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         .unwrap_or(false);
 
     // Requests that arrive while indexing wait in the connection's queue.
-    let index = match workspace_root(&params) {
+    let mut index = match workspace_root(&params) {
         Some(root) => Some(build_index(
             &connection,
             &root,
@@ -73,7 +73,7 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         )?),
         None => None,
     };
-    main_loop(&connection, index.as_ref())
+    main_loop(&connection, index.as_mut())
 }
 
 /// The first workspace folder, or the deprecated `rootUri` when there are none.
@@ -169,7 +169,7 @@ fn send_progress(
     Ok(())
 }
 
-fn main_loop(connection: &Connection, index: Option<&Index>) -> anyhow::Result<()> {
+fn main_loop(connection: &Connection, mut index: Option<&mut Index>) -> anyhow::Result<()> {
     for message in &connection.receiver {
         let Message::Request(request) = message else {
             continue;
@@ -180,7 +180,9 @@ fn main_loop(connection: &Connection, index: Option<&Index>) -> anyhow::Result<(
         let response = match request.method.as_str() {
             GotoDefinition::METHOD => {
                 match serde_json::from_value::<GotoDefinitionParams>(request.params) {
-                    Ok(params) => Response::new_ok(request.id, definition(index, params)),
+                    Ok(params) => {
+                        Response::new_ok(request.id, definition(index.as_deref_mut(), params))
+                    }
                     Err(err) => Response::new_err(
                         request.id,
                         ErrorCode::InvalidParams as i32,
@@ -200,7 +202,7 @@ fn main_loop(connection: &Connection, index: Option<&Index>) -> anyhow::Result<(
 }
 
 /// Reads the requested file from disk, so the query sees what the agent last wrote.
-fn definition(index: Option<&Index>, params: GotoDefinitionParams) -> Vec<Location> {
+fn definition(index: Option<&mut Index>, params: GotoDefinitionParams) -> Vec<Location> {
     let Some(index) = index else {
         return Vec::new();
     };

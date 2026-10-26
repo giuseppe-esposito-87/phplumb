@@ -12,8 +12,9 @@ use mago_syntax::cst::{
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
     Class,
     Interface,
@@ -31,7 +32,7 @@ pub enum NameKind {
 
 /// A declared symbol. `fqn` keeps the source casing and has no leading backslash;
 /// `name_start..name_end` covers the declared name token only.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Declaration {
     pub kind: SymbolKind,
     pub fqn: String,

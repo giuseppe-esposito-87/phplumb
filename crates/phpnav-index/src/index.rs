@@ -2,10 +2,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
 
 use rayon::prelude::*;
 
+use crate::cache::{self, CachedFile};
 use crate::discover::{self, DiscoverOptions, discover_with};
 use crate::filter::PathFilter;
 use crate::summary::{Declaration, NameKind, NameRef, SymbolKind, summarize};
@@ -18,11 +19,14 @@ pub struct Location {
     pub end: u32,
 }
 
+/// `reused` files came from the cache; `reparsed` files were read and parsed.
 #[derive(Clone, Debug, Default)]
 pub struct IndexStats {
     pub files: usize,
     pub declarations: usize,
     pub files_with_parse_errors: usize,
+    pub reused: usize,
+    pub reparsed: usize,
     pub elapsed_ms: u128,
 }
 
@@ -40,19 +44,14 @@ struct Entry {
     end: u32,
 }
 
-/// One indexed file. Its declarations are kept so their keys can be removed from the
-/// symbol tables when the file changes.
-struct FileEntry {
-    path: PathBuf,
-    declarations: Vec<Declaration>,
-}
-
 /// Declarations of every PHP file under a root. Keys are lowercased fully qualified
 /// names without a leading backslash, because PHP class and function names are
-/// case-insensitive. Files are slots; a removed file leaves an empty slot.
+/// case-insensitive. Files are slots; a removed file leaves an empty slot. Each file
+/// keeps its declarations, so their keys can be removed when it changes, and its size
+/// and modification time, so a cache can tell whether it is still current.
 pub struct Index {
     filter: PathFilter,
-    files: Vec<Option<FileEntry>>,
+    files: Vec<Option<CachedFile>>,
     ids: HashMap<PathBuf, u32>,
     classes: HashMap<String, Vec<Entry>>,
     functions: HashMap<String, Vec<Entry>>,
@@ -60,10 +59,53 @@ pub struct Index {
 
 impl Index {
     pub fn build(root: &Path, opts: &DiscoverOptions) -> anyhow::Result<(Index, IndexStats)> {
+        Self::build_from(root, opts, HashMap::new())
+    }
+
+    /// Loads `cache` when it was written by this engine version for the same root and
+    /// options, reuses entries whose file size and modification time are unchanged,
+    /// and parses the rest. Any cache problem means a full build.
+    pub fn build_with_cache(
+        root: &Path,
+        opts: &DiscoverOptions,
+        cache: &Path,
+    ) -> anyhow::Result<(Index, IndexStats)> {
+        let filter = PathFilter::new(root, opts)?;
+        let cached = cache::load(cache, &filter);
+        Self::build_from(root, opts, cached)
+    }
+
+    fn build_from(
+        root: &Path,
+        opts: &DiscoverOptions,
+        mut cached: HashMap<PathBuf, CachedFile>,
+    ) -> anyhow::Result<(Index, IndexStats)> {
         let started = Instant::now();
         let mut filter = PathFilter::new(root, opts)?;
         let paths = discover_with(&mut filter);
-        let summaries = summarize_files(&paths);
+
+        let stamps: Vec<Option<(u64, u64)>> = paths.par_iter().map(|p| stamp(p)).collect();
+        let mut files: Vec<Option<CachedFile>> = Vec::with_capacity(paths.len());
+        let mut to_parse: Vec<(usize, PathBuf)> = Vec::new();
+        for (i, (path, stamp)) in paths.into_iter().zip(stamps).enumerate() {
+            match cached.remove(&path) {
+                Some(hit) if stamp == Some((hit.size, hit.mtime_ns)) => files.push(Some(hit)),
+                _ => {
+                    files.push(None);
+                    to_parse.push((i, path));
+                }
+            }
+        }
+        let mut stats = IndexStats {
+            files: files.len(),
+            reused: files.len() - to_parse.len(),
+            reparsed: to_parse.len(),
+            ..IndexStats::default()
+        };
+        let parse_paths: Vec<PathBuf> = to_parse.iter().map(|(_, p)| p.clone()).collect();
+        for ((i, _), file) in to_parse.into_iter().zip(read_files(&parse_paths)) {
+            files[i] = Some(file);
+        }
 
         let mut index = Index {
             filter,
@@ -72,17 +114,19 @@ impl Index {
             classes: HashMap::new(),
             functions: HashMap::new(),
         };
-        let mut stats = IndexStats {
-            files: paths.len(),
-            ..IndexStats::default()
-        };
-        for (path, (declarations, has_errors)) in paths.into_iter().zip(summaries) {
-            stats.files_with_parse_errors += usize::from(has_errors);
-            stats.declarations += declarations.len();
-            index.insert(path, declarations);
+        for file in files.into_iter().flatten() {
+            stats.files_with_parse_errors += usize::from(file.has_errors);
+            stats.declarations += file.declarations.len();
+            index.insert(file);
         }
         stats.elapsed_ms = started.elapsed().as_millis();
         Ok((index, stats))
+    }
+
+    /// Writes the index to `cache` for a later `build_with_cache`.
+    pub fn save_cache(&self, cache: &Path) -> anyhow::Result<()> {
+        let files = self.files.iter().flatten().cloned().collect();
+        cache::save(cache, &self.filter, files)
     }
 
     /// Applies file system changes. `changed` holds created or modified paths;
@@ -109,13 +153,97 @@ impl Index {
                 self.remove(id);
             }
         }
-        let summaries = summarize_files(&fresh);
         stats.reparsed = fresh.len();
-        for (path, (declarations, _)) in fresh.into_iter().zip(summaries) {
-            self.insert(path, declarations);
+        for file in read_files(&fresh) {
+            self.insert(file);
         }
         stats.elapsed_ms = started.elapsed().as_millis();
         stats
+    }
+
+    /// Definitions of the name at `offset` in `path`, whose current content is
+    /// `source`. Results come only from resolved names and are sorted by path and
+    /// offset; an unknown or unresolvable name returns nothing.
+    ///
+    /// A target file that no longer holds the declared name at the indexed range
+    /// changed since it was indexed: it is indexed again and the query runs once more.
+    pub fn definition(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
+        let found = self.resolve(path, source, offset);
+        let stale: Vec<PathBuf> = found
+            .iter()
+            .filter(|(location, name)| !holds_name(location, name))
+            .map(|(location, _)| location.path.clone())
+            .collect();
+        if stale.is_empty() {
+            return found.into_iter().map(|(location, _)| location).collect();
+        }
+        self.update(&stale, &[]);
+        self.resolve(path, source, offset)
+            .into_iter()
+            .map(|(location, _)| location)
+            .collect()
+    }
+
+    /// Each target with the lowercased short name the index expects at its range.
+    fn resolve(&self, path: &Path, source: &[u8], offset: u32) -> Vec<(Location, String)> {
+        let summary = summarize(source);
+
+        if let Some(declaration) = summary
+            .declarations
+            .iter()
+            .find(|d| d.name_start <= offset && offset <= d.name_end)
+        {
+            let location = Location {
+                path: path.to_path_buf(),
+                start: declaration.name_start,
+                end: declaration.name_end,
+            };
+            return vec![(location, short_name(&declaration.fqn))];
+        }
+
+        let Some(name) = name_at(&summary.names, offset) else {
+            return Vec::new();
+        };
+        let (key, entries): (String, &[Entry]) = match name.kind {
+            NameKind::ClassLike => {
+                let key = name.fqn.to_ascii_lowercase();
+                let entries = lookup(&self.classes, &key);
+                (key, entries)
+            }
+            NameKind::Function => {
+                let key = name.fqn.to_ascii_lowercase();
+                let found = lookup(&self.functions, &key);
+                match key.rsplit_once('\\') {
+                    // PHP falls back to the global function only for unqualified,
+                    // non-imported names.
+                    Some((_, global)) if found.is_empty() && !name.qualified && !name.imported => {
+                        let global = global.to_string();
+                        let entries = lookup(&self.functions, &global);
+                        (global, entries)
+                    }
+                    _ => (key, found),
+                }
+            }
+            NameKind::Constant => (String::new(), &[]),
+        };
+
+        let expected = short_name(&key);
+        let mut found: Vec<(Location, String)> = entries
+            .iter()
+            .map(|entry| {
+                let file = self.files[entry.file as usize]
+                    .as_ref()
+                    .expect("symbol tables only reference live files");
+                let location = Location {
+                    path: file.path.clone(),
+                    start: entry.start,
+                    end: entry.end,
+                };
+                (location, expected.clone())
+            })
+            .collect();
+        found.sort_by(|(a, _), (b, _)| (&a.path, a.start).cmp(&(&b.path, b.start)));
+        found
     }
 
     /// Removes indexed files equal to, or inside, any of `paths`. Returns how many.
@@ -144,32 +272,32 @@ impl Index {
         ids.len()
     }
 
-    fn insert(&mut self, path: PathBuf, declarations: Vec<Declaration>) {
-        let file = self.files.len() as u32;
-        for declaration in &declarations {
+    fn insert(&mut self, file: CachedFile) {
+        let id = self.files.len() as u32;
+        for declaration in &file.declarations {
             self.table_mut(declaration.kind)
                 .entry(declaration.fqn.to_ascii_lowercase())
                 .or_default()
                 .push(Entry {
-                    file,
+                    file: id,
                     start: declaration.name_start,
                     end: declaration.name_end,
                 });
         }
-        self.ids.insert(path.clone(), file);
-        self.files.push(Some(FileEntry { path, declarations }));
+        self.ids.insert(file.path.clone(), id);
+        self.files.push(Some(file));
     }
 
-    fn remove(&mut self, file: u32) {
-        let Some(entry) = self.files[file as usize].take() else {
+    fn remove(&mut self, id: u32) {
+        let Some(file) = self.files[id as usize].take() else {
             return;
         };
-        self.ids.remove(&entry.path);
-        for declaration in &entry.declarations {
+        self.ids.remove(&file.path);
+        for declaration in &file.declarations {
             let key = declaration.fqn.to_ascii_lowercase();
             let table = self.table_mut(declaration.kind);
             if let Some(entries) = table.get_mut(&key) {
-                entries.retain(|e| e.file != file);
+                entries.retain(|e| e.file != id);
                 if entries.is_empty() {
                     table.remove(&key);
                 }
@@ -183,66 +311,22 @@ impl Index {
             _ => &mut self.classes,
         }
     }
+}
 
-    /// Definitions of the name at `offset` in `path`, whose current content is
-    /// `source`. Results come only from resolved names and are sorted by path and
-    /// offset; an unknown or unresolvable name returns nothing.
-    pub fn definition(&self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
-        let summary = summarize(source);
+fn lookup<'a>(table: &'a HashMap<String, Vec<Entry>>, key: &str) -> &'a [Entry] {
+    table.get(key).map(Vec::as_slice).unwrap_or_default()
+}
 
-        if let Some(declaration) = summary
-            .declarations
-            .iter()
-            .find(|d| d.name_start <= offset && offset <= d.name_end)
-        {
-            return vec![Location {
-                path: path.to_path_buf(),
-                start: declaration.name_start,
-                end: declaration.name_end,
-            }];
-        }
+fn short_name(fqn: &str) -> String {
+    fqn.rsplit('\\').next().unwrap_or(fqn).to_ascii_lowercase()
+}
 
-        let Some(name) = name_at(&summary.names, offset) else {
-            return Vec::new();
-        };
-        let entries: &[Entry] = match name.kind {
-            NameKind::ClassLike => self.lookup(&self.classes, &name.fqn),
-            NameKind::Function => {
-                let found = self.lookup(&self.functions, &name.fqn);
-                match name.fqn.rsplit_once('\\') {
-                    // PHP falls back to the global function only for unqualified,
-                    // non-imported names.
-                    Some((_, short)) if found.is_empty() && !name.qualified && !name.imported => {
-                        self.lookup(&self.functions, short)
-                    }
-                    _ => found,
-                }
-            }
-            NameKind::Constant => &[],
-        };
-
-        let mut locations: Vec<Location> = entries
-            .iter()
-            .map(|entry| Location {
-                path: self.files[entry.file as usize]
-                    .as_ref()
-                    .expect("symbol tables only reference live files")
-                    .path
-                    .clone(),
-                start: entry.start,
-                end: entry.end,
-            })
-            .collect();
-        locations.sort_by(|a, b| (&a.path, a.start).cmp(&(&b.path, b.start)));
-        locations
-    }
-
-    fn lookup<'a>(&self, table: &'a HashMap<String, Vec<Entry>>, fqn: &str) -> &'a [Entry] {
-        table
-            .get(&fqn.to_ascii_lowercase())
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-    }
+/// Whether the file at `location` still holds `name` (lowercased) at its range.
+fn holds_name(location: &Location, name: &str) -> bool {
+    std::fs::read(&location.path).is_ok_and(|text| {
+        text.get(location.start as usize..location.end as usize)
+            .is_some_and(|found| found.eq_ignore_ascii_case(name.as_bytes()))
+    })
 }
 
 /// The name covering `offset`. A name that strictly contains the offset wins over
@@ -254,17 +338,35 @@ fn name_at(names: &[NameRef], offset: u32) -> Option<&NameRef> {
         .or_else(|| names.iter().find(|n| n.end == offset))
 }
 
-/// Declarations and parse-error flag of each file, in parallel. Unreadable files
+/// Size and modification time in nanoseconds.
+fn stamp(path: &Path) -> Option<(u64, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some((meta.len(), mtime.as_nanos() as u64))
+}
+
+/// Reads and summarizes files in parallel. The stamp is taken before reading, so a
+/// file written meanwhile looks changed to the next cache check. Unreadable files
 /// yield no declarations rather than failing.
-fn summarize_files(paths: &[PathBuf]) -> Vec<(Vec<Declaration>, bool)> {
+fn read_files(paths: &[PathBuf]) -> Vec<CachedFile> {
     paths
         .par_iter()
-        .map(|path| match std::fs::read(path) {
-            Ok(source) => {
-                let summary = summarize(&source);
-                (summary.declarations, summary.has_parse_errors)
+        .map(|path| {
+            let (size, mtime_ns) = stamp(path).unwrap_or_default();
+            let (declarations, has_errors) = match std::fs::read(path) {
+                Ok(source) => {
+                    let summary = summarize(&source);
+                    (summary.declarations, summary.has_parse_errors)
+                }
+                Err(_) => (Vec::<Declaration>::new(), false),
+            };
+            CachedFile {
+                path: path.clone(),
+                size,
+                mtime_ns,
+                has_errors,
+                declarations,
             }
-            Err(_) => (Vec::new(), false),
         })
         .collect()
 }
