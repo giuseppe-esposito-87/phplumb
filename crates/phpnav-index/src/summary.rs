@@ -1,6 +1,7 @@
 //! Declarations, class shapes and resolved names of one PHP file.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hasher};
 
 use mago_allocator::LocalArena;
 use mago_database::file::FileId;
@@ -11,9 +12,10 @@ use mago_syntax::cst::{
     AnonymousClass, Argument, Class, ClassConstantAccess, ClassLikeConstantSelector,
     ClassLikeMember, ClassLikeMemberSelector, Constant, ConstantAccess, Enum, EnumCaseItem,
     Expression, Function, FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
-    FunctionPartialApplication, Hint, Instantiation, Interface, Literal, Method, Modifier,
-    Namespace, Program, Property, PropertyItem, Sequence, StaticMethodCall,
-    StaticMethodPartialApplication, StaticPropertyAccess, Trait, Use, UseItems, UseType, Variable,
+    FunctionPartialApplication, Hint, Instantiation, Interface, Literal, Method, MethodCall,
+    Modifier, Namespace, NullSafeMethodCall, NullSafePropertyAccess, Program, Property,
+    PropertyAccess, PropertyItem, Sequence, StaticMethodCall, StaticMethodPartialApplication,
+    StaticPropertyAccess, Trait, Use, UseItems, UseType, Variable,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -38,6 +40,45 @@ pub enum NameKind {
     Constant,
 }
 
+/// A symbol whose references can be searched. Constants keep their name's case;
+/// everything else is matched case-insensitively.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RefKey {
+    Class(String),
+    Function(String),
+    Constant(String),
+    Member(String),
+}
+
+impl RefKey {
+    /// A stable hash of the normalized key. Two keys may collide; that only adds a
+    /// candidate file that verification drops.
+    pub(crate) fn hash(&self) -> u64 {
+        let (prefix, body) = match self {
+            RefKey::Class(fqn) => (b'c', bare(fqn).to_ascii_lowercase()),
+            RefKey::Function(fqn) => (b'f', bare(fqn).to_ascii_lowercase()),
+            RefKey::Constant(fqn) => (
+                b'k',
+                match bare(fqn).rsplit_once('\\') {
+                    Some((namespace, name)) => {
+                        format!("{}\\{name}", namespace.to_ascii_lowercase())
+                    }
+                    None => bare(fqn).to_string(),
+                },
+            ),
+            RefKey::Member(name) => (b'm', name.to_ascii_lowercase()),
+        };
+        let mut hasher = DefaultHasher::new();
+        hasher.write_u8(prefix);
+        hasher.write(body.as_bytes());
+        hasher.finish()
+    }
+}
+
+fn bare(fqn: &str) -> &str {
+    fqn.trim_start_matches('\\')
+}
+
 /// A declared symbol. `fqn` keeps the source casing and has no leading backslash;
 /// `name_start..name_end` covers the declared name token only.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,6 +99,9 @@ pub struct Declaration {
     /// Class-likes: parent, interfaces, traits and members.
     #[serde(default)]
     pub class: Option<ClassShape>,
+    /// The whole declaration, body included.
+    #[serde(default)]
+    pub range: (u32, u32),
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -100,6 +144,9 @@ pub struct Member {
     /// Declared `private`: not inherited by subclasses.
     #[serde(default)]
     pub is_private: bool,
+    /// The whole member, body included.
+    #[serde(default)]
+    pub range: (u32, u32),
 }
 
 /// A use of a name, resolved against the file's namespace and imports.
@@ -240,6 +287,8 @@ pub struct FileSummary {
     pub static_refs: Vec<StaticRef>,
     pub keywords: Vec<KeywordRef>,
     pub class_ranges: Vec<ClassRange>,
+    /// Hashes of every `RefKey` the file mentions or declares, sorted and unique.
+    pub ref_keys: Vec<u64>,
 }
 
 impl FileSummary {
@@ -270,6 +319,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         static_refs: Vec::new(),
         keywords: Vec::new(),
         anonymous: Vec::new(),
+        member_names: HashSet::new(),
     };
     SyntaxVisitor.walk_program(program, &mut collector);
 
@@ -284,7 +334,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         PendingSel::Named(start) => fqn_at(start).map(ClassSel::Named),
         PendingSel::Keyword(sel) => Some(sel),
     };
-    let static_refs = collector
+    let static_refs: Vec<StaticRef> = collector
         .static_refs
         .into_iter()
         .filter_map(|(kind, name, start, end, sel)| {
@@ -328,6 +378,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 doc: pending.doc,
                 returns: pending.returns,
                 class,
+                range: pending.span,
             })
         })
         .collect();
@@ -340,7 +391,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         members: anonymous.members,
     }));
 
-    let names = resolved
+    let names: Vec<NameRef> = resolved
         .iter()
         .filter(|(start, _)| {
             !collector.not_refs.contains(start) && !declaration_starts.contains(start)
@@ -365,6 +416,45 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         })
         .collect();
 
+    let mut keys: HashSet<u64> = HashSet::new();
+    for name in &names {
+        let fallback = !name.qualified && !name.imported;
+        let short = name
+            .fqn
+            .rsplit_once('\\')
+            .map(|(_, short)| short.to_string());
+        let key = |fqn: String| match name.kind {
+            NameKind::ClassLike => RefKey::Class(fqn),
+            NameKind::Function => RefKey::Function(fqn),
+            NameKind::Constant => RefKey::Constant(fqn),
+        };
+        keys.insert(key(name.fqn.clone()).hash());
+        // Unqualified functions and constants may reach the global one.
+        if fallback
+            && name.kind != NameKind::ClassLike
+            && let Some(short) = short
+        {
+            keys.insert(key(short).hash());
+        }
+    }
+    for declaration in &declarations {
+        let key = match declaration.kind {
+            SymbolKind::Function => RefKey::Function(declaration.fqn.clone()),
+            SymbolKind::Constant => RefKey::Constant(declaration.fqn.clone()),
+            _ => RefKey::Class(declaration.fqn.clone()),
+        };
+        keys.insert(key.hash());
+        for member in declaration.class.iter().flat_map(|c| c.members.iter()) {
+            keys.insert(RefKey::Member(member.name.clone()).hash());
+        }
+    }
+    let accessed = collector.member_names.iter();
+    for name in accessed.chain(static_refs.iter().map(|r: &StaticRef| &r.name)) {
+        keys.insert(RefKey::Member(name.clone()).hash());
+    }
+    let mut ref_keys: Vec<u64> = keys.into_iter().collect();
+    ref_keys.sort_unstable();
+
     FileSummary {
         declarations,
         names,
@@ -373,6 +463,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         static_refs,
         keywords: collector.keywords,
         class_ranges,
+        ref_keys,
     }
 }
 
@@ -408,6 +499,8 @@ struct Pending {
     end: u32,
     /// Class-likes: the whole declaration.
     range: Option<(u32, u32)>,
+    /// The whole declaration, for every kind.
+    span: (u32, u32),
     /// Set when the resolver does not know the name, as for `define()`.
     fqn: Option<String>,
     signature: String,
@@ -457,6 +550,8 @@ struct Collector<'a> {
     static_refs: Vec<(MemberKind, String, u32, u32, PendingSel)>,
     keywords: Vec<KeywordRef>,
     anonymous: Vec<PendingAnonymous>,
+    /// Names of members accessed with `->` or `?->`.
+    member_names: HashSet<String>,
 }
 
 /// An anonymous class: its range, the offset of its parent's name, and its members.
@@ -508,6 +603,13 @@ impl Collector<'_> {
         self.static_refs.push((kind, name, start, end, sel));
     }
 
+    fn member_name(&mut self, selector: &ClassLikeMemberSelector<'_>) {
+        if let ClassLikeMemberSelector::Identifier(name) = selector {
+            self.member_names
+                .insert(String::from_utf8_lossy(name.value).into_owned());
+        }
+    }
+
     fn method_selector(&mut self, class: &Expression<'_>, selector: &ClassLikeMemberSelector<'_>) {
         if let ClassLikeMemberSelector::Identifier(name) = selector {
             self.static_member(
@@ -553,6 +655,7 @@ impl Collector<'_> {
             start: head.name.0,
             end: head.name.1,
             range: Some((head.node_start, head.node_end)),
+            span: (head.node_start, head.node_end),
             fqn: None,
             signature: self.text(head.head_start, head.left_brace),
             doc: self.doc(head.node_start),
@@ -596,6 +699,7 @@ impl Collector<'_> {
                             params: Vec::new(),
                             is_abstract: false,
                             is_private: false,
+                            range: (start, constant.span().end.offset),
                         });
                     }
                 }
@@ -618,6 +722,7 @@ impl Collector<'_> {
                         params: Vec::new(),
                         is_abstract: false,
                         is_private: false,
+                        range: (case.span().start.offset, case.span().end.offset),
                     });
                 }
                 ClassLikeMember::Method(method) => self.method(method, in_interface, &mut out),
@@ -672,6 +777,7 @@ impl Collector<'_> {
                 params: Vec::new(),
                 is_abstract: false,
                 is_private: has_private(modifiers),
+                range: (start, property.span().end.offset),
                 name,
             });
         }
@@ -708,6 +814,7 @@ impl Collector<'_> {
                     params: Vec::new(),
                     is_abstract: false,
                     is_private: has_private(&param.modifiers),
+                    range: (param.span().start.offset, param.span().end.offset),
                 });
             }
         }
@@ -729,6 +836,7 @@ impl Collector<'_> {
             params,
             is_abstract: in_interface || has_abstract(&method.modifiers),
             is_private: has_private(&method.modifiers),
+            range: (start, method.span().end.offset),
             name,
         });
     }
@@ -891,6 +999,34 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         );
     }
 
+    fn walk_in_method_call(&self, call: &'ast MethodCall<'arena>, c: &mut Collector<'arena>) {
+        c.member_name(&call.method);
+    }
+
+    fn walk_in_null_safe_method_call(
+        &self,
+        call: &'ast NullSafeMethodCall<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        c.member_name(&call.method);
+    }
+
+    fn walk_in_property_access(
+        &self,
+        access: &'ast PropertyAccess<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        c.member_name(&access.property);
+    }
+
+    fn walk_in_null_safe_property_access(
+        &self,
+        access: &'ast NullSafePropertyAccess<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        c.member_name(&access.property);
+    }
+
     fn walk_in_anonymous_class(
         &self,
         class: &'ast AnonymousClass<'arena>,
@@ -991,6 +1127,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             start: function.name.span.start.offset,
             end: function.name.span.end.offset,
             range: None,
+            span: (start, function.span().end.offset),
             fqn: None,
             signature: c.text(function.function.span.start.offset, end),
             doc,
@@ -1008,6 +1145,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 start: item.name.span.start.offset,
                 end: item.name.span.end.offset,
                 range: None,
+                span: (constant.span().start.offset, constant.span().end.offset),
                 fqn: None,
                 signature: format!("const {}", String::from_utf8_lossy(item.name.value)),
                 doc: doc.clone(),
@@ -1039,6 +1177,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c.pending.push(Pending {
             kind: SymbolKind::Constant,
             range: None,
+            span: (call.span().start.offset, call.span().end.offset),
             start: literal.span.start.offset + 1,
             end: literal.span.end.offset.saturating_sub(1),
             signature: format!("define('{name}')"),

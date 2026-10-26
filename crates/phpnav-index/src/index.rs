@@ -14,7 +14,8 @@ use crate::infer::{self, Receiver};
 use crate::members;
 use crate::phpdoc::TypeExpr;
 use crate::summary::{
-    ClassRange, ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, SymbolKind, summarize,
+    ClassRange, ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, RefKey, SymbolKind,
+    summarize,
 };
 
 /// A byte range in a file.
@@ -74,6 +75,8 @@ pub struct Index {
     /// Lowercased parent or interface name to the declarations that extend or
     /// implement it directly.
     subtype_table: HashMap<String, Vec<Entry>>,
+    /// Reference key hash to the files that mention the key.
+    candidates: HashMap<u64, Vec<u32>>,
 }
 
 impl Index {
@@ -134,6 +137,7 @@ impl Index {
             functions: HashMap::new(),
             constants: HashMap::new(),
             subtype_table: HashMap::new(),
+            candidates: HashMap::new(),
         };
         for file in files.into_iter().flatten() {
             stats.files_with_parse_errors += usize::from(file.has_errors);
@@ -197,6 +201,17 @@ impl Index {
     /// summaries of what the word refers to.
     pub fn hover(&mut self, path: &Path, source: &[u8], offset: u32) -> Option<Hover> {
         hover::hover(self, path, source, offset)
+    }
+
+    /// Files that mention `key`, possibly with false positives, never false negatives.
+    pub fn candidate_files(&self, key: &RefKey) -> Vec<&Path> {
+        self.candidates
+            .get(&key.hash())
+            .into_iter()
+            .flatten()
+            .filter_map(|&id| self.files[id as usize].as_ref())
+            .map(|file| file.path.as_path())
+            .collect()
     }
 
     /// The class-like declared with its name starting at `start` in `path`.
@@ -763,6 +778,9 @@ impl Index {
                     });
             }
         }
+        for key in &file.ref_keys {
+            self.candidates.entry(*key).or_default().push(id);
+        }
         self.ids.insert(file.path.clone(), id);
         self.files.push(Some(file));
     }
@@ -772,6 +790,14 @@ impl Index {
             return;
         };
         self.ids.remove(&file.path);
+        for key in &file.ref_keys {
+            if let Some(files) = self.candidates.get_mut(key) {
+                files.retain(|f| *f != id);
+                if files.is_empty() {
+                    self.candidates.remove(key);
+                }
+            }
+        }
         for declaration in &file.declarations {
             for supertype in supertype_names(declaration) {
                 let key = supertype.to_ascii_lowercase();
@@ -898,13 +924,13 @@ fn read_files(paths: &[PathBuf]) -> Vec<CachedFile> {
         .par_iter()
         .map(|path| {
             let (size, mtime_ns) = stamp(path).unwrap_or_default();
-            let (declarations, has_errors) = match std::fs::read(path) {
+            let (declarations, has_errors, ref_keys) = match std::fs::read(path) {
                 Ok(source) => {
                     let summary = summarize(&source);
                     let declarations = summary.declarations.into_iter().map(lean).collect();
-                    (declarations, summary.has_parse_errors)
+                    (declarations, summary.has_parse_errors, summary.ref_keys)
                 }
-                Err(_) => (Vec::<Declaration>::new(), false),
+                Err(_) => (Vec::<Declaration>::new(), false, Vec::new()),
             };
             CachedFile {
                 path: path.clone(),
@@ -912,6 +938,7 @@ fn read_files(paths: &[PathBuf]) -> Vec<CachedFile> {
                 mtime_ns,
                 has_errors,
                 declarations,
+                ref_keys,
             }
         })
         .collect()

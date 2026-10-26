@@ -32,6 +32,8 @@ pub(crate) struct CachedFile {
     pub mtime_ns: u64,
     pub has_errors: bool,
     pub declarations: Vec<Declaration>,
+    /// Hashes of the `RefKey`s the file mentions, for finding reference candidates.
+    pub ref_keys: Vec<u64>,
 }
 
 /// The cached files keyed by path, or nothing when the cache is missing, unreadable,
@@ -105,6 +107,7 @@ mod tests {
             mtime_ns: 1,
             has_errors: false,
             declarations: Vec::new(),
+            ref_keys: Vec::new(),
         }
     }
 

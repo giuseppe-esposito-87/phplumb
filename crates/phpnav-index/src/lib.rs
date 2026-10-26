@@ -15,3 +15,4 @@ pub mod summary;
 pub use filter::PathFilter;
 pub use hover::Hover;
 pub use index::{ClassRef, Index, IndexStats, Location, UpdateStats, member_access_offsets};
+pub use summary::RefKey;
