@@ -238,3 +238,31 @@ fn healing_a_file_with_two_same_name_declarations_keeps_one_entry_each() {
             .is_empty()
     );
 }
+
+#[test]
+fn many_unindexed_paths_are_handled_in_linear_time() {
+    let ws = Workspace::new(&[]);
+    for i in 0..3_000 {
+        ws.write(
+            &format!("src/m{}/C{i}.php", i % 30),
+            &format!("<?php\nclass C{i} {{}}\n"),
+        );
+    }
+    let mut index = ws.index(&DiscoverOptions::default());
+    let removed: Vec<PathBuf> = (0..3_000)
+        .map(|i| ws.path(&format!("templates/t{i}.html.twig")))
+        .collect();
+    let changed: Vec<PathBuf> = (0..3_000)
+        .map(|i| ws.path(&format!("vendor/composer/abc/X{i}.php")))
+        .collect();
+
+    let started = std::time::Instant::now();
+    let stats = index.update(&changed, &removed);
+
+    assert_eq!(stats.removed, 0);
+    assert!(
+        started.elapsed().as_millis() < 500,
+        "took {} ms",
+        started.elapsed().as_millis()
+    );
+}

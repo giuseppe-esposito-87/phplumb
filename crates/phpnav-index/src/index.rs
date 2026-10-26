@@ -1,6 +1,6 @@
 //! Workspace-wide symbol table and the definition query.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
 
@@ -136,21 +136,22 @@ impl Index {
         let started = Instant::now();
         let mut stats = UpdateStats::default();
 
-        let mut gone: Vec<PathBuf> = removed.iter().map(|p| self.filter.under_root(p)).collect();
+        let deleted: Vec<PathBuf> = removed.iter().map(|p| self.filter.under_root(p)).collect();
+        let mut rejected: Vec<PathBuf> = Vec::new();
         let mut fresh: Vec<PathBuf> = Vec::new();
         for path in changed {
             let path = self.filter.under_root(path);
             let chosen = discover::chosen_path(self.filter.root(), &path).map(|(_, chosen)| chosen);
             match chosen {
                 Some(chosen) if self.filter.accepts(&chosen) => fresh.push(chosen),
-                _ => gone.push(path),
+                _ => rejected.push(path),
             }
         }
 
         // A path given twice must be read and inserted once.
         fresh.sort();
         fresh.dedup();
-        stats.removed += self.remove_paths(&gone);
+        stats.removed += self.remove_paths(&rejected, &deleted);
         for path in &fresh {
             if let Some(&id) = self.ids.get(path) {
                 self.remove(id);
@@ -251,21 +252,36 @@ impl Index {
         found
     }
 
-    /// Removes indexed files equal to, or inside, any of `paths`. Returns how many.
-    fn remove_paths(&mut self, paths: &[PathBuf]) -> usize {
-        let mut ids: Vec<u32> = Vec::new();
-        let mut directories: Vec<&PathBuf> = Vec::new();
-        for path in paths {
+    /// Removes the indexed files in `files`, and those equal to or inside any of
+    /// `deleted`, which may name directories. Returns how many were removed.
+    ///
+    /// Deleted paths that are not indexed files are checked in one pass over the
+    /// index, looking each file's ancestors up in a set, so a batch costs the same
+    /// however many unrelated paths it holds.
+    fn remove_paths(&mut self, files: &[PathBuf], deleted: &[PathBuf]) -> usize {
+        let mut ids: Vec<u32> = files
+            .iter()
+            .filter_map(|p| self.ids.get(p))
+            .copied()
+            .collect();
+        let mut directories: HashSet<&Path> = HashSet::new();
+        for path in deleted {
             match self.ids.get(path) {
                 Some(&id) => ids.push(id),
-                None => directories.push(path),
+                None => {
+                    directories.insert(path);
+                }
             }
         }
         if !directories.is_empty() {
             ids.extend(
                 self.ids
                     .iter()
-                    .filter(|(path, _)| directories.iter().any(|dir| path.starts_with(dir)))
+                    .filter(|(path, _)| {
+                        path.ancestors()
+                            .skip(1)
+                            .any(|ancestor| directories.contains(ancestor))
+                    })
                     .map(|(_, &id)| id),
             );
         }
