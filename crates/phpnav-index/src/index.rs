@@ -71,6 +71,9 @@ pub struct Index {
     classes: HashMap<String, Vec<Entry>>,
     functions: HashMap<String, Vec<Entry>>,
     constants: HashMap<String, Vec<Entry>>,
+    /// Lowercased parent or interface name to the declarations that extend or
+    /// implement it directly.
+    subtype_table: HashMap<String, Vec<Entry>>,
 }
 
 impl Index {
@@ -130,6 +133,7 @@ impl Index {
             classes: HashMap::new(),
             functions: HashMap::new(),
             constants: HashMap::new(),
+            subtype_table: HashMap::new(),
         };
         for file in files.into_iter().flatten() {
             stats.files_with_parse_errors += usize::from(file.has_errors);
@@ -197,7 +201,52 @@ impl Index {
 
     /// Every class-like declaration named `fqn`, matched case-insensitively.
     pub fn classes_named(&self, fqn: &str) -> Vec<ClassRef<'_>> {
-        lookup(&self.classes, &fqn.to_ascii_lowercase())
+        self.class_refs(lookup(&self.classes, &fqn.to_ascii_lowercase()))
+    }
+
+    /// Direct subtypes: classes extending `fqn`, classes and enums implementing it,
+    /// interfaces extending it.
+    pub fn subtypes(&self, fqn: &str) -> Vec<ClassRef<'_>> {
+        self.class_refs(lookup(&self.subtype_table, &fqn.to_ascii_lowercase()))
+    }
+
+    /// Every subtype of `fqn`, transitively, each once.
+    pub fn all_subtypes(&self, fqn: &str) -> Vec<ClassRef<'_>> {
+        let mut seen: HashSet<String> = HashSet::from([fqn.to_ascii_lowercase()]);
+        let mut queue: Vec<String> = vec![fqn.to_string()];
+        let mut found = Vec::new();
+        while let Some(next) = queue.pop() {
+            for subtype in self.subtypes(&next) {
+                if seen.insert(subtype.declaration.fqn.to_ascii_lowercase()) {
+                    queue.push(subtype.declaration.fqn.clone());
+                    found.push(subtype);
+                }
+            }
+        }
+        found
+    }
+
+    /// Direct supertypes: the parent and the interfaces of every declaration of `fqn`.
+    pub fn supertypes(&self, fqn: &str) -> Vec<ClassRef<'_>> {
+        let mut found: Vec<ClassRef<'_>> = Vec::new();
+        for class in self.classes_named(fqn) {
+            for supertype in supertype_names(class.declaration) {
+                for candidate in self.classes_named(supertype) {
+                    let duplicate = found.iter().any(|f| {
+                        f.path == candidate.path
+                            && f.declaration.name_start == candidate.declaration.name_start
+                    });
+                    if !duplicate {
+                        found.push(candidate);
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    fn class_refs(&self, entries: &[Entry]) -> Vec<ClassRef<'_>> {
+        entries
             .iter()
             .filter_map(|entry| {
                 let file = self.files[entry.file as usize].as_ref()?;
@@ -502,6 +551,19 @@ impl Index {
                     end: declaration.name_end,
                 });
         }
+        for (decl, declaration) in file.declarations.iter().enumerate() {
+            for supertype in supertype_names(declaration) {
+                self.subtype_table
+                    .entry(supertype.to_ascii_lowercase())
+                    .or_default()
+                    .push(Entry {
+                        file: id,
+                        decl: decl as u32,
+                        start: declaration.name_start,
+                        end: declaration.name_end,
+                    });
+            }
+        }
         self.ids.insert(file.path.clone(), id);
         self.files.push(Some(file));
     }
@@ -512,6 +574,15 @@ impl Index {
         };
         self.ids.remove(&file.path);
         for declaration in &file.declarations {
+            for supertype in supertype_names(declaration) {
+                let key = supertype.to_ascii_lowercase();
+                if let Some(entries) = self.subtype_table.get_mut(&key) {
+                    entries.retain(|e| e.file != id);
+                    if entries.is_empty() {
+                        self.subtype_table.remove(&key);
+                    }
+                }
+            }
             let key = symbol_key(declaration.kind, &declaration.fqn);
             let table = self.table_mut(declaration.kind);
             if let Some(entries) = table.get_mut(&key) {
@@ -530,6 +601,17 @@ impl Index {
             _ => &mut self.classes,
         }
     }
+}
+
+/// The parent and interfaces a class-like declaration names.
+fn supertype_names(declaration: &Declaration) -> impl Iterator<Item = &str> {
+    declaration.class.iter().flat_map(|shape| {
+        shape
+            .parent
+            .iter()
+            .chain(shape.interfaces.iter())
+            .map(String::as_str)
+    })
 }
 
 fn lookup<'a>(table: &'a HashMap<String, Vec<Entry>>, key: &str) -> &'a [Entry] {

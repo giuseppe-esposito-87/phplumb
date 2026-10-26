@@ -306,3 +306,19 @@ fn global_constants() {
     assert_eq!(class(&summary, "App\\LIMIT").kind, SymbolKind::Constant);
     assert_eq!(class(&summary, "GLOBAL_LIMIT").kind, SymbolKind::Constant);
 }
+
+#[test]
+fn abstract_flags() {
+    let summary = summarize(&php(
+        "abstract class A { abstract function f(); function g() {} } interface I { function h(); } class C {}",
+    ));
+
+    let a = shape(&summary, "A");
+    assert!(a.is_abstract);
+    assert!(member(a, "f").is_abstract);
+    assert!(!member(a, "g").is_abstract);
+    let i = shape(&summary, "I");
+    assert!(i.is_abstract);
+    assert!(member(i, "h").is_abstract);
+    assert!(!shape(&summary, "C").is_abstract);
+}

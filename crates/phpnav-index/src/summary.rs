@@ -67,6 +67,9 @@ pub struct ClassShape {
     pub interfaces: Vec<String>,
     pub traits: Vec<String>,
     pub members: Vec<Member>,
+    /// An abstract class or an interface.
+    #[serde(default)]
+    pub is_abstract: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +94,9 @@ pub struct Member {
     pub ty: Option<TypeExpr>,
     /// Methods: parameter names without `$`, with their types.
     pub params: Vec<(String, Option<TypeExpr>)>,
+    /// An abstract method or an interface method.
+    #[serde(default)]
+    pub is_abstract: bool,
 }
 
 /// A use of a name, resolved against the file's namespace and imports.
@@ -308,6 +314,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
                 traits: shape.traits.into_iter().filter_map(fqn_at).collect(),
                 members: shape.members,
+                is_abstract: shape.is_abstract,
             });
             Some(Declaration {
                 kind: pending.kind,
@@ -412,6 +419,7 @@ struct PendingShape {
     interfaces: Vec<u32>,
     traits: Vec<u32>,
     members: Vec<Member>,
+    is_abstract: bool,
 }
 
 /// The class of a static access before names are resolved: the offset of a name the
@@ -424,6 +432,7 @@ enum PendingSel {
 /// Where a class-like declaration's parts are, as offsets.
 struct ClassHead {
     kind: SymbolKind,
+    is_abstract: bool,
     node_start: u32,
     node_end: u32,
     head_start: u32,
@@ -535,7 +544,7 @@ impl Collector<'_> {
     }
 
     fn class_like(&mut self, head: ClassHead, members: &Sequence<'_, ClassLikeMember<'_>>) {
-        let (members, traits) = self.members(members);
+        let (members, traits) = self.members(members, head.kind == SymbolKind::Interface);
         self.pending.push(Pending {
             kind: head.kind,
             start: head.name.0,
@@ -550,11 +559,16 @@ impl Collector<'_> {
                 interfaces: head.interfaces,
                 traits,
                 members,
+                is_abstract: head.is_abstract || head.kind == SymbolKind::Interface,
             }),
         });
     }
 
-    fn members(&self, members: &Sequence<'_, ClassLikeMember<'_>>) -> (Vec<Member>, Vec<u32>) {
+    fn members(
+        &self,
+        members: &Sequence<'_, ClassLikeMember<'_>>,
+        in_interface: bool,
+    ) -> (Vec<Member>, Vec<u32>) {
         let mut out = Vec::new();
         let mut traits = Vec::new();
         for member in members.iter() {
@@ -577,6 +591,7 @@ impl Collector<'_> {
                             doc: doc.clone(),
                             ty: None,
                             params: Vec::new(),
+                            is_abstract: false,
                         });
                     }
                 }
@@ -597,9 +612,10 @@ impl Collector<'_> {
                         doc: self.doc(case.span().start.offset),
                         ty: None,
                         params: Vec::new(),
+                        is_abstract: false,
                     });
                 }
-                ClassLikeMember::Method(method) => self.method(method, &mut out),
+                ClassLikeMember::Method(method) => self.method(method, in_interface, &mut out),
             }
         }
         (out, traits)
@@ -649,12 +665,13 @@ impl Collector<'_> {
                 doc: doc.clone(),
                 ty: pick_type(doc_type, declared.clone()),
                 params: Vec::new(),
+                is_abstract: false,
                 name,
             });
         }
     }
 
-    fn method(&self, method: &Method<'_>, out: &mut Vec<Member>) {
+    fn method(&self, method: &Method<'_>, in_interface: bool, out: &mut Vec<Member>) {
         let start = method.span().start.offset;
         let doc = self.doc(start);
         let tags = self.doc_tags(doc.as_deref(), start);
@@ -683,6 +700,7 @@ impl Collector<'_> {
                     doc: None,
                     ty: ty.clone(),
                     params: Vec::new(),
+                    is_abstract: false,
                 });
             }
         }
@@ -702,6 +720,7 @@ impl Collector<'_> {
             ),
             doc,
             params,
+            is_abstract: in_interface || has_abstract(&method.modifiers),
             name,
         });
     }
@@ -735,6 +754,10 @@ fn variable_of<'a>(item: &'a PropertyItem<'_>) -> &'a mago_syntax::cst::DirectVa
         PropertyItem::Abstract(item) => &item.variable,
         PropertyItem::Concrete(item) => &item.variable,
     }
+}
+
+fn has_abstract(modifiers: &Sequence<'_, Modifier<'_>>) -> bool {
+    modifiers.iter().any(|m| matches!(m, Modifier::Abstract(_)))
 }
 
 fn has_static(modifiers: &Sequence<'_, Modifier<'_>>) -> bool {
@@ -843,6 +866,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c.class_like(
             ClassHead {
                 kind: SymbolKind::Class,
+                is_abstract: has_abstract(&class.modifiers),
                 node_start: class.span().start.offset,
                 node_end: class.span().end.offset,
                 head_start: head,
@@ -861,7 +885,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c: &mut Collector<'arena>,
     ) {
         let span = class.span();
-        let (members, _) = c.members(&class.members);
+        let (members, _) = c.members(&class.members, false);
         c.anonymous.push(PendingAnonymous {
             start: span.start.offset,
             end: span.end.offset,
@@ -883,6 +907,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c.class_like(
             ClassHead {
                 kind: SymbolKind::Interface,
+                is_abstract: false,
                 node_start: interface.span().start.offset,
                 node_end: interface.span().end.offset,
                 head_start: interface.interface.span.start.offset,
@@ -902,6 +927,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c.class_like(
             ClassHead {
                 kind: SymbolKind::Trait,
+                is_abstract: false,
                 node_start: r#trait.span().start.offset,
                 node_end: r#trait.span().end.offset,
                 head_start: r#trait.r#trait.span.start.offset,
@@ -923,6 +949,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c.class_like(
             ClassHead {
                 kind: SymbolKind::Enum,
+                is_abstract: false,
                 node_start: r#enum.span().start.offset,
                 node_end: r#enum.span().end.offset,
                 head_start: r#enum.r#enum.span.start.offset,
