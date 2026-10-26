@@ -25,7 +25,13 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration("phpNavigator");
   let command: string;
   try {
-    command = resolveServerPath(context.extensionPath, config.get<string>("server.path", ""), process.env, fs.existsSync);
+    command = resolveServerPath(
+      context.extensionPath,
+      config.get<string>("server.path", ""),
+      process.env,
+      fs.existsSync,
+      context.extensionMode === vscode.ExtensionMode.Development,
+    );
   } catch (err) {
     void vscode.window.showErrorMessage(`PHP Navigator: ${(err as Error).message}`);
     return;
@@ -35,6 +41,12 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "php" }],
     initializationOptions: { exclude: config.get<string[]>("exclude", []) },
+    middleware: {
+      // The server reads files from disk; with unsaved edits a position would map to
+      // different code there, so returning nothing beats a wrong target.
+      provideDefinition: (document, position, token, next) =>
+        document.isDirty ? undefined : next(document, position, token),
+    },
   };
   client = new LanguageClient("phpNavigator", "PHP Navigator", serverOptions, clientOptions);
   await client.start();

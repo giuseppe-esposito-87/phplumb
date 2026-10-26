@@ -24,6 +24,11 @@ suite("resolveServerPath", () => {
     assert.strictEqual(resolveServerPath(ext, "", {}, existing(dev)), dev);
   });
 
+  test("prefers the dev build in development mode", () => {
+    assert.strictEqual(resolveServerPath(ext, "", {}, existing(bundled, dev), true), dev);
+    assert.strictEqual(resolveServerPath(ext, "", {}, existing(bundled), true), bundled);
+  });
+
   test("throws listing every path tried when none exists", () => {
     assert.throws(
       () => resolveServerPath(ext, "/a", { PHPNAV_SERVER_PATH: "/b" }, existing()),
