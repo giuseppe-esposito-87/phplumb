@@ -7,15 +7,17 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use phpnav_index::Index;
 use phpnav_index::discover::{DiscoverOptions, discover};
 use phpnav_index::line_index::LineIndex;
+use phpnav_index::{Index, member_access_offsets};
 use serde::{Deserialize, Serialize};
 
 pub struct BenchArgs {
     pub root: PathBuf,
     pub cases: Option<PathBuf>,
     pub cache: Option<PathBuf>,
+    /// A directory relative to the root whose member accesses are measured.
+    pub coverage: Option<PathBuf>,
     pub exclude: Vec<String>,
 }
 
@@ -24,6 +26,7 @@ impl BenchArgs {
         let mut root = None;
         let mut cases = None;
         let mut cache = None;
+        let mut coverage = None;
         let mut exclude = Vec::new();
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -32,6 +35,7 @@ impl BenchArgs {
                 "--root" => root = Some(PathBuf::from(value()?)),
                 "--cases" => cases = Some(PathBuf::from(value()?)),
                 "--cache" => cache = Some(PathBuf::from(value()?)),
+                "--coverage" => coverage = Some(PathBuf::from(value()?)),
                 "--exclude" => exclude.push(value()?.clone()),
                 other => bail!("unknown bench option {other}"),
             }
@@ -40,6 +44,7 @@ impl BenchArgs {
             root: root.context("bench needs --root <DIR>")?,
             cases,
             cache,
+            coverage,
             exclude,
         })
     }
@@ -74,10 +79,20 @@ pub struct Report {
     update_one_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     update_1000_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<Coverage>,
     peak_rss_mb: u64,
     cases_passed: usize,
     cases_failed: usize,
     failures: Vec<Failure>,
+}
+
+/// How many member accesses under a directory reach at least one definition.
+#[derive(Serialize)]
+struct Coverage {
+    member_accesses: usize,
+    resolved: usize,
+    percent: f64,
 }
 
 #[derive(Serialize)]
@@ -109,6 +124,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         warm_start_ms: None,
         update_one_ms: None,
         update_1000_ms: None,
+        coverage: None,
         peak_rss_mb: 0,
         cases_passed: 0,
         cases_failed: 0,
@@ -128,6 +144,9 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
                 .update(&paths[..paths.len().min(1000)], &[])
                 .elapsed_ms,
         );
+    }
+    if let Some(dir) = &args.coverage {
+        report.coverage = Some(coverage(&mut index, &root, &root.join(dir), &opts)?);
     }
     report.peak_rss_mb = peak_rss_bytes() / (1024 * 1024);
 
@@ -164,6 +183,39 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         }
     }
     Ok(report)
+}
+
+fn coverage(
+    index: &mut Index,
+    root: &Path,
+    dir: &Path,
+    opts: &DiscoverOptions,
+) -> anyhow::Result<Coverage> {
+    let dir = dir.canonicalize()?;
+    let mut member_accesses = 0;
+    let mut resolved = 0;
+    for path in discover(root, opts)?
+        .into_iter()
+        .filter(|p| p.starts_with(&dir))
+    {
+        let source = std::fs::read(&path)?;
+        for offset in member_access_offsets(&source) {
+            member_accesses += 1;
+            if !index.definition(&path, &source, offset).is_empty() {
+                resolved += 1;
+            }
+        }
+    }
+    let percent = if member_accesses == 0 {
+        0.0
+    } else {
+        (resolved as f64 * 1000.0 / member_accesses as f64).round() / 10.0
+    };
+    Ok(Coverage {
+        member_accesses,
+        resolved,
+        percent,
+    })
 }
 
 fn definition_case(index: &mut Index, root: &Path, at: &str) -> anyhow::Result<BTreeSet<String>> {

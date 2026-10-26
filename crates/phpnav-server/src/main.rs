@@ -37,7 +37,7 @@ fn main() -> ExitCode {
         }
         Some(other) => {
             eprintln!(
-                "php-navigator: unknown command {other}\nusage: php-navigator [serve | bench --root <DIR> [--cases <FILE>] [--cache <FILE>] [--exclude <GLOB>]... | --version]"
+                "php-navigator: unknown command {other}\nusage: php-navigator [serve | bench --root <DIR> [--cases <FILE>] [--cache <FILE>] [--coverage <DIR>] [--exclude <GLOB>]... | --version]"
             );
             ExitCode::FAILURE
         }

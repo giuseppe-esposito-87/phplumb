@@ -86,3 +86,32 @@ fn bench_reports_warm_start_and_updates() {
     }
     assert!(cache.exists());
 }
+
+#[test]
+fn bench_reports_member_coverage() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../phpnav-index/tests/fixtures/inference")
+        .canonicalize()
+        .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .arg("--coverage")
+        .arg("app")
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let accesses = report["coverage"]["member_accesses"].as_u64().unwrap();
+    let resolved = report["coverage"]["resolved"].as_u64().unwrap();
+    assert!(accesses >= 30, "{report}");
+    assert!(resolved > 0 && resolved < accesses, "{report}");
+}

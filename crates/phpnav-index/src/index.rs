@@ -496,6 +496,16 @@ fn lookup<'a>(table: &'a HashMap<String, Vec<Entry>>, key: &str) -> &'a [Entry] 
     table.get(key).map(Vec::as_slice).unwrap_or_default()
 }
 
+/// The start offsets of every member access in `source`: `->`, `?->` and `::`
+/// accesses whose member is named in the code.
+pub fn member_access_offsets(source: &[u8]) -> Vec<u32> {
+    let mut offsets = infer::member_access_starts(source);
+    offsets.extend(summarize(source).static_refs.iter().map(|r| r.start));
+    offsets.sort_unstable();
+    offsets.dedup();
+    offsets
+}
+
 /// The table key of a symbol: lowercased for classes and functions, which PHP
 /// matches case-insensitively; for constants only the namespace part is lowercased.
 fn symbol_key(kind: SymbolKind, fqn: &str) -> String {

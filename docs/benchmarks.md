@@ -2,6 +2,22 @@
 
 Results of `php-navigator bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-26, step 2b members and hover
+
+Same machine and project. The index now records class shapes (parents, interfaces, traits and typed members); signatures and docblocks are read from the file when hover needs them.
+
+| Metric                                  | Value                             | Target        |
+| --------------------------------------- | --------------------------------- | ------------- |
+| Cold index                              | 2.6 to 3.8 s                      | under 10 s    |
+| Warm start from the cache               | 1.6 to 1.7 s                      | under 2 s     |
+| Update of 1,000 files                   | 39 ms                             | under 5 s     |
+| Peak resident memory                    | 426 to 471 MB                     | under 1024 MB |
+| Cache size                              | 21 MB                             |               |
+| Definition cases                        | 36 passed, 0 failed               | all pass      |
+| Member coverage in `web/modules/custom` | 40,951 of 46,204 accesses (88.6%) | baseline      |
+
+The coverage counts every `->`, `?->` and `::` access whose member is named in the code and reaches at least one definition. A sample of 27 resolved accesses, read by hand, had no wrong target. Most unresolved accesses go through the Drupal service container or magic field properties, which the Drupal module addresses.
+
 ## 2026-10-26, step 2a index freshness
 
 Same machine and project. `bench --cache` writes the cache after the cold build, builds again from it, then updates files without changing them.
