@@ -8,13 +8,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use phpnav_index::Index;
-use phpnav_index::discover::DiscoverOptions;
+use phpnav_index::discover::{DiscoverOptions, discover};
 use phpnav_index::line_index::LineIndex;
 use serde::{Deserialize, Serialize};
 
 pub struct BenchArgs {
     pub root: PathBuf,
     pub cases: Option<PathBuf>,
+    pub cache: Option<PathBuf>,
     pub exclude: Vec<String>,
 }
 
@@ -22,6 +23,7 @@ impl BenchArgs {
     pub fn parse(args: &[String]) -> anyhow::Result<Self> {
         let mut root = None;
         let mut cases = None;
+        let mut cache = None;
         let mut exclude = Vec::new();
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -29,6 +31,7 @@ impl BenchArgs {
             match arg.as_str() {
                 "--root" => root = Some(PathBuf::from(value()?)),
                 "--cases" => cases = Some(PathBuf::from(value()?)),
+                "--cache" => cache = Some(PathBuf::from(value()?)),
                 "--exclude" => exclude.push(value()?.clone()),
                 other => bail!("unknown bench option {other}"),
             }
@@ -36,6 +39,7 @@ impl BenchArgs {
         Ok(BenchArgs {
             root: root.context("bench needs --root <DIR>")?,
             cases,
+            cache,
             exclude,
         })
     }
@@ -62,6 +66,14 @@ pub struct Report {
     declarations: usize,
     files_with_parse_errors: usize,
     cold_index_ms: u128,
+    /// With `--cache`: a build from the cache written after the cold build, then
+    /// updates of the first file and of the first 1,000 files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warm_start_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_one_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_1000_ms: Option<u128>,
     peak_rss_mb: u64,
     cases_passed: usize,
     cases_failed: usize,
@@ -94,11 +106,30 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         declarations: stats.declarations,
         files_with_parse_errors: stats.files_with_parse_errors,
         cold_index_ms: stats.elapsed_ms,
-        peak_rss_mb: peak_rss_bytes() / (1024 * 1024),
+        warm_start_ms: None,
+        update_one_ms: None,
+        update_1000_ms: None,
+        peak_rss_mb: 0,
         cases_passed: 0,
         cases_failed: 0,
         failures: Vec::new(),
     };
+
+    if let Some(cache) = &args.cache {
+        index.save_cache(cache)?;
+        drop(index);
+        let (warm, warm_stats) = Index::build_with_cache(&root, &opts, cache)?;
+        index = warm;
+        report.warm_start_ms = Some(warm_stats.elapsed_ms);
+        let paths = discover(&root, &opts)?;
+        report.update_one_ms = Some(index.update(&paths[..paths.len().min(1)], &[]).elapsed_ms);
+        report.update_1000_ms = Some(
+            index
+                .update(&paths[..paths.len().min(1000)], &[])
+                .elapsed_ms,
+        );
+    }
+    report.peak_rss_mb = peak_rss_bytes() / (1024 * 1024);
 
     let Some(cases_path) = &args.cases else {
         return Ok(report);

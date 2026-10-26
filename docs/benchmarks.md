@@ -2,6 +2,23 @@
 
 Results of `php-navigator bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-26, step 2a index freshness
+
+Same machine and project. `bench --cache` writes the cache after the cold build, builds again from it, then updates files without changing them.
+
+| Metric                    | Value               | Target        |
+| ------------------------- | ------------------- | ------------- |
+| PHP files indexed         | 39,417              |               |
+| Cold index                | 2.2 to 3.7 s        | under 10 s    |
+| Warm start from the cache | 1.6 to 1.7 s        | under 2 s     |
+| Update of one file        | under 1 ms          | under 0.5 s   |
+| Update of 1,000 files     | 37 to 39 ms         | under 5 s     |
+| Peak resident memory      | 220 to 339 MB       | under 1024 MB |
+| Cache size                | 8 MB                |               |
+| Definition cases          | 20 passed, 0 failed | all pass      |
+
+Warm start time is mostly the directory walk and file stats; parsing is skipped for unchanged files.
+
 ## 2026-10-26, step 1 skeleton
 
 Machine: Apple M3 Pro, 11 cores, 36 GB RAM. Release build. Reference project: Drupal `11.4.10`.

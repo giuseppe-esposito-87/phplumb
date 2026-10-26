@@ -55,3 +55,34 @@ fn bench_reports_cases() {
     assert_eq!(report["failures"][0]["name"], "wrong on purpose");
     assert_eq!(report["failures"][0]["actual"][0], target);
 }
+
+#[test]
+fn bench_reports_warm_start_and_updates() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../phpnav-index/tests/fixtures/names")
+        .canonicalize()
+        .unwrap();
+    let cache_dir = tempfile::TempDir::new().unwrap();
+    let cache = cache_dir.path().join("index-v1.bin");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .arg("--cache")
+        .arg(&cache)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for field in ["warm_start_ms", "update_one_ms", "update_1000_ms"] {
+        assert!(report[field].is_number(), "{field} missing in {report}");
+    }
+    assert!(cache.exists());
+}
