@@ -92,6 +92,41 @@ impl Client {
         panic!("no {method} notification within 10 seconds");
     }
 
+    /// Reads until a server-to-client request with `method` arrives and returns it
+    /// unanswered.
+    pub fn wait_for_request(&mut self, method: &str) -> Value {
+        let deadline = Instant::now() + TIMEOUT;
+        while Instant::now() < deadline {
+            let message = self.receive();
+            if message.get("method") == Some(&json!(method)) && message.get("id").is_some() {
+                return message;
+            }
+        }
+        panic!("no {method} request within 10 seconds");
+    }
+
+    /// Like `request`, also returning the notifications that arrived before the response.
+    pub fn request_collecting(
+        &mut self,
+        id: i64,
+        method: &str,
+        params: Value,
+    ) -> (Value, Vec<Value>) {
+        self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let mut notifications = Vec::new();
+        loop {
+            let message = self.receive();
+            match (message.get("method").is_some(), message.get("id").is_some()) {
+                (true, true) => self.reply_null(&message),
+                (true, false) => notifications.push(message),
+                (false, _) if message.get("id") == Some(&json!(id)) => {
+                    return (message["result"].clone(), notifications);
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub fn reply_null(&mut self, request: &Value) {
         self.send(json!({"jsonrpc": "2.0", "id": request["id"], "result": null}));
     }
