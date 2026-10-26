@@ -9,7 +9,10 @@ use rayon::prelude::*;
 use crate::cache::{self, CachedFile};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
-use crate::summary::{Declaration, NameKind, NameRef, SymbolKind, summarize};
+use crate::members;
+use crate::summary::{
+    ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, SymbolKind, summarize,
+};
 
 /// A byte range in a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,8 +43,17 @@ pub struct UpdateStats {
 #[derive(Clone, Copy, Debug)]
 struct Entry {
     file: u32,
+    /// Index of the declaration in its file.
+    decl: u32,
     start: u32,
     end: u32,
+}
+
+/// A class-like declaration found in the index.
+#[derive(Clone, Copy, Debug)]
+pub struct ClassRef<'a> {
+    pub path: &'a Path,
+    pub declaration: &'a Declaration,
 }
 
 /// Declarations of every PHP file under a root. Keys are lowercased fully qualified
@@ -173,6 +185,75 @@ impl Index {
         stats
     }
 
+    /// Every class-like declaration named `fqn`, matched case-insensitively.
+    pub fn classes_named(&self, fqn: &str) -> Vec<ClassRef<'_>> {
+        lookup(&self.classes, &fqn.to_ascii_lowercase())
+            .iter()
+            .filter_map(|entry| {
+                let file = self.files[entry.file as usize].as_ref()?;
+                Some(ClassRef {
+                    path: &file.path,
+                    declaration: file.declarations.get(entry.decl as usize)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Every declaration of `name` of `kind` visible on `class`, following the
+    /// member lookup order through traits, parents and interfaces.
+    pub fn find_member(
+        &self,
+        class: &str,
+        kind: MemberKind,
+        name: &str,
+    ) -> Vec<(ClassRef<'_>, &Member)> {
+        members::find_member(self, class, kind, name)
+    }
+
+    /// Targets of members of `classes`, each with the name expected at its range.
+    fn member_targets(
+        &self,
+        classes: &[String],
+        kind: MemberKind,
+        name: &str,
+    ) -> Vec<(Location, String)> {
+        let mut found: Vec<(Location, String)> = Vec::new();
+        for class in classes {
+            for (class_ref, member) in self.find_member(class, kind, name) {
+                let location = Location {
+                    path: class_ref.path.to_path_buf(),
+                    start: member.name_start,
+                    end: member.name_end,
+                };
+                if !found.iter().any(|(l, _)| *l == location) {
+                    found.push((location, member.name.to_ascii_lowercase()));
+                }
+            }
+        }
+        found.sort_by(|(a, _), (b, _)| (&a.path, a.start).cmp(&(&b.path, b.start)));
+        found
+    }
+
+    /// Targets of every declaration of the classes in `classes`.
+    fn class_targets(&self, classes: &[String]) -> Vec<(Location, String)> {
+        let mut found: Vec<(Location, String)> = classes
+            .iter()
+            .flat_map(|class| self.classes_named(class))
+            .map(|class_ref| {
+                let declaration = class_ref.declaration;
+                let location = Location {
+                    path: class_ref.path.to_path_buf(),
+                    start: declaration.name_start,
+                    end: declaration.name_end,
+                };
+                (location, short_name(&declaration.fqn))
+            })
+            .collect();
+        found.sort_by(|(a, _), (b, _)| (&a.path, a.start).cmp(&(&b.path, b.start)));
+        found.dedup_by(|(a, _), (b, _)| a == b);
+        found
+    }
+
     /// Definitions of the name at `offset` in `path`, whose current content is
     /// `source`. Results come only from resolved names and are sorted by path and
     /// offset; an unknown or unresolvable name returns nothing.
@@ -213,6 +294,27 @@ impl Index {
                 end: declaration.name_end,
             };
             return vec![(location, short_name(&declaration.fqn))];
+        }
+
+        let covers = |start: u32, end: u32| start <= offset && offset <= end;
+        let class_of = |sel: &ClassSel| -> Option<String> {
+            match sel {
+                ClassSel::Named(fqn) => Some(fqn.clone()),
+                ClassSel::SelfKw | ClassSel::StaticKw => {
+                    summary.enclosing_class(offset).map(|c| c.fqn.clone())
+                }
+                ClassSel::ParentKw => summary.enclosing_class(offset)?.parent.clone(),
+            }
+        };
+        if let Some(keyword) = summary.keywords.iter().find(|k| covers(k.start, k.end)) {
+            return class_of(&keyword.class)
+                .map(|class| self.class_targets(&[class]))
+                .unwrap_or_default();
+        }
+        if let Some(member) = summary.static_refs.iter().find(|r| covers(r.start, r.end)) {
+            return class_of(&member.class)
+                .map(|class| self.member_targets(&[class], member.kind, &member.name))
+                .unwrap_or_default();
         }
 
         let Some(name) = name_at(&summary.names, offset) else {
@@ -315,12 +417,13 @@ impl Index {
 
     fn insert(&mut self, file: CachedFile) {
         let id = self.files.len() as u32;
-        for declaration in &file.declarations {
+        for (decl, declaration) in file.declarations.iter().enumerate() {
             self.table_mut(declaration.kind)
                 .entry(symbol_key(declaration.kind, &declaration.fqn))
                 .or_default()
                 .push(Entry {
                     file: id,
+                    decl: decl as u32,
                     start: declaration.name_start,
                     end: declaration.name_end,
                 });

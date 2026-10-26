@@ -8,10 +8,12 @@ use mago_names::resolver::NameResolver;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Argument, Class, ClassLikeMember, Constant, ConstantAccess, Enum, EnumCaseItem, Expression,
-    Function, FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
-    FunctionPartialApplication, Hint, Interface, Literal, Method, Modifier, Namespace, Program,
-    Property, PropertyItem, Sequence, Trait, Use, UseItems, UseType,
+    Argument, Class, ClassConstantAccess, ClassLikeConstantSelector, ClassLikeMember,
+    ClassLikeMemberSelector, Constant, ConstantAccess, Enum, EnumCaseItem, Expression, Function,
+    FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
+    FunctionPartialApplication, Hint, Instantiation, Interface, Literal, Method, Modifier,
+    Namespace, Program, Property, PropertyItem, Sequence, StaticMethodCall,
+    StaticMethodPartialApplication, StaticPropertyAccess, Trait, Use, UseItems, UseType, Variable,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -179,12 +181,63 @@ impl NameContext for ScopeNames<'_> {
     }
 }
 
+/// The class a static access or class keyword refers to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClassSel {
+    Named(String),
+    SelfKw,
+    StaticKw,
+    ParentKw,
+}
+
+/// `X::method()`, `X::CONST`, `X::Case` or `X::$prop`. `kind` is `Constant` for
+/// both constants and enum cases; `name` has no `$`; the range covers the member
+/// name as written, `$` included.
+#[derive(Clone, Debug)]
+pub struct StaticRef {
+    pub kind: MemberKind,
+    pub name: String,
+    pub start: u32,
+    pub end: u32,
+    pub class: ClassSel,
+}
+
+/// An occurrence of `self`, `static` or `parent` naming a class.
+#[derive(Clone, Debug)]
+pub struct KeywordRef {
+    pub start: u32,
+    pub end: u32,
+    pub class: ClassSel,
+}
+
+/// The source range of a class-like declaration, for finding the enclosing class.
+#[derive(Clone, Debug)]
+pub struct ClassRange {
+    pub start: u32,
+    pub end: u32,
+    pub fqn: String,
+    pub parent: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct FileSummary {
     pub declarations: Vec<Declaration>,
     pub names: Vec<NameRef>,
     pub has_parse_errors: bool,
     pub file_names: FileNames,
+    pub static_refs: Vec<StaticRef>,
+    pub keywords: Vec<KeywordRef>,
+    pub class_ranges: Vec<ClassRange>,
+}
+
+impl FileSummary {
+    /// The innermost class-like declaration containing `offset`.
+    pub fn enclosing_class(&self, offset: u32) -> Option<&ClassRange> {
+        self.class_ranges
+            .iter()
+            .filter(|r| r.start <= offset && offset <= r.end)
+            .max_by_key(|r| r.start)
+    }
 }
 
 /// Parses `source` and returns its declarations and resolved names. Parsing is
@@ -202,6 +255,8 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         functions: HashSet::new(),
         constants: HashSet::new(),
         not_refs: HashSet::new(),
+        static_refs: Vec::new(),
+        keywords: Vec::new(),
     };
     SyntaxVisitor.walk_program(program, &mut collector);
 
@@ -212,11 +267,37 @@ pub fn summarize(source: &[u8]) -> FileSummary {
     let fqn_at = |start: u32| resolved.get(&start).map(|(_, fqn, _)| to_fqn(fqn));
 
     let declaration_starts: HashSet<u32> = collector.pending.iter().map(|p| p.start).collect();
+    let resolve_sel = |sel: PendingSel| match sel {
+        PendingSel::Named(start) => fqn_at(start).map(ClassSel::Named),
+        PendingSel::Keyword(sel) => Some(sel),
+    };
+    let static_refs = collector
+        .static_refs
+        .into_iter()
+        .filter_map(|(kind, name, start, end, sel)| {
+            Some(StaticRef {
+                kind,
+                name,
+                start,
+                end,
+                class: resolve_sel(sel)?,
+            })
+        })
+        .collect();
+    let mut class_ranges = Vec::new();
     let declarations: Vec<Declaration> = collector
         .pending
         .into_iter()
         .filter_map(|pending| {
             let fqn = pending.fqn.or_else(|| fqn_at(pending.start))?;
+            if let (Some((start, end)), Some(shape)) = (pending.range, &pending.shape) {
+                class_ranges.push(ClassRange {
+                    start,
+                    end,
+                    fqn: fqn.clone(),
+                    parent: shape.parent.and_then(fqn_at),
+                });
+            }
             let class = pending.shape.map(|shape| ClassShape {
                 parent: shape.parent.and_then(fqn_at),
                 interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
@@ -266,6 +347,9 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         names,
         has_parse_errors: program.has_errors(),
         file_names: collector.names,
+        static_refs,
+        keywords: collector.keywords,
+        class_ranges,
     }
 }
 
@@ -299,6 +383,8 @@ struct Pending {
     kind: SymbolKind,
     start: u32,
     end: u32,
+    /// Class-likes: the whole declaration.
+    range: Option<(u32, u32)>,
     /// Set when the resolver does not know the name, as for `define()`.
     fqn: Option<String>,
     signature: String,
@@ -315,10 +401,18 @@ struct PendingShape {
     members: Vec<Member>,
 }
 
+/// The class of a static access before names are resolved: the offset of a name the
+/// resolver resolved, or a keyword.
+enum PendingSel {
+    Named(u32),
+    Keyword(ClassSel),
+}
+
 /// Where a class-like declaration's parts are, as offsets.
 struct ClassHead {
     kind: SymbolKind,
     node_start: u32,
+    node_end: u32,
     head_start: u32,
     name: (u32, u32),
     left_brace: u32,
@@ -335,9 +429,65 @@ struct Collector<'a> {
     constants: HashSet<u32>,
     /// Namespace names, which the resolver records but which name no symbol.
     not_refs: HashSet<u32>,
+    static_refs: Vec<(MemberKind, String, u32, u32, PendingSel)>,
+    keywords: Vec<KeywordRef>,
 }
 
 impl Collector<'_> {
+    /// The class an expression before `::` or after `new` names, recording `self`,
+    /// `static` and `parent` as keyword references. Dynamic classes give nothing.
+    fn class_sel(&mut self, expression: &Expression<'_>) -> Option<PendingSel> {
+        let (keyword, sel) = match expression {
+            Expression::Identifier(identifier) => {
+                return Some(PendingSel::Named(identifier.span().start.offset));
+            }
+            Expression::Self_(keyword) => (keyword, ClassSel::SelfKw),
+            Expression::Static(keyword) => (keyword, ClassSel::StaticKw),
+            Expression::Parent(keyword) => (keyword, ClassSel::ParentKw),
+            _ => return None,
+        };
+        self.keywords.push(KeywordRef {
+            start: keyword.span.start.offset,
+            end: keyword.span.end.offset,
+            class: sel.clone(),
+        });
+        Some(PendingSel::Keyword(sel))
+    }
+
+    fn static_member(
+        &mut self,
+        class: &Expression<'_>,
+        kind: MemberKind,
+        name: &[u8],
+        start: u32,
+        end: u32,
+    ) {
+        let Some(sel) = self.class_sel(class) else {
+            return;
+        };
+        let name = String::from_utf8_lossy(name)
+            .trim_start_matches('$')
+            .to_string();
+        if name.eq_ignore_ascii_case("class") && kind == MemberKind::Constant {
+            return;
+        }
+        self.static_refs.push((kind, name, start, end, sel));
+    }
+
+    fn method_selector(&mut self, class: &Expression<'_>, selector: &ClassLikeMemberSelector<'_>) {
+        if let ClassLikeMemberSelector::Identifier(name) = selector {
+            self.static_member(
+                class,
+                MemberKind::Method,
+                name.value,
+                name.span.start.offset,
+                name.span.end.offset,
+            );
+        } else {
+            self.class_sel(class);
+        }
+    }
+
     fn text(&self, start: u32, end: u32) -> String {
         let bytes = self
             .source
@@ -368,6 +518,7 @@ impl Collector<'_> {
             kind: head.kind,
             start: head.name.0,
             end: head.name.1,
+            range: Some((head.node_start, head.node_end)),
             fqn: None,
             signature: self.text(head.head_start, head.left_brace),
             doc: self.doc(head.node_start),
@@ -671,6 +822,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             ClassHead {
                 kind: SymbolKind::Class,
                 node_start: class.span().start.offset,
+                node_end: class.span().end.offset,
                 head_start: head,
                 name: (class.name.span.start.offset, class.name.span.end.offset),
                 left_brace: class.left_brace.start.offset,
@@ -691,6 +843,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             ClassHead {
                 kind: SymbolKind::Interface,
                 node_start: interface.span().start.offset,
+                node_end: interface.span().end.offset,
                 head_start: interface.interface.span.start.offset,
                 name: (
                     interface.name.span.start.offset,
@@ -709,6 +862,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             ClassHead {
                 kind: SymbolKind::Trait,
                 node_start: r#trait.span().start.offset,
+                node_end: r#trait.span().end.offset,
                 head_start: r#trait.r#trait.span.start.offset,
                 name: (r#trait.name.span.start.offset, r#trait.name.span.end.offset),
                 left_brace: r#trait.left_brace.start.offset,
@@ -729,6 +883,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             ClassHead {
                 kind: SymbolKind::Enum,
                 node_start: r#enum.span().start.offset,
+                node_end: r#enum.span().end.offset,
                 head_start: r#enum.r#enum.span.start.offset,
                 name: (r#enum.name.span.start.offset, r#enum.name.span.end.offset),
                 left_brace: r#enum.left_brace.start.offset,
@@ -755,6 +910,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             kind: SymbolKind::Function,
             start: function.name.span.start.offset,
             end: function.name.span.end.offset,
+            range: None,
             fqn: None,
             signature: c.text(function.function.span.start.offset, end),
             doc,
@@ -771,6 +927,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 kind: SymbolKind::Constant,
                 start: item.name.span.start.offset,
                 end: item.name.span.end.offset,
+                range: None,
                 fqn: None,
                 signature: format!("const {}", String::from_utf8_lossy(item.name.value)),
                 doc: doc.clone(),
@@ -801,6 +958,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         let name = String::from_utf8_lossy(value).into_owned();
         c.pending.push(Pending {
             kind: SymbolKind::Constant,
+            range: None,
             start: literal.span.start.offset + 1,
             end: literal.span.end.offset.saturating_sub(1),
             signature: format!("define('{name}')"),
@@ -819,6 +977,80 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         if let Expression::Identifier(identifier) = application.function {
             c.functions.insert(identifier.span().start.offset);
         }
+    }
+
+    fn walk_in_static_method_call(
+        &self,
+        call: &'ast StaticMethodCall<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        c.method_selector(call.class, &call.method);
+    }
+
+    fn walk_in_static_method_partial_application(
+        &self,
+        application: &'ast StaticMethodPartialApplication<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        c.method_selector(application.class, &application.method);
+    }
+
+    fn walk_in_class_constant_access(
+        &self,
+        access: &'ast ClassConstantAccess<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        if let ClassLikeConstantSelector::Identifier(name) = &access.constant {
+            c.static_member(
+                access.class,
+                MemberKind::Constant,
+                name.value,
+                name.span.start.offset,
+                name.span.end.offset,
+            );
+        } else {
+            c.class_sel(access.class);
+        }
+    }
+
+    fn walk_in_static_property_access(
+        &self,
+        access: &'ast StaticPropertyAccess<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        if let Variable::Direct(variable) = &access.property {
+            c.static_member(
+                access.class,
+                MemberKind::Property,
+                variable.name,
+                variable.span.start.offset,
+                variable.span.end.offset,
+            );
+        } else {
+            c.class_sel(access.class);
+        }
+    }
+
+    fn walk_in_instantiation(
+        &self,
+        instantiation: &'ast Instantiation<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        c.class_sel(instantiation.class);
+    }
+
+    fn walk_in_hint(&self, hint: &'ast Hint<'arena>, c: &mut Collector<'arena>) {
+        let (keyword, class) = match hint {
+            Hint::Self_(keyword) => (keyword, ClassSel::SelfKw),
+            Hint::Static(keyword) => (keyword, ClassSel::StaticKw),
+            Hint::Parent(keyword) => (keyword, ClassSel::ParentKw),
+            _ => return,
+        };
+        c.keywords.push(KeywordRef {
+            start: keyword.span.start.offset,
+            end: keyword.span.end.offset,
+            class,
+        });
     }
 
     fn walk_in_constant_access(

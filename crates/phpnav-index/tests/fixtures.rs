@@ -2,7 +2,7 @@
 //!
 //! `/*@cursor:ID*/` places a cursor at the byte right after the marker.
 //! `/*@target:ID*/` marks a target at the first byte after the marker that is neither
-//! whitespace nor another marker. A cursor passes only when the set of results equals
+//! whitespace nor another marker; on `$name` or a quoted name it marks the name itself. A cursor passes only when the set of results equals
 //! the set of targets with the same ID; a cursor with no target expects nothing.
 //! Several cursors may share an ID.
 
@@ -52,6 +52,8 @@ fn skip_to_code(text: &[u8], mut pos: usize) -> usize {
         }
         if text[pos..].starts_with(OPEN) {
             pos += find(&text[pos..], CLOSE).unwrap() + CLOSE.len();
+        } else if matches!(text.get(pos), Some(b'$' | b'\'' | b'"')) {
+            return pos + 1;
         } else {
             return pos;
         }
@@ -134,4 +136,9 @@ fn ambiguous() {
 #[test]
 fn tolerant() {
     run_fixture("tolerant");
+}
+
+#[test]
+fn static_members() {
+    run_fixture("static_members");
 }
