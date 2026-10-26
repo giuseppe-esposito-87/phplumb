@@ -5,7 +5,12 @@ import { resolveServerPath } from "./serverPath";
 
 let client: LanguageClient | undefined;
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+/** What `activate` returns; tests use it to find the index cache. */
+export interface PhpNavigatorApi {
+  cacheDir: string | undefined;
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<PhpNavigatorApi> {
   context.subscriptions.push(
     vscode.commands.registerCommand("phpNavigator.restartServer", () => restart(context)),
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -15,6 +20,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
   await start(context);
+  return { cacheDir: cacheDir(context) };
+}
+
+/** The index cache lives in the workspace storage; without a workspace there is none. */
+function cacheDir(context: vscode.ExtensionContext): string | undefined {
+  const dir = context.storageUri?.fsPath;
+  if (dir !== undefined) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
 }
 
 export async function deactivate(): Promise<void> {
@@ -40,7 +55,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   const serverOptions: ServerOptions = { command, args: ["serve"] };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "php" }],
-    initializationOptions: { exclude: config.get<string[]>("exclude", []) },
+    initializationOptions: { exclude: config.get<string[]>("exclude", []), cacheDir: cacheDir(context) },
     middleware: {
       // The server reads files from disk; with unsaved edits a position would map to
       // different code there, so returning nothing beats a wrong target.

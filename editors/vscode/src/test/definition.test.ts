@@ -1,4 +1,6 @@
 import * as assert from "node:assert";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 
 type Target = vscode.Location | vscode.LocationLink;
@@ -59,6 +61,47 @@ suite("definition", () => {
       assert.deepStrictEqual(await definitions(document, new vscode.Position(2, 4)), []);
     } finally {
       await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+    }
+  });
+
+  test("keeps the index cache in workspace storage", async () => {
+    const api = (await vscode.extensions.getExtension("sparkfabrik.php-navigator")!.activate()) as
+      | { cacheDir: string | undefined }
+      | undefined;
+    assert.ok(api?.cacheDir, "activate returns the cache directory");
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+
+    const cache = path.join(api.cacheDir, "index-v1.bin");
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(cache) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    assert.ok(fs.existsSync(cache), cache);
+  });
+
+  test("follows a class moved on disk", async () => {
+    const document = await open("src/UseMoving.php");
+    const moving = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, "src/Moving.php");
+    const original = fs.readFileSync(moving, "utf8");
+    const position = new vscode.Position(2, 4);
+    const before = await waitForDefinitions(document, position);
+    assert.strictEqual(startOf(before[0]).line, 2);
+
+    try {
+      fs.writeFileSync(moving, original.replace("class Moving", "\n\n\nclass Moving"));
+      let line = -1;
+      const deadline = Date.now() + 5_000;
+      while (line !== 5 && Date.now() < deadline) {
+        const targets = await definitions(document, position);
+        line = targets.length === 1 ? startOf(targets[0]).line : -1;
+        if (line !== 5) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+      assert.strictEqual(line, 5);
+    } finally {
+      fs.writeFileSync(moving, original);
     }
   });
 });

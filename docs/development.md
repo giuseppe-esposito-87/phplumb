@@ -13,7 +13,7 @@ PHP Navigator has two parts: the Rust engine in `crates/` and the VS Code extens
 2. In that window, open a Drupal project once with File > Open Folder. The window reopens it on the next F5.
 3. After each change the agent reports as built, press Cmd+R in that window to reload it with the new build.
 
-Indexing progress appears in the status bar. The **PHP Navigator** output channel shows the server log.
+The index follows file changes made outside the editor, such as an agent's edits or a branch switch, and is cached in the workspace storage, so reopening a project skips parsing unchanged files. Indexing progress appears in the status bar. The **PHP Navigator** output channel shows the server log.
 
 To skip paths, set `phpNavigator.exclude` in the workspace settings, for example `["psalm-stubs/**"]`.
 
