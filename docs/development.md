@@ -6,6 +6,7 @@ PHP Navigator has two parts: the Rust engine in `crates/` and the VS Code extens
 
 - Rust through `rustup`. With Homebrew, `rustup` is keg-only: add `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"` to `~/.zshrc`.
 - Node.js and npm. Run `npm --prefix editors/vscode install` once.
+- Docker, only for building the Linux package.
 
 ## Testing in VS Code
 
@@ -35,3 +36,21 @@ cargo run --release -p phpnav-server -- bench --root <drupal-root> --cases <case
 ```
 
 The command prints a JSON report and exits with code 1 when a case fails. Case files that point into client code stay outside the repository. See `docs/benchmarks.md` for recorded results.
+
+## Packaging
+
+Build one `.vsix` per platform:
+
+```sh
+npm --prefix editors/vscode run package -- darwin-arm64
+npm --prefix editors/vscode run package -- linux-x64
+```
+
+- **`darwin-arm64`** builds with the host toolchain, so it needs an Apple silicon Mac. It is the default target there.
+- **`linux-x64`** builds a static binary inside the pinned `rust` Alpine image for `linux/amd64`, so it needs only Docker and runs on any x64 distribution. On a Mac, Docker emulates x64, which makes the first build slow; later builds reuse the Cargo caches.
+
+Each command writes `editors/vscode/php-navigator-<target>-<version>.vsix`. Install it in a dedicated profile to test it as a user would:
+
+```sh
+code --profile "PHP Navigator" --install-extension editors/vscode/php-navigator-linux-x64-0.1.0.vsix
+```

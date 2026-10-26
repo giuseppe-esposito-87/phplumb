@@ -4,6 +4,11 @@ mod bench;
 mod convert;
 mod lsp;
 
+// musl's allocator serializes threads, which stalls the parallel indexer.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {

@@ -70,7 +70,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "npm run build && tsc -p tsconfig.test.json",
     "test": "vscode-test",
-    "package": "cargo build --release -p phpnav-server --manifest-path ../../Cargo.toml && mkdir -p bin && cp ../../target/release/php-navigator bin/ && npm run build && vsce package --target darwin-arm64 --no-dependencies --allow-missing-repository --skip-license"
+    "package": "node scripts/package.mjs"
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.2"
