@@ -1,0 +1,19 @@
+[package]
+name = "phpnav-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+globset.workspace = true
+ignore.workspace = true
+mago-allocator.workspace = true
+mago-database.workspace = true
+mago-names.workspace = true
+mago-syntax.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
