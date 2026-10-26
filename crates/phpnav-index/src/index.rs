@@ -7,6 +7,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use rayon::prelude::*;
 
 use crate::cache::{self, CachedFile};
+use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
 use crate::hover::{self, Hover};
@@ -235,8 +236,54 @@ impl Index {
         found
     }
 
+    /// The functions and methods the cursor resolves to, as call hierarchy items.
+    pub fn call_items(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<CallItem> {
+        self.definition(path, source, offset)
+            .iter()
+            .filter_map(|target| self.call_item_at(target))
+            .collect()
+    }
+
+    /// Callers of `item`, each with the call ranges inside it. Calls in top-level code
+    /// belong to a file item.
+    pub fn incoming_calls(&mut self, item: &CallItem) -> Calls {
+        calls::incoming(self, item)
+    }
+
+    /// Functions and methods called inside `item`'s body, each with the call ranges.
+    pub fn outgoing_calls(&mut self, item: &CallItem) -> Calls {
+        calls::outgoing(self, item)
+    }
+
+    /// The function or method declared with its name at `target`.
+    pub(crate) fn call_item_at(&self, target: &Location) -> Option<CallItem> {
+        let file = self.files[*self.ids.get(&target.path)? as usize].as_ref()?;
+        for declaration in &file.declarations {
+            if declaration.kind == SymbolKind::Function && declaration.name_start == target.start {
+                let (namespace, name) = calls::split(&declaration.fqn);
+                return Some(CallItem {
+                    name: name.to_string(),
+                    kind: CallKind::Function,
+                    detail: namespace.to_string(),
+                    path: file.path.clone(),
+                    range: declaration.range,
+                    selection: (declaration.name_start, declaration.name_end),
+                });
+            }
+            let method = declaration
+                .class
+                .iter()
+                .flat_map(|shape| shape.members.iter())
+                .find(|m| m.kind == MemberKind::Method && m.name_start == target.start);
+            if let Some(method) = method {
+                return Some(calls::method_item(&file.path, &declaration.fqn, method));
+            }
+        }
+        None
+    }
+
     /// The symbol declared at `target`: a class-like, function, constant or member.
-    fn symbol_at(&self, target: &Location) -> Option<Symbol> {
+    pub(crate) fn symbol_at(&self, target: &Location) -> Option<Symbol> {
         let file = self.files[*self.ids.get(&target.path)? as usize].as_ref()?;
         for declaration in &file.declarations {
             if declaration.name_start == target.start {

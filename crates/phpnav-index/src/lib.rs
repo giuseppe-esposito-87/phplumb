@@ -1,6 +1,7 @@
 //! PHP source indexing: file discovery, parsing and symbol lookup.
 
 mod cache;
+mod calls;
 mod composer;
 pub mod discover;
 pub mod filter;
@@ -13,6 +14,7 @@ pub mod phpdoc;
 mod references;
 pub mod summary;
 
+pub use calls::{CallItem, CallKind, Calls};
 pub use filter::PathFilter;
 pub use hover::Hover;
 pub use index::{ClassRef, Index, IndexStats, Location, UpdateStats, member_access_offsets};

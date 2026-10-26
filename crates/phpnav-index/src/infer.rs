@@ -116,6 +116,19 @@ pub(crate) fn member_accesses_named(
         .collect()
 }
 
+/// Every instance member access in the file: start and end of the name, and kind.
+pub(crate) fn member_access_spans(source: &[u8]) -> Vec<(u32, u32, MemberKind)> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    facts
+        .accesses
+        .iter()
+        .map(|a| (a.start, a.end, a.kind))
+        .collect()
+}
+
 /// The start offsets of every instance member name accessed in the file.
 pub(crate) fn member_access_starts(source: &[u8]) -> Vec<u32> {
     let arena = LocalArena::new();
