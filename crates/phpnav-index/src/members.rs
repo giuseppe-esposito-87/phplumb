@@ -99,8 +99,7 @@ fn in_traits<'a>(
     None
 }
 
-/// A member declared directly on `class`. Methods match case-insensitively;
-/// properties, constants and enum cases match exactly.
+/// A member declared directly on `class`.
 fn own<'a>(class: &ClassRef<'a>, kind: MemberKind, name: &str) -> Option<&'a Member> {
     class
         .declaration
@@ -108,11 +107,17 @@ fn own<'a>(class: &ClassRef<'a>, kind: MemberKind, name: &str) -> Option<&'a Mem
         .as_ref()?
         .members
         .iter()
-        .find(|member| match (kind, member.kind) {
-            (MemberKind::Method, MemberKind::Method) => member.name.eq_ignore_ascii_case(name),
-            (MemberKind::Property, MemberKind::Property) => member.name == name,
-            (MemberKind::Constant, MemberKind::Constant | MemberKind::EnumCase)
-            | (MemberKind::EnumCase, MemberKind::EnumCase) => member.name == name,
-            _ => false,
-        })
+        .find(|member| matches(member, kind, name))
+}
+
+/// Whether `member` is the `kind` member `name`. Methods match case-insensitively;
+/// properties, constants and enum cases match exactly.
+pub(crate) fn matches(member: &Member, kind: MemberKind, name: &str) -> bool {
+    match (kind, member.kind) {
+        (MemberKind::Method, MemberKind::Method) => member.name.eq_ignore_ascii_case(name),
+        (MemberKind::Property, MemberKind::Property) => member.name == name,
+        (MemberKind::Constant, MemberKind::Constant | MemberKind::EnumCase)
+        | (MemberKind::EnumCase, MemberKind::EnumCase) => member.name == name,
+        _ => false,
+    }
 }

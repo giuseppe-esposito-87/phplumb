@@ -1,10 +1,19 @@
 //! Type inference for the expression under the cursor.
 //!
 //! One walk of the cursor file collects the facts inference needs, as references
-//! into the syntax tree: member accesses, function scopes, assignments, `foreach`
-//! and `catch` bindings, `instanceof` checks and inline `@var` docblocks. Types are
-//! then inferred on demand, before the tree's arena is dropped.
+//! into the syntax tree: member accesses, function scopes, control-flow branches,
+//! assignments and other rebindings, `foreach` and `catch` bindings, `instanceof`
+//! checks and inline `@var` docblocks. Types are inferred on demand, before the
+//! tree's arena is dropped.
+//!
+//! A variable's facts count only in the function, closure or arrow function that
+//! holds them. Among them the latest before the use decides, except that a binding
+//! inside a branch the use is not in either cannot reach it (a sibling branch) or
+//! merges with what came before (code after the branch statement). A binding whose
+//! type is unknown makes the merged type unknown: the result is then nothing rather
+//! than a guess.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use mago_allocator::LocalArena;
@@ -12,29 +21,37 @@ use mago_database::file::FileId;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Access, ArrowFunction, Assignment, BinaryOperator, Call, ClassLikeMemberSelector, Closure,
-    Expression, Foreach, ForeachTarget, Function, FunctionLikeParameterList, Hint, If, IfBody,
-    Method, MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess,
-    TriviaKind, TryCatchClause, Variable,
+    Access, AnonymousClass, ArrayElement, ArrowFunction, Assignment, BinaryOperator, Call,
+    ClassLikeMemberSelector, Closure, DoWhile, Expression, For, Foreach, ForeachTarget, Function,
+    FunctionLikeParameterList, Global, Hint, If, IfBody, Literal, Method, MethodCall,
+    NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem,
+    Switch, TriviaKind, Try, TryCatchClause, Variable, While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
 
 use crate::index::Index;
 use crate::phpdoc::{TypeExpr, parse_docblock, parse_type};
-use crate::summary::{FileSummary, MemberKind, NameKind, NameRef, pick_type};
+use crate::summary::{FileSummary, MemberKind, NameKind, NameRef, SymbolKind, pick_type};
 
 const MAX_DEPTH: u32 = 16;
 
-/// The classes, kind and name of the instance member access under `offset`, when
-/// the cursor is on the member name of `$x->name` or `$x?->name()`. The classes are
-/// empty when the receiver's type is unknown.
+/// What a member access's receiver is.
+pub(crate) enum Receiver {
+    /// The classes the receiver can be; empty when its type is unknown.
+    Classes(Vec<String>),
+    /// `$this` inside the anonymous class at this index of the summary's class ranges.
+    Anonymous(usize),
+}
+
+/// The receiver, kind and name of the instance member access under `offset`, when
+/// the cursor is on the member name of `$x->name` or `$x?->name()`.
 pub(crate) fn member_at(
     index: &Index,
     summary: &FileSummary,
     source: &[u8],
     offset: u32,
-) -> Option<(Vec<String>, MemberKind, String)> {
+) -> Option<(Receiver, MemberKind, String)> {
     let arena = LocalArena::new();
     let program = parse_file_content(&arena, FileId::zero(), source);
     let mut facts = Facts::default();
@@ -44,8 +61,11 @@ pub(crate) fn member_at(
         .iter()
         .find(|a| a.start <= offset && offset <= a.end)?;
     let ctx = Ctx::new(index, summary, program, source, &facts);
-    let receiver = ctx.expr(access.object, access.start, 0);
-    Some((class_names(&receiver), access.kind, access.name.clone()))
+    let receiver = match ctx.anonymous_this(access.object, access.start) {
+        Some(range) => Receiver::Anonymous(range),
+        None => Receiver::Classes(class_names(&ctx.expr(access.object, access.start, 0))),
+    };
+    Some((receiver, access.kind, access.name.clone()))
 }
 
 /// The variable whose name covers `offset` and its inferred type.
@@ -86,30 +106,42 @@ struct AccessFact<'arena> {
     object: &'arena Expression<'arena>,
 }
 
+enum ScopeKind {
+    Function,
+    /// A closure sees the variables of its `use` clause from the enclosing scope.
+    Closure(Vec<String>),
+    /// An arrow function sees every variable of the enclosing scope.
+    Arrow,
+}
+
 struct ScopeFact<'ast, 'arena> {
     start: u32,
     end: u32,
+    kind: ScopeKind,
     params: &'ast FunctionLikeParameterList<'arena>,
 }
 
+/// `$var = rhs`, or with no `rhs` a rebinding to an unknown value: destructuring,
+/// `global`, `static`.
 struct AssignFact<'arena> {
     start: u32,
     end: u32,
     var: String,
-    rhs: &'arena Expression<'arena>,
+    rhs: Option<&'arena Expression<'arena>>,
 }
 
+/// A `foreach`: its value variable takes the iterable's element type; its key and
+/// destructured variables become unknown.
 struct ForeachFact<'arena> {
     start: u32,
     body_start: u32,
-    end: u32,
-    var: String,
+    value: Option<String>,
+    unknown: Vec<String>,
     iterable: &'arena Expression<'arena>,
 }
 
 struct CatchFact<'ast, 'arena> {
     start: u32,
-    end: u32,
     var: String,
     hint: &'ast Hint<'arena>,
 }
@@ -123,6 +155,15 @@ struct NarrowFact {
     class: u32,
 }
 
+/// One branch of a control-flow statement, and where that statement ends. Loops,
+/// `switch` and anonymous class bodies count as a single branch spanning the whole
+/// statement.
+struct BranchFact {
+    start: u32,
+    end: u32,
+    statement_end: u32,
+}
+
 #[derive(Default)]
 struct Facts<'ast, 'arena> {
     accesses: Vec<AccessFact<'arena>>,
@@ -131,11 +172,12 @@ struct Facts<'ast, 'arena> {
     foreaches: Vec<ForeachFact<'arena>>,
     catches: Vec<CatchFact<'ast, 'arena>>,
     narrowings: Vec<NarrowFact>,
+    branches: Vec<BranchFact>,
     /// Every direct variable: name without `$`, start, end.
     variables: Vec<(String, u32, u32)>,
 }
 
-impl<'arena> Facts<'_, 'arena> {
+impl<'ast, 'arena> Facts<'ast, 'arena> {
     fn access(
         &mut self,
         object: &'arena Expression<'arena>,
@@ -151,6 +193,45 @@ impl<'arena> Facts<'_, 'arena> {
                 object,
             });
         }
+    }
+
+    fn scope(
+        &mut self,
+        node: &impl HasSpan,
+        kind: ScopeKind,
+        params: &'ast FunctionLikeParameterList<'arena>,
+    ) {
+        let span = node.span();
+        self.scopes.push(ScopeFact {
+            start: span.start.offset,
+            end: span.end.offset,
+            kind,
+            params,
+        });
+    }
+
+    fn branch(&mut self, node: &impl HasSpan, statement_end: u32) {
+        let span = node.span();
+        self.branches.push(BranchFact {
+            start: span.start.offset,
+            end: span.end.offset,
+            statement_end,
+        });
+    }
+
+    /// A whole statement as its own single branch.
+    fn whole(&mut self, node: &impl HasSpan) {
+        let end = node.span().end.offset;
+        self.branch(node, end);
+    }
+
+    fn unknown(&mut self, start: u32, end: u32, var: String) {
+        self.assignments.push(AssignFact {
+            start,
+            end,
+            var,
+            rhs: None,
+        });
     }
 }
 
@@ -186,30 +267,26 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
     }
 
     fn walk_in_method(&self, method: &'ast Method<'arena>, f: &mut Facts<'ast, 'arena>) {
-        let span = method.span();
-        f.scopes.push(ScopeFact {
-            start: span.start.offset,
-            end: span.end.offset,
-            params: &method.parameter_list,
-        });
+        f.scope(method, ScopeKind::Function, &method.parameter_list);
     }
 
     fn walk_in_function(&self, function: &'ast Function<'arena>, f: &mut Facts<'ast, 'arena>) {
-        let span = function.span();
-        f.scopes.push(ScopeFact {
-            start: span.start.offset,
-            end: span.end.offset,
-            params: &function.parameter_list,
-        });
+        f.scope(function, ScopeKind::Function, &function.parameter_list);
     }
 
     fn walk_in_closure(&self, closure: &'ast Closure<'arena>, f: &mut Facts<'ast, 'arena>) {
-        let span = closure.span();
-        f.scopes.push(ScopeFact {
-            start: span.start.offset,
-            end: span.end.offset,
-            params: &closure.parameter_list,
-        });
+        let uses = closure
+            .use_clause
+            .as_ref()
+            .map(|clause| {
+                clause
+                    .variables
+                    .iter()
+                    .map(|v| variable_name(v.variable.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        f.scope(closure, ScopeKind::Closure(uses), &closure.parameter_list);
     }
 
     fn walk_in_arrow_function(
@@ -217,12 +294,15 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
         arrow: &'ast ArrowFunction<'arena>,
         f: &mut Facts<'ast, 'arena>,
     ) {
-        let span = arrow.span();
-        f.scopes.push(ScopeFact {
-            start: span.start.offset,
-            end: span.end.offset,
-            params: &arrow.parameter_list,
-        });
+        f.scope(arrow, ScopeKind::Arrow, &arrow.parameter_list);
+    }
+
+    fn walk_in_anonymous_class(
+        &self,
+        class: &'ast AnonymousClass<'arena>,
+        f: &mut Facts<'ast, 'arena>,
+    ) {
+        f.whole(class);
     }
 
     fn walk_in_assignment(
@@ -233,31 +313,100 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
         if !assignment.operator.is_assign() {
             return;
         }
-        if let Expression::Variable(Variable::Direct(variable)) = assignment.lhs {
-            let span = assignment.span();
-            f.assignments.push(AssignFact {
-                start: span.start.offset,
-                end: span.end.offset,
-                var: variable_name(variable.name),
-                rhs: assignment.rhs,
-            });
+        let span = assignment.span();
+        let (start, end) = (span.start.offset, span.end.offset);
+        match assignment.lhs {
+            Expression::Variable(Variable::Direct(variable)) => {
+                f.assignments.push(AssignFact {
+                    start,
+                    end,
+                    var: variable_name(variable.name),
+                    rhs: Some(assignment.rhs),
+                });
+            }
+            destructuring => {
+                for var in destructured(destructuring) {
+                    f.unknown(start, end, var);
+                }
+            }
+        }
+    }
+
+    fn walk_in_global(&self, global: &'ast Global<'arena>, f: &mut Facts<'ast, 'arena>) {
+        let span = global.span();
+        for variable in global.variables.iter() {
+            if let Variable::Direct(direct) = variable {
+                f.unknown(
+                    span.start.offset,
+                    span.end.offset,
+                    variable_name(direct.name),
+                );
+            }
+        }
+    }
+
+    fn walk_in_static(&self, r#static: &'ast Static<'arena>, f: &mut Facts<'ast, 'arena>) {
+        let span = r#static.span();
+        for item in r#static.items.iter() {
+            let variable = match item {
+                StaticItem::Abstract(item) => &item.variable,
+                StaticItem::Concrete(item) => &item.variable,
+            };
+            f.unknown(
+                span.start.offset,
+                span.end.offset,
+                variable_name(variable.name),
+            );
         }
     }
 
     fn walk_in_foreach(&self, foreach: &'ast Foreach<'arena>, f: &mut Facts<'ast, 'arena>) {
-        let value = match &foreach.target {
-            ForeachTarget::Value(target) => target.value,
-            ForeachTarget::KeyValue(target) => target.value,
+        let (key, value) = match &foreach.target {
+            ForeachTarget::Value(target) => (None, target.value),
+            ForeachTarget::KeyValue(target) => (Some(target.key), target.value),
         };
-        if let Expression::Variable(Variable::Direct(variable)) = value {
-            let span = foreach.span();
-            f.foreaches.push(ForeachFact {
-                start: span.start.offset,
-                body_start: foreach.right_parenthesis.end.offset,
-                end: span.end.offset,
-                var: variable_name(variable.name),
-                iterable: foreach.expression,
-            });
+        let mut unknown: Vec<String> = key.into_iter().flat_map(destructured).collect();
+        let value = match value {
+            Expression::Variable(Variable::Direct(variable)) => Some(variable_name(variable.name)),
+            destructuring => {
+                unknown.extend(destructured(destructuring));
+                None
+            }
+        };
+        f.foreaches.push(ForeachFact {
+            start: foreach.span().start.offset,
+            body_start: foreach.right_parenthesis.end.offset,
+            value,
+            unknown,
+            iterable: foreach.expression,
+        });
+        f.whole(foreach);
+    }
+
+    fn walk_in_for(&self, r#for: &'ast For<'arena>, f: &mut Facts<'ast, 'arena>) {
+        f.whole(r#for);
+    }
+
+    fn walk_in_while(&self, r#while: &'ast While<'arena>, f: &mut Facts<'ast, 'arena>) {
+        f.whole(r#while);
+    }
+
+    fn walk_in_do_while(&self, do_while: &'ast DoWhile<'arena>, f: &mut Facts<'ast, 'arena>) {
+        f.whole(do_while);
+    }
+
+    fn walk_in_switch(&self, switch: &'ast Switch<'arena>, f: &mut Facts<'ast, 'arena>) {
+        f.whole(switch);
+    }
+
+    fn walk_in_try(&self, r#try: &'ast Try<'arena>, f: &mut Facts<'ast, 'arena>) {
+        let end = r#try.span().end.offset;
+        f.branch(&r#try.block, end);
+        for clause in r#try.catch_clauses.iter() {
+            f.branch(&clause.block, end);
+        }
+        if let Some(finally) = &r#try.finally_clause {
+            f.branch(&finally.block, end);
         }
     }
 
@@ -267,10 +416,8 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
         f: &mut Facts<'ast, 'arena>,
     ) {
         if let Some(variable) = &clause.variable {
-            let span = clause.block.span();
             f.catches.push(CatchFact {
-                start: span.start.offset,
-                end: span.end.offset,
+                start: clause.block.span().start.offset,
                 var: variable_name(variable.name),
                 hint: &clause.hint,
             });
@@ -278,12 +425,21 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
     }
 
     fn walk_in_if(&self, r#if: &'ast If<'arena>, f: &mut Facts<'ast, 'arena>) {
-        let (start, end) = match &r#if.body {
+        let end = r#if.span().end.offset;
+        let then = match &r#if.body {
             IfBody::Statement(body) => {
+                f.branch(body.statement, end);
+                for clause in body.else_if_clauses.iter() {
+                    f.branch(clause.statement, end);
+                }
+                if let Some(clause) = &body.else_clause {
+                    f.branch(clause.statement, end);
+                }
                 let span = body.statement.span();
                 (span.start.offset, span.end.offset)
             }
             IfBody::ColonDelimited(body) => {
+                f.whole(r#if);
                 let start = body.colon.end.offset;
                 let end = body
                     .statements
@@ -297,8 +453,8 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
         instanceof_checks(r#if.condition, &mut checks);
         for (var, class) in checks {
             f.narrowings.push(NarrowFact {
-                start,
-                end,
+                start: then.0,
+                end: then.1,
                 var,
                 class,
             });
@@ -314,6 +470,28 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
             ));
         }
     }
+}
+
+/// The direct variables a destructuring target (`[$a, $b]`, `list($a)`, nested)
+/// assigns, or a lone variable.
+fn destructured(target: &Expression<'_>) -> Vec<String> {
+    let elements = match target {
+        Expression::Variable(Variable::Direct(variable)) => {
+            return vec![variable_name(variable.name)];
+        }
+        Expression::Array(array) => &array.elements,
+        Expression::List(list) => &list.elements,
+        Expression::LegacyArray(array) => &array.elements,
+        _ => return Vec::new(),
+    };
+    elements
+        .iter()
+        .flat_map(|element| match element {
+            ArrayElement::KeyValue(element) => destructured(element.value),
+            ArrayElement::Value(element) => destructured(element.value),
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 /// `$v instanceof C` checks that hold when `condition` is true: alone, inside
@@ -347,13 +525,59 @@ fn variable_name(name: &[u8]) -> String {
         .to_string()
 }
 
-/// A source of a variable's type, by position: the latest before the use wins.
+/// How a binding affects a use of the variable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// The binding is certainly in effect.
+    Replace,
+    /// The binding may or may not have happened: merge it with what came before.
+    Merge,
+    /// The binding cannot reach the use.
+    Ignore,
+}
+
+/// A source of a variable's type.
 enum Binding<'f, 'ast, 'arena> {
     Param(&'f ScopeFact<'ast, 'arena>, usize),
     Assign(&'f AssignFact<'arena>),
-    Foreach(&'f ForeachFact<'arena>),
+    ForeachValue(&'f ForeachFact<'arena>),
+    Unknown,
     Catch(&'f CatchFact<'ast, 'arena>),
+    Narrow(u32),
     Doc(TypeExpr),
+}
+
+/// A variable's type while folding its bindings in order.
+enum State {
+    Unset,
+    Null,
+    Known(TypeExpr),
+    Unknown,
+}
+
+impl State {
+    fn of(ty: TypeExpr) -> State {
+        match ty {
+            TypeExpr::Other => State::Unknown,
+            ty => State::Known(ty),
+        }
+    }
+
+    fn merge(self, other: State) -> State {
+        match (self, other) {
+            (State::Unknown, _) | (_, State::Unknown) => State::Unknown,
+            (State::Unset | State::Null, other) => other,
+            (known, State::Unset | State::Null) => known,
+            (State::Known(a), State::Known(b)) => State::Known(union(vec![a, b])),
+        }
+    }
+
+    fn into_type(self) -> TypeExpr {
+        match self {
+            State::Known(ty) => ty,
+            _ => TypeExpr::Other,
+        }
+    }
 }
 
 struct Ctx<'a, 'ast, 'arena> {
@@ -365,6 +589,8 @@ struct Ctx<'a, 'ast, 'arena> {
     names: HashMap<u32, &'a NameRef>,
     /// Inline `@var Type $name` docblocks: position, variable, type.
     var_docs: Vec<(u32, String, TypeExpr)>,
+    /// Variable types already inferred, by name and position.
+    memo: RefCell<HashMap<(String, u32), TypeExpr>>,
 }
 
 impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
@@ -399,6 +625,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             facts,
             names,
             var_docs,
+            memo: RefCell::new(HashMap::new()),
         }
     }
 
@@ -419,12 +646,31 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         )
     }
 
+    /// The named class enclosing `at`; nothing inside an anonymous class.
     fn enclosing(&self, at: u32) -> Option<String> {
-        self.summary.enclosing_class(at).map(|c| c.fqn.clone())
+        self.summary.enclosing_class(at).and_then(|c| c.fqn.clone())
     }
 
     fn enclosing_parent(&self, at: u32) -> Option<String> {
         self.summary.enclosing_class(at)?.parent.clone()
+    }
+
+    /// The index of the anonymous class enclosing `at` when `object` is `$this`.
+    fn anonymous_this(&self, object: &Expression<'_>, at: u32) -> Option<usize> {
+        let Expression::Variable(Variable::Direct(variable)) = object else {
+            return None;
+        };
+        if variable.name != b"$this" {
+            return None;
+        }
+        let (i, range) = self
+            .summary
+            .class_ranges
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.start <= at && at <= r.end)
+            .max_by_key(|(_, r)| r.start)?;
+        range.fqn.is_none().then_some(i)
     }
 
     /// The class an expression before `::` or after `new` names.
@@ -467,31 +713,48 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                 self.expr(conditional.r#else, at, depth),
             ]),
             Expression::Call(Call::Method(call)) => self.member_on(
-                self.expr(call.object, at, depth),
+                &self.expr(call.object, at, depth),
                 &call.method,
                 MemberKind::Method,
+                None,
             ),
             Expression::Call(Call::NullSafeMethod(call)) => self.member_on(
-                self.expr(call.object, at, depth),
+                &self.expr(call.object, at, depth),
                 &call.method,
                 MemberKind::Method,
+                None,
             ),
-            Expression::Call(Call::StaticMethod(call)) => match self.class_of(call.class, at) {
-                Some(class) => {
-                    self.member_on(TypeExpr::Named(class), &call.method, MemberKind::Method)
-                }
-                None => TypeExpr::Other,
-            },
+            Expression::Call(Call::StaticMethod(call)) => {
+                let Some(class) = self.class_of(call.class, at) else {
+                    return TypeExpr::Other;
+                };
+                // `self::`, `static::` and `parent::` forward late static binding to
+                // the calling class.
+                let forwarded = match call.class {
+                    Expression::Self_(_) | Expression::Static(_) | Expression::Parent(_) => {
+                        self.enclosing(at)
+                    }
+                    _ => None,
+                };
+                self.member_on(
+                    &TypeExpr::Named(class),
+                    &call.method,
+                    MemberKind::Method,
+                    forwarded.as_deref(),
+                )
+            }
             Expression::Call(Call::Function(call)) => self.function_returns(call.function),
             Expression::Access(Access::Property(access)) => self.member_on(
-                self.expr(access.object, at, depth),
+                &self.expr(access.object, at, depth),
                 &access.property,
                 MemberKind::Property,
+                None,
             ),
             Expression::Access(Access::NullSafeProperty(access)) => self.member_on(
-                self.expr(access.object, at, depth),
+                &self.expr(access.object, at, depth),
                 &access.property,
                 MemberKind::Property,
+                None,
             ),
             Expression::Access(Access::StaticProperty(access)) => {
                 match (self.class_of(access.class, at), &access.property) {
@@ -499,6 +762,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                         &TypeExpr::Named(class),
                         MemberKind::Property,
                         &variable_name(variable.name),
+                        None,
                     ),
                     _ => TypeExpr::Other,
                 }
@@ -509,33 +773,48 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
 
     fn member_on(
         &self,
-        receiver: TypeExpr,
+        receiver: &TypeExpr,
         selector: &ClassLikeMemberSelector<'_>,
         kind: MemberKind,
+        static_class: Option<&str>,
     ) -> TypeExpr {
         match selector {
-            ClassLikeMemberSelector::Identifier(name) => {
-                self.member_type(&receiver, kind, &String::from_utf8_lossy(name.value))
-            }
+            ClassLikeMemberSelector::Identifier(name) => self.member_type(
+                receiver,
+                kind,
+                &String::from_utf8_lossy(name.value),
+                static_class,
+            ),
             _ => TypeExpr::Other,
         }
     }
 
     /// The type of member `name` on every class of `receiver`. `static` and `$this`
-    /// become the receiver class, `self` the declaring class, `parent` its parent.
-    fn member_type(&self, receiver: &TypeExpr, kind: MemberKind, name: &str) -> TypeExpr {
+    /// become the receiver class (or `static_class` when late static binding is
+    /// forwarded), `self` the declaring class (the using class for a trait), and
+    /// `parent` the declaring class's parent.
+    fn member_type(
+        &self,
+        receiver: &TypeExpr,
+        kind: MemberKind,
+        name: &str,
+        static_class: Option<&str>,
+    ) -> TypeExpr {
         let mut types = Vec::new();
         for class in class_names(receiver) {
+            let static_class = static_class.unwrap_or(&class);
             for (declaring, member) in self.index.find_member(&class, kind, name) {
-                if let Some(ty) = &member.ty {
-                    let shape = declaring.declaration.class.as_ref();
-                    types.push(bind(
-                        ty,
-                        &class,
-                        &declaring.declaration.fqn,
-                        shape.and_then(|s| s.parent.as_deref()),
-                    ));
-                }
+                let Some(ty) = &member.ty else {
+                    continue;
+                };
+                let declaration = declaring.declaration;
+                let self_class = if declaration.kind == SymbolKind::Trait {
+                    class.as_str()
+                } else {
+                    declaration.fqn.as_str()
+                };
+                let parent = declaration.class.as_ref().and_then(|s| s.parent.as_deref());
+                types.push(bind(ty, static_class, self_class, parent));
             }
         }
         union(types)
@@ -555,6 +834,34 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         union(self.index.function_returns(name))
     }
 
+    /// The innermost function-like scope containing `at`, as an index into the scopes.
+    fn scope_at(&self, at: u32) -> Option<usize> {
+        self.facts
+            .scopes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.start <= at && at <= s.end)
+            .max_by_key(|(_, s)| s.start)
+            .map(|(i, _)| i)
+    }
+
+    /// How a binding at `position` affects a use at `at`: decided by the innermost
+    /// branch that holds the binding but not the use.
+    fn mode(&self, position: u32, at: u32) -> Mode {
+        let branch = self
+            .facts
+            .branches
+            .iter()
+            .filter(|b| b.start <= position && position <= b.end)
+            .filter(|b| !(b.start <= at && at <= b.end))
+            .max_by_key(|b| b.start);
+        match branch {
+            None => Mode::Replace,
+            Some(branch) if at <= branch.statement_end => Mode::Ignore,
+            Some(_) => Mode::Merge,
+        }
+    }
+
     /// The type of variable `name` used at `at`.
     fn var(&self, name: &str, at: u32, depth: u32) -> TypeExpr {
         if depth > MAX_DEPTH {
@@ -563,81 +870,152 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         if name == "this" {
             return self.enclosing(at).map_or(TypeExpr::Other, TypeExpr::Named);
         }
-        let narrowed = self
-            .facts
-            .narrowings
-            .iter()
-            .filter(|n| n.var == name && n.start <= at && at <= n.end)
-            .max_by_key(|n| n.start);
-        if let Some(narrowed) = narrowed
-            && let Some(class) = self.names.get(&narrowed.class)
-        {
-            return TypeExpr::Named(class.fqn.clone());
+        let key = (name.to_string(), at);
+        if let Some(ty) = self.memo.borrow().get(&key) {
+            return ty.clone();
         }
+        let ty = self.var_uncached(name, at, depth);
+        self.memo.borrow_mut().insert(key, ty.clone());
+        ty
+    }
 
-        let scope = self
-            .facts
-            .scopes
-            .iter()
-            .filter(|s| s.start <= at && at <= s.end)
-            .max_by_key(|s| s.start);
-        let (scope_start, scope_end) = scope.map_or((0, u32::MAX), |s| (s.start, s.end));
-        let in_scope = |position: u32| scope_start <= position && position <= scope_end;
+    fn var_uncached(&self, name: &str, at: u32, depth: u32) -> TypeExpr {
+        let scope = self.scope_at(at);
+        let same_scope = |position: u32| self.scope_at(position) == scope;
 
-        let mut best: Option<(u32, Binding<'_, 'ast, 'arena>)> = None;
-        let mut consider = |position: u32, binding: Binding<'a, 'ast, 'arena>| {
-            if best.as_ref().is_none_or(|(p, _)| position >= *p) {
-                best = Some((position, binding));
-            }
-        };
-        if let Some(scope) = scope {
-            for (i, param) in scope.params.parameters.iter().enumerate() {
+        let mut bindings: Vec<(u32, Mode, Binding<'_, 'ast, 'arena>)> = Vec::new();
+        if let Some(i) = scope {
+            let fact = &self.facts.scopes[i];
+            for (p, param) in fact.params.parameters.iter().enumerate() {
                 if variable_name(param.variable.name) == name {
-                    consider(scope.start, Binding::Param(scope, i));
+                    bindings.push((fact.start, Mode::Replace, Binding::Param(fact, p)));
                 }
             }
         }
         for assignment in &self.facts.assignments {
-            if assignment.var == name && assignment.end <= at && in_scope(assignment.start) {
-                consider(assignment.start, Binding::Assign(assignment));
+            if assignment.var == name && assignment.end <= at && same_scope(assignment.start) {
+                let binding = match assignment.rhs {
+                    Some(_) => Binding::Assign(assignment),
+                    None => Binding::Unknown,
+                };
+                bindings.push((assignment.start, self.mode(assignment.start, at), binding));
             }
         }
         for foreach in &self.facts.foreaches {
-            if foreach.var == name && foreach.body_start <= at && at <= foreach.end {
-                consider(foreach.start, Binding::Foreach(foreach));
+            if foreach.body_start > at || !same_scope(foreach.start) {
+                continue;
+            }
+            let mode = self.mode(foreach.start, at);
+            if foreach.value.as_deref() == Some(name) {
+                bindings.push((foreach.start, mode, Binding::ForeachValue(foreach)));
+            } else if foreach.unknown.iter().any(|v| v == name) {
+                bindings.push((foreach.start, mode, Binding::Unknown));
             }
         }
         for catch in &self.facts.catches {
-            if catch.var == name && catch.start <= at && at <= catch.end {
-                consider(catch.start, Binding::Catch(catch));
+            if catch.var == name && catch.start <= at && same_scope(catch.start) {
+                bindings.push((
+                    catch.start,
+                    self.mode(catch.start, at),
+                    Binding::Catch(catch),
+                ));
+            }
+        }
+        for narrowing in &self.facts.narrowings {
+            if narrowing.var == name
+                && narrowing.start <= at
+                && at <= narrowing.end
+                && same_scope(narrowing.start)
+            {
+                bindings.push((
+                    narrowing.start,
+                    Mode::Replace,
+                    Binding::Narrow(narrowing.class),
+                ));
             }
         }
         for (position, var, ty) in &self.var_docs {
-            if var == name && *position < at && in_scope(*position) {
-                consider(*position, Binding::Doc(ty.clone()));
+            if var == name && *position < at && same_scope(*position) {
+                bindings.push((
+                    *position,
+                    self.mode(*position, at),
+                    Binding::Doc(ty.clone()),
+                ));
             }
         }
 
-        let Some((_, binding)) = best else {
+        if bindings.iter().all(|(_, mode, _)| *mode == Mode::Ignore) {
+            return self.captured(name, scope, depth);
+        }
+        bindings.sort_by_key(|(position, _, _)| *position);
+        let last_replace = bindings
+            .iter()
+            .rposition(|(_, mode, _)| *mode == Mode::Replace);
+        let mut state = State::Unset;
+        for (i, (_, mode, binding)) in bindings.iter().enumerate() {
+            match last_replace {
+                Some(r) if i < r => {}
+                Some(r) if i == r => state = self.binding_state(binding, depth),
+                _ if *mode == Mode::Merge => {
+                    state = state.merge(self.binding_state(binding, depth));
+                }
+                _ => {}
+            }
+        }
+        let ty = state.into_type();
+        match self.enclosing(at) {
+            Some(class) => {
+                let parent = self.enclosing_parent(at);
+                bind(&ty, &class, &class, parent.as_deref())
+            }
+            None => ty,
+        }
+    }
+
+    /// A variable with no binding in its own scope: arrow functions see the enclosing
+    /// scope, closures see the variables of their `use` clause.
+    fn captured(&self, name: &str, scope: Option<usize>, depth: u32) -> TypeExpr {
+        let Some(scope) = scope.map(|i| &self.facts.scopes[i]) else {
             return TypeExpr::Other;
         };
-        let ty = match binding {
-            Binding::Param(scope, i) => self.param_type(scope, i),
-            Binding::Assign(assignment) => match self.assignment_doc(assignment) {
-                Some(ty) => ty,
-                None => self.expr(assignment.rhs, assignment.start, depth + 1),
-            },
-            Binding::Foreach(foreach) => {
-                element_of(&self.expr(foreach.iterable, foreach.start, depth + 1))
-            }
-            Binding::Catch(catch) => self.hint_type(catch.hint),
-            Binding::Doc(ty) => ty,
+        let visible = match &scope.kind {
+            ScopeKind::Arrow => true,
+            ScopeKind::Closure(uses) => uses.iter().any(|u| u == name),
+            ScopeKind::Function => false,
         };
-        let class = self.enclosing(at);
-        let parent = self.enclosing_parent(at);
-        match &class {
-            Some(class) => bind(&ty, class, class, parent.as_deref()),
-            None => ty,
+        if visible {
+            // Just before the closure starts is the enclosing scope.
+            self.var(name, scope.start.saturating_sub(1), depth + 1)
+        } else {
+            TypeExpr::Other
+        }
+    }
+
+    fn binding_state(&self, binding: &Binding<'_, '_, '_>, depth: u32) -> State {
+        match binding {
+            Binding::Param(scope, i) => State::of(self.param_type(scope, *i)),
+            Binding::Assign(assignment) => {
+                if let Some(ty) = self.assignment_doc(assignment) {
+                    return State::of(ty);
+                }
+                match assignment.rhs {
+                    Some(Expression::Literal(Literal::Null(_))) => State::Null,
+                    Some(rhs) => State::of(self.expr(rhs, assignment.start, depth + 1)),
+                    None => State::Unknown,
+                }
+            }
+            Binding::ForeachValue(foreach) => State::of(element_of(&self.expr(
+                foreach.iterable,
+                foreach.start,
+                depth + 1,
+            ))),
+            Binding::Unknown => State::Unknown,
+            Binding::Catch(catch) => State::of(self.hint_type(catch.hint)),
+            Binding::Narrow(class) => match self.names.get(class) {
+                Some(name) => State::Known(TypeExpr::Named(name.fqn.clone())),
+                None => State::Unknown,
+            },
+            Binding::Doc(ty) => State::of(ty.clone()),
         }
     }
 
@@ -678,20 +1056,20 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
     }
 }
 
-/// Replaces `static`/`$this` with the receiver, `self` with the declaring class and
-/// `parent` with its parent.
-fn bind(ty: &TypeExpr, receiver: &str, declaring: &str, parent: Option<&str>) -> TypeExpr {
+/// Replaces `static`/`$this` with `static_class`, `self` with `self_class` and
+/// `parent` with `parent`.
+fn bind(ty: &TypeExpr, static_class: &str, self_class: &str, parent: Option<&str>) -> TypeExpr {
     match ty {
-        TypeExpr::StaticType => TypeExpr::Named(receiver.to_string()),
-        TypeExpr::SelfType => TypeExpr::Named(declaring.to_string()),
+        TypeExpr::StaticType => TypeExpr::Named(static_class.to_string()),
+        TypeExpr::SelfType => TypeExpr::Named(self_class.to_string()),
         TypeExpr::ParentType => parent.map_or(TypeExpr::Other, |p| TypeExpr::Named(p.to_string())),
         TypeExpr::ArrayOf(element) => {
-            TypeExpr::ArrayOf(Box::new(bind(element, receiver, declaring, parent)))
+            TypeExpr::ArrayOf(Box::new(bind(element, static_class, self_class, parent)))
         }
         TypeExpr::Union(members) => union(
             members
                 .iter()
-                .map(|m| bind(m, receiver, declaring, parent))
+                .map(|m| bind(m, static_class, self_class, parent))
                 .collect(),
         ),
         other => other.clone(),

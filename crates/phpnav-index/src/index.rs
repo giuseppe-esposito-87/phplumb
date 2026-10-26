@@ -10,11 +10,11 @@ use crate::cache::{self, CachedFile};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
 use crate::hover::{self, Hover};
-use crate::infer;
+use crate::infer::{self, Receiver};
 use crate::members;
 use crate::phpdoc::TypeExpr;
 use crate::summary::{
-    ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, SymbolKind, summarize,
+    ClassRange, ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, SymbolKind, summarize,
 };
 
 /// A byte range in a file.
@@ -265,6 +265,36 @@ impl Index {
         found
     }
 
+    /// Targets of member `name` on the anonymous class `range` of the file at `path`:
+    /// its own declaration, or else the one its parent provides.
+    fn anonymous_member_targets(
+        &self,
+        path: &Path,
+        range: &ClassRange,
+        kind: MemberKind,
+        name: &str,
+    ) -> Vec<(Location, String)> {
+        match range
+            .members
+            .iter()
+            .find(|m| members::matches(m, kind, name))
+        {
+            Some(member) => vec![(
+                Location {
+                    path: path.to_path_buf(),
+                    start: member.name_start,
+                    end: member.name_end,
+                },
+                member.name.to_ascii_lowercase(),
+            )],
+            None => range
+                .parent
+                .as_ref()
+                .map(|parent| self.member_targets(std::slice::from_ref(parent), kind, name))
+                .unwrap_or_default(),
+        }
+    }
+
     /// Targets of every declaration of the classes in `classes`.
     fn class_targets(&self, classes: &[String]) -> Vec<(Location, String)> {
         let mut found: Vec<(Location, String)> = classes
@@ -332,7 +362,7 @@ impl Index {
             match sel {
                 ClassSel::Named(fqn) => Some(fqn.clone()),
                 ClassSel::SelfKw | ClassSel::StaticKw => {
-                    summary.enclosing_class(offset).map(|c| c.fqn.clone())
+                    summary.enclosing_class(offset).and_then(|c| c.fqn.clone())
                 }
                 ClassSel::ParentKw => summary.enclosing_class(offset)?.parent.clone(),
             }
@@ -343,12 +373,22 @@ impl Index {
                 .unwrap_or_default();
         }
         if let Some(member) = summary.static_refs.iter().find(|r| covers(r.start, r.end)) {
+            let anonymous = summary.enclosing_class(offset).filter(|r| r.fqn.is_none());
+            if let (ClassSel::SelfKw | ClassSel::StaticKw, Some(range)) = (&member.class, anonymous)
+            {
+                return self.anonymous_member_targets(path, range, member.kind, &member.name);
+            }
             return class_of(&member.class)
                 .map(|class| self.member_targets(&[class], member.kind, &member.name))
                 .unwrap_or_default();
         }
-        if let Some((classes, kind, name)) = infer::member_at(self, &summary, source, offset) {
-            return self.member_targets(&classes, kind, &name);
+        if let Some((receiver, kind, name)) = infer::member_at(self, &summary, source, offset) {
+            return match receiver {
+                Receiver::Classes(classes) => self.member_targets(&classes, kind, &name),
+                Receiver::Anonymous(i) => {
+                    self.anonymous_member_targets(path, &summary.class_ranges[i], kind, &name)
+                }
+            };
         }
 
         let Some(name) = name_at(&summary.names, offset) else {

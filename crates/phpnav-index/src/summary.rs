@@ -8,9 +8,9 @@ use mago_names::resolver::NameResolver;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Argument, Class, ClassConstantAccess, ClassLikeConstantSelector, ClassLikeMember,
-    ClassLikeMemberSelector, Constant, ConstantAccess, Enum, EnumCaseItem, Expression, Function,
-    FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
+    AnonymousClass, Argument, Class, ClassConstantAccess, ClassLikeConstantSelector,
+    ClassLikeMember, ClassLikeMemberSelector, Constant, ConstantAccess, Enum, EnumCaseItem,
+    Expression, Function, FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
     FunctionPartialApplication, Hint, Instantiation, Interface, Literal, Method, Modifier,
     Namespace, Program, Property, PropertyItem, Sequence, StaticMethodCall,
     StaticMethodPartialApplication, StaticPropertyAccess, Trait, Use, UseItems, UseType, Variable,
@@ -211,12 +211,15 @@ pub struct KeywordRef {
 }
 
 /// The source range of a class-like declaration, for finding the enclosing class.
+/// Anonymous classes have no `fqn` and carry their own `members`, since the index
+/// cannot name them; named classes leave `members` empty.
 #[derive(Clone, Debug)]
 pub struct ClassRange {
     pub start: u32,
     pub end: u32,
-    pub fqn: String,
+    pub fqn: Option<String>,
     pub parent: Option<String>,
+    pub members: Vec<Member>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -257,6 +260,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         not_refs: HashSet::new(),
         static_refs: Vec::new(),
         keywords: Vec::new(),
+        anonymous: Vec::new(),
     };
     SyntaxVisitor.walk_program(program, &mut collector);
 
@@ -294,8 +298,9 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 class_ranges.push(ClassRange {
                     start,
                     end,
-                    fqn: fqn.clone(),
+                    fqn: Some(fqn.clone()),
                     parent: shape.parent.and_then(fqn_at),
+                    members: Vec::new(),
                 });
             }
             let class = pending.shape.map(|shape| ClassShape {
@@ -316,6 +321,14 @@ pub fn summarize(source: &[u8]) -> FileSummary {
             })
         })
         .collect();
+
+    class_ranges.extend(collector.anonymous.into_iter().map(|anonymous| ClassRange {
+        start: anonymous.start,
+        end: anonymous.end,
+        fqn: None,
+        parent: anonymous.parent.and_then(fqn_at),
+        members: anonymous.members,
+    }));
 
     let names = resolved
         .iter()
@@ -431,6 +444,15 @@ struct Collector<'a> {
     not_refs: HashSet<u32>,
     static_refs: Vec<(MemberKind, String, u32, u32, PendingSel)>,
     keywords: Vec<KeywordRef>,
+    anonymous: Vec<PendingAnonymous>,
+}
+
+/// An anonymous class: its range, the offset of its parent's name, and its members.
+struct PendingAnonymous {
+    start: u32,
+    end: u32,
+    parent: Option<u32>,
+    members: Vec<Member>,
 }
 
 impl Collector<'_> {
@@ -831,6 +853,25 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             },
             &class.members,
         );
+    }
+
+    fn walk_in_anonymous_class(
+        &self,
+        class: &'ast AnonymousClass<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        let span = class.span();
+        let (members, _) = c.members(&class.members);
+        c.anonymous.push(PendingAnonymous {
+            start: span.start.offset,
+            end: span.end.offset,
+            parent: class
+                .extends
+                .as_ref()
+                .and_then(|e| e.types.iter().next())
+                .map(|t| t.span().start.offset),
+            members,
+        });
     }
 
     fn walk_in_interface(&self, interface: &'ast Interface<'arena>, c: &mut Collector<'arena>) {

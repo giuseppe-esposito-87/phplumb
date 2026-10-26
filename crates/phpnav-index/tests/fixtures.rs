@@ -147,3 +147,8 @@ fn static_members() {
 fn inference() {
     run_fixture("inference");
 }
+
+#[test]
+fn scopes() {
+    run_fixture("scopes");
+}
