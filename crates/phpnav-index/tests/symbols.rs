@@ -1,5 +1,11 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use phpnav_index::Index;
+use phpnav_index::discover::DiscoverOptions;
 use phpnav_index::summary::{MemberKind, SymbolKind};
 use phpnav_index::symbols::{Kind, OutlineSymbol, outline};
+use tempfile::TempDir;
 
 fn names(symbols: &[OutlineSymbol]) -> Vec<(&str, Kind)> {
     symbols.iter().map(|s| (s.name.as_str(), s.kind)).collect()
@@ -94,4 +100,110 @@ fn outline_survives_syntax_errors() {
     let top: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(top, vec!["A", "f", "B"]);
     assert_eq!(symbols[0].children.len(), 1);
+}
+
+fn workspace(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for (path, content) in files {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, format!("<?php\n{content}")).unwrap();
+    }
+    let index = Index::build(&root, &DiscoverOptions::default()).unwrap().0;
+    (dir, root, index)
+}
+
+/// Matches as `name container path`, best first.
+fn search(index: &Index, root: &Path, query: &str, limit: usize) -> Vec<String> {
+    index
+        .workspace_symbols(query, limit)
+        .into_iter()
+        .map(|m| {
+            let path = m
+                .location
+                .path
+                .strip_prefix(root)
+                .unwrap()
+                .display()
+                .to_string();
+            format!("{} {} {path}", m.name, m.container.unwrap_or_default())
+        })
+        .collect()
+}
+
+#[test]
+fn symbols_rank_exact_then_prefix_then_substring_then_subsequence() {
+    let (_dir, root, index) = workspace(&[(
+        "src/All.php",
+        "namespace App; class NamedObjectDefault {} class BaseNode {} class NodeStorage {} class Node {}",
+    )]);
+
+    assert_eq!(
+        search(&index, &root, "node", 10),
+        vec![
+            "Node App src/All.php",
+            "NodeStorage App src/All.php",
+            "BaseNode App src/All.php",
+            "NamedObjectDefault App src/All.php",
+        ]
+    );
+}
+
+#[test]
+fn symbols_match_camel_humps_and_any_case() {
+    let (_dir, root, index) = workspace(&[(
+        "src/Repo.php",
+        "namespace App; class Repo { public function getEntity() {} }",
+    )]);
+
+    assert_eq!(
+        search(&index, &root, "gEnt", 10),
+        vec!["getEntity App\\Repo src/Repo.php"]
+    );
+    assert_eq!(
+        search(&index, &root, "GETENTITY", 10),
+        vec!["getEntity App\\Repo src/Repo.php"]
+    );
+}
+
+#[test]
+fn symbols_with_a_backslash_match_qualified_names() {
+    let (_dir, root, index) = workspace(&[
+        ("src/A.php", "namespace App; class Node {}"),
+        ("src/B.php", "namespace Other; class Node {}"),
+    ]);
+
+    assert_eq!(
+        search(&index, &root, "app\\node", 10),
+        vec!["Node App src/A.php"]
+    );
+    assert_eq!(
+        search(&index, &root, "\\App\\Node", 10),
+        vec!["Node App src/A.php"]
+    );
+}
+
+#[test]
+fn symbols_list_project_code_before_core() {
+    let (_dir, root, index) = workspace(&[
+        ("web/core/lib/Node.php", "namespace Core; class Node {}"),
+        ("src/Node.php", "namespace App; class Node {}"),
+    ]);
+
+    assert_eq!(
+        search(&index, &root, "Node", 10),
+        vec!["Node App src/Node.php", "Node Core web/core/lib/Node.php"]
+    );
+}
+
+#[test]
+fn symbols_respect_the_limit_and_ignore_blank_queries() {
+    let (_dir, root, index) = workspace(&[(
+        "src/All.php",
+        "namespace App; class Node {} class NodeStorage {} class BaseNode {}",
+    )]);
+
+    assert_eq!(search(&index, &root, "node", 2).len(), 2);
+    assert_eq!(search(&index, &root, "  ", 10), Vec::<String>::new());
 }

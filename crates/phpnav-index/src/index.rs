@@ -19,6 +19,7 @@ use crate::summary::{
     ClassRange, ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, RefKey, SymbolKind,
     summarize,
 };
+use crate::symbols::{self, SymbolMatch};
 
 /// A byte range in a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +235,16 @@ impl Index {
         });
         found.dedup();
         found
+    }
+
+    /// Declarations and members matching `query`, best first, at most `limit`.
+    pub fn workspace_symbols(&self, query: &str, limit: usize) -> Vec<SymbolMatch> {
+        let files = self.files.iter().flatten();
+        symbols::search(
+            files.map(|f| (f.path.as_path(), f.declarations.as_slice())),
+            query,
+            limit,
+        )
     }
 
     /// The functions and methods the cursor resolves to, as call hierarchy items.
