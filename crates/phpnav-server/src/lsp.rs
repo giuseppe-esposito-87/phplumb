@@ -1,33 +1,36 @@
 //! The LSP server: initialization, indexing, file watching and request handling.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{DidChangeWatchedFiles, LogMessage, Notification as _, Progress};
 use lsp_types::request::{
-    CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare, GotoDefinition,
-    GotoImplementation, GotoImplementationParams, HoverRequest, References, RegisterCapability,
-    Request as _, Shutdown, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
-    WorkDoneProgressCreate,
+    CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
+    DocumentSymbolRequest, GotoDefinition, GotoImplementation, GotoImplementationParams,
+    HoverRequest, References, RegisterCapability, Request as _, Shutdown, TypeHierarchyPrepare,
+    TypeHierarchySubtypes, TypeHierarchySupertypes, WorkDoneProgressCreate, WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
     CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
     CallHierarchyServerCapability, DidChangeWatchedFilesParams,
-    DidChangeWatchedFilesRegistrationOptions, FileChangeType, FileEvent, FileSystemWatcher,
-    GlobPattern, GotoDefinitionParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    DidChangeWatchedFilesRegistrationOptions, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, FileChangeType, FileEvent, FileSystemWatcher, GlobPattern,
+    GotoDefinitionParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
     ImplementationProviderCapability, InitializeParams, Location, LogMessageParams, MarkupContent,
     MarkupKind, MessageType, NumberOrString, OneOf, Position, ProgressParams, ProgressParamsValue,
     Range, ReferenceParams, Registration, RegistrationParams, ServerCapabilities, SymbolKind,
     TypeHierarchyItem, TypeHierarchyPrepareParams, TypeHierarchySubtypesParams,
     TypeHierarchySupertypesParams, WatchKind, WorkDoneProgress, WorkDoneProgressBegin,
-    WorkDoneProgressCreateParams, WorkDoneProgressEnd,
+    WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkspaceSymbol, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use phpnav_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
 use phpnav_index::line_index::LineIndex;
-use phpnav_index::summary::SymbolKind as IndexSymbolKind;
+use phpnav_index::summary::{MemberKind, SymbolKind as IndexSymbolKind};
+use phpnav_index::symbols::{self, Kind, OutlineSymbol};
 use phpnav_index::{CallItem, CallKind, ClassRef, Index, IndexStats};
 use serde::Deserialize;
 use serde_json::json;
@@ -67,6 +70,8 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
         call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
     };
     // lsp-types 0.97 has no field for the type hierarchy capability.
@@ -244,6 +249,20 @@ impl Server<'_> {
                 match serde_json::from_value::<CallHierarchyOutgoingCallsParams>(request.params) {
                     Ok(params) => {
                         Response::new_ok(request.id, outgoing_calls(self.index.as_mut(), params))
+                    }
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            DocumentSymbolRequest::METHOD => {
+                match serde_json::from_value::<DocumentSymbolParams>(request.params) {
+                    Ok(params) => Response::new_ok(request.id, document_symbols(params)),
+                    Err(err) => invalid(request.id, err),
+                }
+            }
+            WorkspaceSymbolRequest::METHOD => {
+                match serde_json::from_value::<WorkspaceSymbolParams>(request.params) {
+                    Ok(params) => {
+                        Response::new_ok(request.id, workspace_symbols(self.index.as_ref(), params))
                     }
                     Err(err) => invalid(request.id, err),
                 }
@@ -629,6 +648,107 @@ fn ranges_in(path: &Path, ranges: &[(u32, u32)]) -> Option<Vec<Range>> {
             })
             .collect(),
     )
+}
+
+/// How many workspace symbols a query returns.
+const WORKSPACE_SYMBOL_LIMIT: usize = 100;
+
+fn document_symbols(params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
+    let path = uri_to_path(&params.text_document.uri)?;
+    let source = std::fs::read(&path).ok()?;
+    let lines = LineIndex::new(&source);
+    let range = |(start, end): (u32, u32)| {
+        let (start_line, start_col) = lines.position(&source, start);
+        let (end_line, end_col) = lines.position(&source, end);
+        Range::new(
+            Position::new(start_line, start_col),
+            Position::new(end_line, end_col),
+        )
+    };
+    fn convert(symbol: &OutlineSymbol, range: &dyn Fn((u32, u32)) -> Range) -> DocumentSymbol {
+        #[allow(deprecated)]
+        DocumentSymbol {
+            name: symbol.name.clone(),
+            detail: None,
+            kind: symbol_kind(symbol.kind, &symbol.name),
+            tags: None,
+            deprecated: None,
+            range: range(symbol.range),
+            selection_range: range(symbol.selection),
+            children: Some(
+                symbol
+                    .children
+                    .iter()
+                    .map(|child| convert(child, range))
+                    .collect(),
+            ),
+        }
+    }
+    Some(DocumentSymbolResponse::Nested(
+        symbols::outline(&source)
+            .iter()
+            .map(|symbol| convert(symbol, &range))
+            .collect(),
+    ))
+}
+
+fn workspace_symbols(
+    index: Option<&Index>,
+    params: WorkspaceSymbolParams,
+) -> WorkspaceSymbolResponse {
+    let Some(index) = index else {
+        return WorkspaceSymbolResponse::Nested(Vec::new());
+    };
+    let mut files: HashMap<PathBuf, Option<(Vec<u8>, LineIndex)>> = HashMap::new();
+    let found = index
+        .workspace_symbols(&params.query, WORKSPACE_SYMBOL_LIMIT)
+        .into_iter()
+        .filter_map(|found| {
+            let file = files
+                .entry(found.location.path.clone())
+                .or_insert_with(|| {
+                    let text = std::fs::read(&found.location.path).ok()?;
+                    let lines = LineIndex::new(&text);
+                    Some((text, lines))
+                })
+                .as_ref()?;
+            let (start_line, start_col) = file.1.position(&file.0, found.location.start);
+            let (end_line, end_col) = file.1.position(&file.0, found.location.end);
+            Some(WorkspaceSymbol {
+                kind: symbol_kind(found.kind, &found.name),
+                name: found.name,
+                tags: None,
+                container_name: found.container,
+                location: OneOf::Left(Location::new(
+                    path_to_uri(&found.location.path),
+                    Range::new(
+                        Position::new(start_line, start_col),
+                        Position::new(end_line, end_col),
+                    ),
+                )),
+                data: None,
+            })
+        })
+        .collect();
+    WorkspaceSymbolResponse::Nested(found)
+}
+
+fn symbol_kind(kind: Kind, name: &str) -> SymbolKind {
+    match kind {
+        Kind::Declaration(IndexSymbolKind::Class) => SymbolKind::CLASS,
+        Kind::Declaration(IndexSymbolKind::Interface) => SymbolKind::INTERFACE,
+        Kind::Declaration(IndexSymbolKind::Trait) => SymbolKind::STRUCT,
+        Kind::Declaration(IndexSymbolKind::Enum) => SymbolKind::ENUM,
+        Kind::Declaration(IndexSymbolKind::Function) => SymbolKind::FUNCTION,
+        Kind::Declaration(IndexSymbolKind::Constant) => SymbolKind::CONSTANT,
+        Kind::Member(MemberKind::Method) if name.eq_ignore_ascii_case("__construct") => {
+            SymbolKind::CONSTRUCTOR
+        }
+        Kind::Member(MemberKind::Method) => SymbolKind::METHOD,
+        Kind::Member(MemberKind::Property) => SymbolKind::PROPERTY,
+        Kind::Member(MemberKind::Constant) => SymbolKind::CONSTANT,
+        Kind::Member(MemberKind::EnumCase) => SymbolKind::ENUM_MEMBER,
+    }
 }
 
 /// One type hierarchy item per class-like the cursor resolves to.

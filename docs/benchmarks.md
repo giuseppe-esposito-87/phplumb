@@ -2,6 +2,18 @@
 
 Results of `php-navigator bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-26, step 2e symbols and outline
+
+Same machine and project. Every run now times five workspace symbol queries (`node`, `EntityStorage`, `gEnt`, `load` and `zzqqxx`) over all declarations and members in the index.
+
+| Metric                  | Value               | Target        |
+| ----------------------- | ------------------- | ------------- |
+| Cold index              | 2.6 to 4.3 s        | under 10 s    |
+| Peak resident memory    | 345 to 366 MB       | under 1024 MB |
+| Slowest symbol query    | 29 to 31 ms         | under 100 ms  |
+| Slowest references case | 103 to 135 ms       | under 1 s     |
+| All cases               | 48 passed, 0 failed | all pass      |
+
 ## 2026-10-26, step 2d references and call hierarchy
 
 Same machine and project. Each indexed file now records hashes of the names it mentions, so a references query parses only the files that can contain a match.

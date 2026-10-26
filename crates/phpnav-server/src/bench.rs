@@ -51,6 +51,10 @@ impl BenchArgs {
     }
 }
 
+/// Workspace symbol queries timed by every run: an exact name, a prefix, camel
+/// humps, a name with many members, and one that matches nothing.
+const SYMBOL_QUERIES: [&str; 5] = ["node", "EntityStorage", "gEnt", "load", "zzqqxx"];
+
 #[derive(Deserialize)]
 struct CaseFile {
     #[serde(default, rename = "case")]
@@ -88,6 +92,8 @@ pub struct Report {
     references_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     coverage: Option<Coverage>,
+    /// The slowest of the workspace symbol queries in `SYMBOL_QUERIES`.
+    symbols_ms: u128,
     peak_rss_mb: u64,
     cases_passed: usize,
     cases_failed: usize,
@@ -134,6 +140,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         implementation_ms: None,
         references_ms: None,
         coverage: None,
+        symbols_ms: 0,
         peak_rss_mb: 0,
         cases_passed: 0,
         cases_failed: 0,
@@ -156,6 +163,11 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
     }
     if let Some(dir) = &args.coverage {
         report.coverage = Some(coverage(&mut index, &root, &root.join(dir), &opts)?);
+    }
+    for query in SYMBOL_QUERIES {
+        let started = std::time::Instant::now();
+        index.workspace_symbols(query, 100);
+        report.symbols_ms = report.symbols_ms.max(started.elapsed().as_millis());
     }
     report.peak_rss_mb = peak_rss_bytes() / (1024 * 1024);
 

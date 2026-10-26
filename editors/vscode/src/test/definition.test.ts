@@ -138,4 +138,24 @@ suite("definition", () => {
 
     assert.ok(locations.some((location) => location.uri.path.endsWith("src/Use.php")), JSON.stringify(locations));
   });
+
+  test("outline lists the class and its members", async () => {
+    const document = await open("src/Outline.php");
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+
+    const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>("vscode.executeDocumentSymbolProvider", document.uri);
+
+    assert.deepStrictEqual(
+      symbols.map((s) => [s.name, s.children.map((c) => c.name)]),
+      [["Outline", ["LIMIT", "run"]]],
+    );
+  });
+
+  test("workspace symbols find a class by camel humps", async () => {
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+
+    const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>("vscode.executeWorkspaceSymbolProvider", "Squ");
+
+    assert.ok(symbols.some((s) => s.name === "Square" && s.location.uri.path.endsWith("src/Square.php")), JSON.stringify(symbols));
+  });
 });

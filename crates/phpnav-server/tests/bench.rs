@@ -185,3 +185,21 @@ fn bench_runs_reference_cases() {
     assert_eq!(report["cases_passed"], 1, "{report}");
     assert!(report["references_ms"].is_number(), "{report}");
 }
+
+#[test]
+fn bench_reports_symbol_search_time() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../phpnav-index/tests/fixtures/names")
+        .canonicalize()
+        .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["symbols_ms"].is_number(), "{report}");
+}

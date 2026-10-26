@@ -71,6 +71,8 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
         document.isDirty ? undefined : next(document, position, options, token),
       prepareCallHierarchy: (document, position, token, next) =>
         document.isDirty ? undefined : next(document, position, token),
+      provideDocumentSymbols: (document, token, next) =>
+        document.isDirty ? undefined : next(document, token),
     },
   };
   client = new LanguageClient("phpNavigator", "PHP Navigator", serverOptions, clientOptions);
