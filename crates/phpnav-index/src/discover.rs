@@ -3,18 +3,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
-use crate::composer::VendorFilter;
+use crate::filter::{PathFilter, SKIPPED_DIR_NAMES};
 
-/// File extensions treated as PHP source, including the Drupal ones.
-pub const PHP_EXTENSIONS: &[&str] = &[
-    "php", "module", "inc", "install", "theme", "profile", "engine",
-];
-
-/// Directories never walked, whatever the exclusions say.
-const SKIPPED_DIR_NAMES: &[&str] = &["node_modules"];
+pub use crate::filter::PHP_EXTENSIONS;
 
 pub struct DiscoverOptions {
     /// Globs relative to the root, such as `vendor/rector/rector/**`.
@@ -42,9 +35,12 @@ impl Default for DiscoverOptions {
 /// reachable through several paths is reported once, under its canonical path when
 /// that path is inside the root.
 pub fn discover(root: &Path, opts: &DiscoverOptions) -> anyhow::Result<Vec<PathBuf>> {
-    let root = root.canonicalize()?;
-    let exclude = build_globset(&opts.exclude)?;
+    let mut filter = PathFilter::new(root, opts)?;
+    Ok(discover_with(&mut filter))
+}
 
+pub(crate) fn discover_with(filter: &mut PathFilter) -> Vec<PathBuf> {
+    let root = filter.root().to_path_buf();
     let walker = WalkBuilder::new(&root)
         .hidden(true)
         .parents(false)
@@ -70,75 +66,41 @@ pub fn discover(root: &Path, opts: &DiscoverOptions) -> anyhow::Result<Vec<PathB
             continue;
         }
         let path = entry.path();
-        if !has_php_extension(path) {
-            continue;
-        }
-        let relative = path.strip_prefix(&root).unwrap_or(path);
-        if exclude.is_match(relative) {
+        if !filter.accepts_path(path) {
             continue;
         }
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        if metadata.len() > opts.max_file_bytes {
+        if metadata.len() > filter.max_file_bytes() {
             continue;
         }
-        let Ok(canonical) = path.canonicalize() else {
+        let Some(canonical) = chosen_path(&root, path) else {
             continue;
-        };
-        let chosen = if canonical.starts_with(&root) {
-            canonical.clone()
-        } else {
-            path.to_path_buf()
         };
         by_canonical
-            .entry(canonical)
+            .entry(canonical.0)
             .and_modify(|current| {
-                if chosen < *current {
-                    *current = chosen.clone();
+                if canonical.1 < *current {
+                    *current = canonical.1.clone();
                 }
             })
-            .or_insert(chosen);
+            .or_insert(canonical.1);
     }
 
-    let mut vendor_filters: HashMap<PathBuf, Option<VendorFilter>> = HashMap::new();
-    let mut files: Vec<PathBuf> = by_canonical
-        .into_values()
-        .filter(|path| {
-            path.ancestors()
-                .skip(1)
-                .take_while(|dir| dir.starts_with(&root))
-                .filter(|dir| dir.file_name().is_some_and(|name| name == "vendor"))
-                .all(|vendor| {
-                    vendor_filters
-                        .entry(vendor.to_path_buf())
-                        .or_insert_with(|| VendorFilter::load(vendor))
-                        .as_ref()
-                        .is_none_or(|filter| filter.allows(path))
-                })
-        })
-        .collect();
+    let mut files: Vec<PathBuf> = by_canonical.into_values().collect();
     files.sort();
-    Ok(files)
+    files
 }
 
-fn has_php_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| PHP_EXTENSIONS.contains(&ext))
-}
-
-/// Invalid patterns are reported on stderr and skipped, so a typo in the settings
-/// does not stop indexing.
-fn build_globset(patterns: &[String]) -> anyhow::Result<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    for pattern in patterns {
-        match Glob::new(pattern) {
-            Ok(glob) => {
-                builder.add(glob);
-            }
-            Err(err) => eprintln!("php-navigator: ignoring exclude pattern {pattern:?}: {err}"),
-        }
-    }
-    Ok(builder.build()?)
+/// The canonical path of `path` and the path the index uses for it: the canonical
+/// path when it is inside the root, otherwise the path as reached.
+pub(crate) fn chosen_path(root: &Path, path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let canonical = path.canonicalize().ok()?;
+    let chosen = if canonical.starts_with(root) {
+        canonical.clone()
+    } else {
+        path.to_path_buf()
+    };
+    Some((canonical, chosen))
 }
