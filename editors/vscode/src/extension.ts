@@ -61,6 +61,8 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
       // different code there, so returning nothing beats a wrong target.
       provideDefinition: (document, position, token, next) =>
         document.isDirty ? undefined : next(document, position, token),
+      provideHover: (document, position, token, next) =>
+        document.isDirty ? undefined : next(document, position, token),
     },
   };
   client = new LanguageClient("phpNavigator", "PHP Navigator", serverOptions, clientOptions);

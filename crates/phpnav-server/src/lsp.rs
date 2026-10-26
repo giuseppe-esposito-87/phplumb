@@ -7,12 +7,14 @@ use std::time::Duration;
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{DidChangeWatchedFiles, LogMessage, Notification as _, Progress};
 use lsp_types::request::{
-    GotoDefinition, RegisterCapability, Request as _, Shutdown, WorkDoneProgressCreate,
+    GotoDefinition, HoverRequest, RegisterCapability, Request as _, Shutdown,
+    WorkDoneProgressCreate,
 };
 use lsp_types::{
     DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions, FileChangeType,
-    FileEvent, FileSystemWatcher, GlobPattern, GotoDefinitionParams, InitializeParams, Location,
-    LogMessageParams, MessageType, NumberOrString, OneOf, Position, ProgressParams,
+    FileEvent, FileSystemWatcher, GlobPattern, GotoDefinitionParams, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, Location, LogMessageParams,
+    MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf, Position, ProgressParams,
     ProgressParamsValue, Range, Registration, RegistrationParams, ServerCapabilities, WatchKind,
     WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
 };
@@ -53,6 +55,7 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
     let params: InitializeParams = serde_json::from_value(params)?;
     let capabilities = ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         ..ServerCapabilities::default()
     };
     connection.initialize_finish(
@@ -167,6 +170,12 @@ impl Server<'_> {
                     ),
                 }
             }
+            HoverRequest::METHOD => match serde_json::from_value::<HoverParams>(request.params) {
+                Ok(params) => Response::new_ok(request.id, hover(self.index.as_mut(), params)),
+                Err(err) => {
+                    Response::new_err(request.id, ErrorCode::InvalidParams as i32, err.to_string())
+                }
+            },
             _ => Response::new_err(
                 request.id,
                 ErrorCode::MethodNotFound as i32,
@@ -408,4 +417,27 @@ fn definition(index: Option<&mut Index>, params: GotoDefinitionParams) -> Vec<Lo
             })
         })
         .collect()
+}
+
+/// Hover markdown for the word under the cursor, read from the file on disk.
+fn hover(index: Option<&mut Index>, params: HoverParams) -> Option<Hover> {
+    let index = index?;
+    let position = params.text_document_position_params;
+    let path = uri_to_path(&position.text_document.uri)?;
+    let source = std::fs::read(&path).ok()?;
+    let lines = LineIndex::new(&source);
+    let offset = lines.offset(&source, position.position.line, position.position.character)?;
+    let found = index.hover(&path, &source, offset)?;
+    let (start_line, start_col) = lines.position(&source, found.start);
+    let (end_line, end_col) = lines.position(&source, found.end);
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: found.markdown,
+        }),
+        range: Some(Range::new(
+            Position::new(start_line, start_col),
+            Position::new(end_line, end_col),
+        )),
+    })
 }

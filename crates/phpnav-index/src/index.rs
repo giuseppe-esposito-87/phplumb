@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use crate::cache::{self, CachedFile};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
+use crate::hover::{self, Hover};
 use crate::infer;
 use crate::members;
 use crate::phpdoc::TypeExpr;
@@ -185,6 +186,13 @@ impl Index {
         }
         stats.elapsed_ms = started.elapsed().as_millis();
         stats
+    }
+
+    /// Hover text for the word at `offset` in `path`, whose current content is
+    /// `source`: the inferred type of a variable, or the signatures and docblock
+    /// summaries of what the word refers to.
+    pub fn hover(&mut self, path: &Path, source: &[u8], offset: u32) -> Option<Hover> {
+        hover::hover(self, path, source, offset)
     }
 
     /// Every class-like declaration named `fqn`, matched case-insensitively.

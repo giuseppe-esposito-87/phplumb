@@ -4,6 +4,7 @@ mod cache;
 mod composer;
 pub mod discover;
 pub mod filter;
+mod hover;
 pub mod index;
 mod infer;
 pub mod line_index;
@@ -12,4 +13,5 @@ pub mod phpdoc;
 pub mod summary;
 
 pub use filter::PathFilter;
+pub use hover::Hover;
 pub use index::{ClassRef, Index, IndexStats, Location, UpdateStats};

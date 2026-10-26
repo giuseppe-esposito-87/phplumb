@@ -83,3 +83,36 @@ fn logs_indexing_at_info_level() {
     );
     client.shutdown();
 }
+
+#[test]
+fn hover_over_stdio() {
+    let (_dir, root_uri) = workspace(&[
+        ("src/Target.php", "<?php\nnamespace App;\nclass Target {}\n"),
+        ("src/Use.php", "<?php\nnamespace App;\nnew Target();\n"),
+    ]);
+
+    let mut client = Client::start();
+    client.initialize(json!({
+        "processId": null,
+        "capabilities": {},
+        "workspaceFolders": [{"uri": root_uri, "name": "test"}],
+    }));
+    let result = client.request(
+        2,
+        "textDocument/hover",
+        json!({
+            "textDocument": {"uri": format!("{root_uri}/src/Use.php")},
+            "position": {"line": 2, "character": 5},
+        }),
+    );
+
+    assert_eq!(result["contents"]["kind"], "markdown");
+    assert!(
+        result["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("class Target"),
+        "{result}"
+    );
+    client.shutdown();
+}

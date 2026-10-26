@@ -59,6 +59,8 @@ suite("definition", () => {
     await editor.edit((edit) => edit.delete(new vscode.Range(2, 0, 2, 14)));
     try {
       assert.deepStrictEqual(await definitions(document, new vscode.Position(2, 4)), []);
+      const hovers = await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", document.uri, new vscode.Position(2, 4));
+      assert.strictEqual(hovers.length, 0);
     } finally {
       await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
     }
@@ -103,5 +105,18 @@ suite("definition", () => {
     } finally {
       fs.writeFileSync(moving, original);
     }
+  });
+
+  test("hover shows the class signature", async () => {
+    const document = await open("src/Use.php");
+    await waitForDefinitions(document, new vscode.Position(2, 14));
+
+    const hovers = await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", document.uri, new vscode.Position(2, 14));
+
+    const text = hovers
+      .flatMap((hover) => hover.contents)
+      .map((content) => (typeof content === "string" ? content : content.value))
+      .join("\n");
+    assert.ok(text.includes("class Target"), text);
   });
 });

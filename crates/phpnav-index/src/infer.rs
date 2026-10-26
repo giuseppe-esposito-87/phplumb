@@ -48,6 +48,27 @@ pub(crate) fn member_at(
     Some((class_names(&receiver), access.kind, access.name.clone()))
 }
 
+/// The variable whose name covers `offset` and its inferred type.
+pub(crate) fn variable_at(
+    index: &Index,
+    summary: &FileSummary,
+    source: &[u8],
+    offset: u32,
+) -> Option<(String, TypeExpr)> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    let (name, start) = facts
+        .variables
+        .iter()
+        .find(|(_, start, end)| *start <= offset && offset <= *end)
+        .map(|(name, start, _)| (name.clone(), *start))?;
+    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ty = ctx.var(&name, start, 0);
+    Some((name, ty))
+}
+
 struct AccessFact<'arena> {
     start: u32,
     end: u32,
