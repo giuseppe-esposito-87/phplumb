@@ -64,3 +64,72 @@ fn update_drops_removed_subtypes() {
 
     assert_eq!(names(index.all_subtypes("I")), set(&["J", "A", "E"]));
 }
+
+fn implementations_at(
+    index: &mut Index,
+    root: &std::path::Path,
+    file: &str,
+    needle: &str,
+) -> BTreeSet<String> {
+    let path = root.join(file);
+    let source = fs::read(&path).unwrap();
+    let offset = source
+        .windows(needle.len())
+        .position(|w| w == needle.as_bytes())
+        .unwrap() as u32;
+    index
+        .implementations(&path, &source, offset)
+        .into_iter()
+        .map(|l| l.path.strip_prefix(root).unwrap().display().to_string())
+        .collect()
+}
+
+#[test]
+fn same_named_classes_do_not_leak_methods() {
+    let (_dir, root, mut index) = workspace(&[
+        (
+            "Shape.php",
+            "namespace P; interface Shape { public function run(); }",
+        ),
+        (
+            "Dup1.php",
+            "namespace P; class Dup implements Shape { public function run() {} }",
+        ),
+        (
+            "Other.php",
+            "namespace P; class Other { public function run() {} }",
+        ),
+        ("Dup2.php", "namespace P; class Dup extends Other {}"),
+    ]);
+
+    assert_eq!(
+        implementations_at(&mut index, &root, "Shape.php", "run"),
+        set(&["Dup1.php"])
+    );
+}
+
+#[test]
+fn implementations_read_the_cursor_file_as_it_is_now() {
+    let (_dir, root, mut index) = workspace(&[
+        ("I.php", "interface I { public function run(); }"),
+        (
+            "A.php",
+            "class A implements I { public function run() {} public function zap() {} }",
+        ),
+    ]);
+    fs::write(
+        root.join("I.php"),
+        "<?php\ninterface I { public function zap(); }",
+    )
+    .unwrap();
+
+    let path = root.join("I.php");
+    let source = fs::read(&path).unwrap();
+    let offset = source.windows(3).position(|w| w == b"zap").unwrap() as u32;
+    let found = index.implementations(&path, &source, offset);
+
+    let a = fs::read(root.join("A.php")).unwrap();
+    let zap = a.windows(3).position(|w| w == b"zap").unwrap() as u32;
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].start, zap);
+}

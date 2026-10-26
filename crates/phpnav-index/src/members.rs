@@ -56,6 +56,10 @@ fn typed_above<'a>(
     let shape = declaration.declaration.class.as_ref()?;
     for ancestor in shape.parent.iter().chain(shape.interfaces.iter()) {
         for (found, member) in find_member(index, ancestor, kind, name) {
+            // A private member is not inherited, so its type says nothing here.
+            if member.is_private {
+                continue;
+            }
             if member.ty.is_some() {
                 return Some((found, member));
             }
@@ -65,6 +69,17 @@ fn typed_above<'a>(
         }
     }
     None
+}
+
+/// The declaration of member `name` that `class` itself uses, following the
+/// lookup order from that declaration rather than from its name.
+pub(crate) fn member_from<'a>(
+    index: &'a Index,
+    class: ClassRef<'a>,
+    kind: MemberKind,
+    name: &str,
+) -> Option<(ClassRef<'a>, &'a Member)> {
+    search(index, class, kind, name)
 }
 
 fn search<'a>(

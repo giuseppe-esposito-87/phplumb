@@ -419,8 +419,21 @@ impl Index {
     /// subtype uses, when it is not the original. Sorted and deduplicated; stale
     /// targets are re-indexed like definitions.
     pub fn implementations(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
-        let targets = self.definition(path, source, offset);
-        let found = self.implementation_targets(&targets);
+        // What the cursor is on is read from the index, so the cursor file must be current.
+        let key = self.filter.under_root(path);
+        if self.ids.contains_key(&key) {
+            self.update(&[key], &[]);
+        }
+        let call = self.call_site(source, offset);
+        let targets = match call {
+            Some(_) => Vec::new(),
+            None => self.definition(path, source, offset),
+        };
+        let compute = |index: &Index| match &call {
+            Some((classes, name)) => index.call_site_targets(classes, name),
+            None => index.implementation_targets(&targets),
+        };
+        let found = compute(self);
         let mut stale: Vec<PathBuf> = found
             .iter()
             .filter(|(location, name)| !holds_name(location, name))
@@ -432,10 +445,67 @@ impl Index {
             return found.into_iter().map(|(location, _)| location).collect();
         }
         self.update(&stale, &[]);
-        self.implementation_targets(&targets)
+        compute(self)
             .into_iter()
             .map(|(location, _)| location)
             .collect()
+    }
+
+    /// The receiver classes and method name when the cursor is on a method call:
+    /// `$x->m()`, `$x?->m()` or `X::m()`. The classes are empty for an unknown receiver.
+    fn call_site(&self, source: &[u8], offset: u32) -> Option<(Vec<String>, String)> {
+        let summary = summarize(source);
+        let covers = |start: u32, end: u32| start <= offset && offset <= end;
+        if let Some(call) = summary.static_refs.iter().find(|r| covers(r.start, r.end)) {
+            if call.kind != MemberKind::Method {
+                return None;
+            }
+            let class = match &call.class {
+                ClassSel::Named(fqn) => Some(fqn.clone()),
+                ClassSel::SelfKw | ClassSel::StaticKw => {
+                    summary.enclosing_class(offset).and_then(|c| c.fqn.clone())
+                }
+                ClassSel::ParentKw => summary.enclosing_class(offset)?.parent.clone(),
+            };
+            return Some((class.into_iter().collect(), call.name.clone()));
+        }
+        match infer::member_at(self, &summary, source, offset)? {
+            (Receiver::Classes(classes), MemberKind::Method, name) => Some((classes, name)),
+            _ => None,
+        }
+    }
+
+    /// For a call on `classes`: every concrete class the receiver can be (each class
+    /// and its subtypes), with the non-abstract method declaration that class uses.
+    fn call_site_targets(&self, classes: &[String], name: &str) -> Vec<(Location, String)> {
+        let mut found: Vec<(Location, String)> = Vec::new();
+        for class in classes {
+            let mut receivers = self.classes_named(class);
+            receivers.extend(self.all_subtypes(class));
+            for receiver in receivers {
+                if !is_concrete(receiver.declaration) {
+                    continue;
+                }
+                let Some((declaring, member)) =
+                    members::member_from(self, receiver, MemberKind::Method, name)
+                else {
+                    continue;
+                };
+                if member.is_abstract {
+                    continue;
+                }
+                let location = Location {
+                    path: declaring.path.to_path_buf(),
+                    start: member.name_start,
+                    end: member.name_end,
+                };
+                if !found.iter().any(|(l, _)| *l == location) {
+                    found.push((location, member.name.to_ascii_lowercase()));
+                }
+            }
+        }
+        found.sort_by(|(a, _), (b, _)| (&a.path, a.start).cmp(&(&b.path, b.start)));
+        found
     }
 
     fn implementation_targets(&self, targets: &[Location]) -> Vec<(Location, String)> {
@@ -482,8 +552,8 @@ impl Index {
                     if !is_concrete(sub.declaration) {
                         continue;
                     }
-                    for (declaring, member) in
-                        self.find_member(&sub.declaration.fqn, MemberKind::Method, &method.name)
+                    if let Some((declaring, member)) =
+                        members::member_from(self, sub, MemberKind::Method, &method.name)
                     {
                         let original = declaring.path == file.path.as_path()
                             && member.name_start == method.name_start;

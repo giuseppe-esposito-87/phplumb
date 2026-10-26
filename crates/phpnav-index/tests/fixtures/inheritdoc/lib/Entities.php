@@ -62,3 +62,30 @@ class SubHolder extends Holder
         $this->list->/*@cursor:first*/first();
     }
 }
+
+class Widget
+{
+    public function spin(): void
+    {
+    }
+}
+
+class PBase
+{
+    /** @return Widget */
+    private function make()
+    {
+    }
+}
+
+class PChild extends PBase
+{
+    private function make()
+    {
+    }
+
+    public function go(): void
+    {
+        $this->make()->/*@cursor:none*/spin();
+    }
+}

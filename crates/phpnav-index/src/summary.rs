@@ -97,6 +97,9 @@ pub struct Member {
     /// An abstract method or an interface method.
     #[serde(default)]
     pub is_abstract: bool,
+    /// Declared `private`: not inherited by subclasses.
+    #[serde(default)]
+    pub is_private: bool,
 }
 
 /// A use of a name, resolved against the file's namespace and imports.
@@ -592,6 +595,7 @@ impl Collector<'_> {
                             ty: None,
                             params: Vec::new(),
                             is_abstract: false,
+                            is_private: false,
                         });
                     }
                 }
@@ -613,6 +617,7 @@ impl Collector<'_> {
                         ty: None,
                         params: Vec::new(),
                         is_abstract: false,
+                        is_private: false,
                     });
                 }
                 ClassLikeMember::Method(method) => self.method(method, in_interface, &mut out),
@@ -666,6 +671,7 @@ impl Collector<'_> {
                 ty: pick_type(doc_type, declared.clone()),
                 params: Vec::new(),
                 is_abstract: false,
+                is_private: has_private(modifiers),
                 name,
             });
         }
@@ -701,6 +707,7 @@ impl Collector<'_> {
                     ty: ty.clone(),
                     params: Vec::new(),
                     is_abstract: false,
+                    is_private: has_private(&param.modifiers),
                 });
             }
         }
@@ -721,6 +728,7 @@ impl Collector<'_> {
             doc,
             params,
             is_abstract: in_interface || has_abstract(&method.modifiers),
+            is_private: has_private(&method.modifiers),
             name,
         });
     }
@@ -754,6 +762,10 @@ fn variable_of<'a>(item: &'a PropertyItem<'_>) -> &'a mago_syntax::cst::DirectVa
         PropertyItem::Abstract(item) => &item.variable,
         PropertyItem::Concrete(item) => &item.variable,
     }
+}
+
+fn has_private(modifiers: &Sequence<'_, Modifier<'_>>) -> bool {
+    modifiers.iter().any(|m| matches!(m, Modifier::Private(_)))
 }
 
 fn has_abstract(modifiers: &Sequence<'_, Modifier<'_>>) -> bool {
