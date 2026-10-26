@@ -115,7 +115,9 @@ impl Index {
             NameKind::Function => {
                 let found = self.lookup(&self.functions, &name.fqn);
                 match name.fqn.rsplit_once('\\') {
-                    Some((_, short)) if found.is_empty() && !name.qualified => {
+                    // PHP falls back to the global function only for unqualified,
+                    // non-imported names.
+                    Some((_, short)) if found.is_empty() && !name.qualified && !name.imported => {
                         self.lookup(&self.functions, short)
                     }
                     _ => found,

@@ -40,7 +40,8 @@ pub struct Declaration {
 }
 
 /// A use of a name, resolved against the file's namespace and imports.
-/// `qualified` is true when the source text of the name contains a backslash.
+/// `qualified` is true when the source text of the name contains a backslash;
+/// `imported` is true when a `use` statement resolved it.
 #[derive(Clone, Debug)]
 pub struct NameRef {
     pub kind: NameKind,
@@ -48,6 +49,7 @@ pub struct NameRef {
     pub start: u32,
     pub end: u32,
     pub qualified: bool,
+    pub imported: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -67,16 +69,16 @@ pub fn summarize(source: &[u8]) -> FileSummary {
     let mut collector = Collector::default();
     SyntaxVisitor.walk_program(program, &mut collector);
 
-    let resolved: HashMap<u32, (u32, &[u8])> = resolved
+    let resolved: HashMap<u32, (u32, &[u8], bool)> = resolved
         .iter()
-        .map(|(start, end, fqn, _)| (start, (end, fqn)))
+        .map(|(start, end, fqn, imported)| (start, (end, fqn, imported)))
         .collect();
 
     let declarations: Vec<Declaration> = collector
         .declarations
         .iter()
         .filter_map(|&(kind, start, end)| {
-            let (_, fqn) = resolved.get(&start)?;
+            let (_, fqn, _) = resolved.get(&start)?;
             Some(Declaration {
                 kind,
                 fqn: to_fqn(fqn),
@@ -96,7 +98,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         .filter(|(start, _)| {
             !collector.not_refs.contains(start) && !declaration_starts.contains(start)
         })
-        .map(|(&start, &(end, fqn))| {
+        .map(|(&start, &(end, fqn, imported))| {
             let kind = if collector.functions.contains(&start) {
                 NameKind::Function
             } else if collector.constants.contains(&start) {
@@ -111,6 +113,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 start,
                 end,
                 qualified: text.contains(&b'\\'),
+                imported,
             }
         })
         .collect();
