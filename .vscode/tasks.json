@@ -1,0 +1,21 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build all",
+      "type": "shell",
+      "command": "cargo build -p phpnav-server && npm --prefix editors/vscode run build",
+      "options": {
+        // Homebrew installs rustup keg-only, outside the default PATH.
+        "env": {
+          "PATH": "/opt/homebrew/opt/rustup/bin:${env:PATH}"
+        }
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

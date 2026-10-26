@@ -1,0 +1,76 @@
+{
+  "name": "php-navigator",
+  "displayName": "PHP Navigator",
+  "description": "Fast code navigation for large PHP and Drupal codebases.",
+  "publisher": "sparkfabrik",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.140.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:php"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "php",
+        "extensions": [".module", ".inc", ".install", ".theme", ".profile", ".engine"]
+      }
+    ],
+    "configuration": {
+      "title": "PHP Navigator",
+      "properties": {
+        "phpNavigator.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path of the php-navigator binary. Empty uses the bundled binary."
+        },
+        "phpNavigator.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Glob patterns, relative to the workspace folder, of paths not to index."
+        },
+        "phpNavigator.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the php-navigator server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "phpNavigator.restartServer",
+        "title": "PHP Navigator: Restart Server"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build && tsc -p tsconfig.test.json",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.2"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26",
+    "@types/vscode": "^1.140.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "~6.0.3"
+  }
+}
