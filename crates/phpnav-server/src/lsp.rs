@@ -3,12 +3,13 @@
 use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
-use lsp_types::notification::{Notification as _, Progress};
+use lsp_types::notification::{LogMessage, Notification as _, Progress};
 use lsp_types::request::{GotoDefinition, Request as _, WorkDoneProgressCreate};
 use lsp_types::{
-    GotoDefinitionParams, InitializeParams, Location, NumberOrString, OneOf, Position,
-    ProgressParams, ProgressParamsValue, Range, ServerCapabilities, WorkDoneProgress,
-    WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
+    GotoDefinitionParams, InitializeParams, Location, LogMessageParams, MessageType,
+    NumberOrString, OneOf, Position, ProgressParams, ProgressParamsValue, Range,
+    ServerCapabilities, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams,
+    WorkDoneProgressEnd,
 };
 use phpnav_index::discover::DiscoverOptions;
 use phpnav_index::line_index::LineIndex;
@@ -116,10 +117,10 @@ fn build_index(
     };
     let (index, stats) = Index::build(root, &opts)?;
     let summary = summary_message(&stats);
-    eprintln!(
-        "php-navigator: {summary} ({} declarations)",
-        stats.declarations
-    );
+    log_info(
+        connection,
+        format!("{summary} ({} declarations)", stats.declarations),
+    )?;
 
     if reports_progress {
         send_progress(
@@ -131,6 +132,20 @@ fn build_index(
         )?;
     }
     Ok(index)
+}
+
+/// Sends a message to the client's log at info level.
+fn log_info(connection: &Connection, message: String) -> anyhow::Result<()> {
+    connection
+        .sender
+        .send(Message::Notification(Notification::new(
+            LogMessage::METHOD.to_string(),
+            LogMessageParams {
+                typ: MessageType::INFO,
+                message,
+            },
+        )))?;
+    Ok(())
 }
 
 fn summary_message(stats: &IndexStats) -> String {
