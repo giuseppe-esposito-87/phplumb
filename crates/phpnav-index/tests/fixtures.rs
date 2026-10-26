@@ -169,3 +169,8 @@ fn scopes() {
 fn implementations() {
     run_implementation_fixture("implementations");
 }
+
+#[test]
+fn inheritdoc() {
+    run_fixture("inheritdoc");
+}

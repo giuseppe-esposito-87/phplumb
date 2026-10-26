@@ -303,6 +303,17 @@ impl Index {
             .collect()
     }
 
+    /// The nearest typed declaration of a member above `class`, for members with no
+    /// type of their own.
+    pub(crate) fn typed_ancestor(
+        &self,
+        class: &str,
+        kind: MemberKind,
+        name: &str,
+    ) -> Option<(ClassRef<'_>, &Member)> {
+        members::typed_ancestor(self, class, kind, name)
+    }
+
     /// Targets of members of `classes`, each with the name expected at its range.
     fn member_targets(
         &self,

@@ -803,7 +803,16 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         let mut types = Vec::new();
         for class in class_names(receiver) {
             let static_class = static_class.unwrap_or(&class);
-            for (declaring, member) in self.index.find_member(&class, kind, name) {
+            for (found, member) in self.index.find_member(&class, kind, name) {
+                let typed = match &member.ty {
+                    Some(_) => Some((found, member)),
+                    None => self
+                        .index
+                        .typed_ancestor(&found.declaration.fqn, kind, name),
+                };
+                let Some((declaring, member)) = typed else {
+                    continue;
+                };
                 let Some(ty) = &member.ty else {
                     continue;
                 };

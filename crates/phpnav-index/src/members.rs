@@ -29,6 +29,44 @@ pub(crate) fn find_member<'a>(
     found
 }
 
+/// The nearest declaration of member `name` above `class` whose type is known:
+/// along the parent chain first, then through the interfaces. Members documented
+/// with `{@inheritdoc}` and no type of their own take this one's type.
+pub(crate) fn typed_ancestor<'a>(
+    index: &'a Index,
+    class: &str,
+    kind: MemberKind,
+    name: &str,
+) -> Option<(ClassRef<'a>, &'a Member)> {
+    let mut visited: HashSet<String> = HashSet::new();
+    typed_above(index, class, kind, name, &mut visited)
+}
+
+fn typed_above<'a>(
+    index: &'a Index,
+    class: &str,
+    kind: MemberKind,
+    name: &str,
+    visited: &mut HashSet<String>,
+) -> Option<(ClassRef<'a>, &'a Member)> {
+    if !visited.insert(class.to_ascii_lowercase()) {
+        return None;
+    }
+    let declaration = index.classes_named(class).into_iter().next()?;
+    let shape = declaration.declaration.class.as_ref()?;
+    for ancestor in shape.parent.iter().chain(shape.interfaces.iter()) {
+        for (found, member) in find_member(index, ancestor, kind, name) {
+            if member.ty.is_some() {
+                return Some((found, member));
+            }
+            if let Some(hit) = typed_above(index, &found.declaration.fqn, kind, name, visited) {
+                return Some(hit);
+            }
+        }
+    }
+    None
+}
+
 fn search<'a>(
     index: &'a Index,
     root: ClassRef<'a>,
