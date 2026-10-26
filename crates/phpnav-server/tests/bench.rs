@@ -115,3 +115,37 @@ fn bench_reports_member_coverage() {
     assert!(accesses >= 30, "{report}");
     assert!(resolved > 0 && resolved < accesses, "{report}");
 }
+
+#[test]
+fn bench_runs_implementation_cases() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../phpnav-index/tests/fixtures/implementations")
+        .canonicalize()
+        .unwrap();
+    let shapes = std::fs::read_to_string(root.join("lib/Shapes.php")).unwrap();
+    let at = format!("lib/Shapes.php:{}", position_of(&shapes, "Lonely"));
+    let cases_dir = tempfile::TempDir::new().unwrap();
+    let cases = cases_dir.path().join("cases.toml");
+    std::fs::write(
+        &cases,
+        format!(
+            "[[case]]\nname = \"no subclasses\"\nkind = \"implementation\"\nat = \"{at}\"\nexpect = []\n\n\
+             [[case]]\nname = \"wrong on purpose\"\nkind = \"implementation\"\nat = \"{at}\"\nexpect = [\"lib/Shapes.php:1:1\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .arg("--cases")
+        .arg(&cases)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["cases_passed"], 1, "{report}");
+    assert!(report["implementation_ms"].is_number(), "{report}");
+}

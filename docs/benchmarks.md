@@ -2,6 +2,20 @@
 
 Results of `php-navigator bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-26, step 2c implementations and type hierarchy
+
+Same machine and project. Members documented with `{@inheritdoc}` and no type of their own now take the nearest typed ancestor's type.
+
+| Metric                                  | Value                                             | Target        |
+| --------------------------------------- | ------------------------------------------------- | ------------- |
+| Cold index                              | 2.4 to 3.9 s                                      | under 10 s    |
+| Peak resident memory                    | 354 MB                                            | under 1024 MB |
+| Slowest implementation case             | 7 ms (195 implementations of `ProcessPluginBase`) | under 1 s     |
+| Definition and implementation cases     | 42 passed, 0 failed                               | all pass      |
+| Member coverage in `web/modules/custom` | 41,894 of 46,204 accesses (90.7%)                 | 88.6% before  |
+
+The implementation cases were checked against an independent text scan of `extends` and `implements` across core, contrib and custom code; every difference was a limit of the scan (classes sharing a short name), not of the engine.
+
 ## 2026-10-26, step 2b members and hover
 
 Same machine and project. The index now records class shapes (parents, interfaces, traits and typed members); signatures and docblocks are read from the file when hover needs them.

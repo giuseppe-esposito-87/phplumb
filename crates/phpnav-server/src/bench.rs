@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use phpnav_index::discover::{DiscoverOptions, discover};
 use phpnav_index::line_index::LineIndex;
-use phpnav_index::{Index, member_access_offsets};
+use phpnav_index::{Index, Location, member_access_offsets};
 use serde::{Deserialize, Serialize};
 
 pub struct BenchArgs {
@@ -79,6 +79,9 @@ pub struct Report {
     update_one_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     update_1000_ms: Option<u128>,
+    /// The slowest implementation case, when the case file has any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    implementation_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     coverage: Option<Coverage>,
     peak_rss_mb: u64,
@@ -124,6 +127,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         warm_start_ms: None,
         update_one_ms: None,
         update_1000_ms: None,
+        implementation_ms: None,
         coverage: None,
         peak_rss_mb: 0,
         cases_passed: 0,
@@ -159,7 +163,14 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
     for case in file.cases {
         let expected: BTreeSet<String> = case.expect.iter().cloned().collect();
         let actual = match case.kind.as_str() {
-            "definition" => definition_case(&mut index, &root, &case.at),
+            "definition" => query_case(&mut index, &root, &case.at, Index::definition),
+            "implementation" => {
+                let started = std::time::Instant::now();
+                let found = query_case(&mut index, &root, &case.at, Index::implementations);
+                let elapsed = started.elapsed().as_millis();
+                report.implementation_ms = report.implementation_ms.max(Some(elapsed));
+                found
+            }
             other => Err(anyhow::anyhow!("unsupported case kind {other}")),
         };
         match actual {
@@ -218,14 +229,19 @@ fn coverage(
     })
 }
 
-fn definition_case(index: &mut Index, root: &Path, at: &str) -> anyhow::Result<BTreeSet<String>> {
+/// Runs `query` at the case position and renders its targets as case positions.
+fn query_case(
+    index: &mut Index,
+    root: &Path,
+    at: &str,
+    query: fn(&mut Index, &Path, &[u8], u32) -> Vec<Location>,
+) -> anyhow::Result<BTreeSet<String>> {
     let (path, line, col) = parse_position(root, at)?;
     let source = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let offset = LineIndex::new(&source)
         .offset(&source, line - 1, col - 1)
         .with_context(|| format!("{at} is outside the file"))?;
-    index
-        .definition(&path, &source, offset)
+    query(index, &path, &source, offset)
         .into_iter()
         .map(|location| {
             let text = std::fs::read(&location.path)?;
