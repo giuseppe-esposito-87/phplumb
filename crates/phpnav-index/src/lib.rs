@@ -13,6 +13,7 @@ mod members;
 pub mod phpdoc;
 mod references;
 pub mod summary;
+pub mod symbols;
 
 pub use calls::{CallItem, CallKind, Calls};
 pub use filter::PathFilter;
