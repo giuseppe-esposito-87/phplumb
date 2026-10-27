@@ -2,6 +2,20 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 4b.2 property assignments
+
+Same machine and project. A property's type now adds what its class and the class's parents assign to it, in the constructor, in `create()` and in any other method.
+
+| Metric                                  | Value                             | Target        |
+| --------------------------------------- | --------------------------------- | ------------- |
+| Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | above 42,452  |
+| Cold index                              | 3.9 to 5.0 s                      | under 10 s    |
+| Peak resident memory                    | 401 to 418 MB                     | under 1024 MB |
+| Slowest references case                 | 172 to 305 ms                     | under 1 s     |
+| All cases                               | 60 passed, 0 failed               | all pass      |
+
+New cases cover a method after `load()` on a storage kept by a constructor, one kept by `create()`, and one kept by a constructor in core views. Custom code on this project calls `getStorage()` inline and declares every property type, so its coverage gains only 3 accesses. References of `EntityStorageInterface::load` grew from 1,156 to 1,379, mostly in tests that reach storages through `$this->container`, which their base class assigns.
+
 ## 2026-10-27, step 4b Drupal entities
 
 Same machine and project. The Drupal module reads entity types from attributes (65 outside tests) and annotations (62), types `getStorage('id')` as that entity type's storage, and `load()`, `create()` and `loadMultiple()` on it as the entity class.
