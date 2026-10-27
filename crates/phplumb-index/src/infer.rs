@@ -142,7 +142,7 @@ pub(crate) fn string_argument_at(
 }
 
 /// A string literal that is the value of an array key, and the call whose
-/// positional argument is that array, if any.
+/// positional argument is the array holding it, if any.
 pub(crate) struct KeyedString {
     pub key: String,
     pub value: String,
@@ -150,7 +150,8 @@ pub(crate) struct KeyedString {
 }
 
 /// The innermost `'key' => 'value'` array element whose key and value are string
-/// literals and whose value covers `offset`.
+/// literals and whose value covers `offset`; failing that, an assignment
+/// `$a[...]['key'] = 'value'` with a string literal key and value.
 pub(crate) fn keyed_string_at(
     index: &Index,
     summary: &FileSummary,
@@ -178,15 +179,51 @@ pub(crate) fn keyed_string_at(
     }
     let mut elements: Vec<&KeyValueArrayElement<'_>> = Vec::new();
     KeyValues.walk_program(program, &mut elements);
+    let mut assignments: Vec<&Assignment<'_>> = Vec::new();
+    OffsetAssignments.walk_program(program, &mut assignments);
     elements
         .iter()
         .rev()
         .find_map(|element| keyed_pair(element, offset))
+        .or_else(|| {
+            assignments
+                .iter()
+                .find_map(|assignment| offset_pair(assignment, offset))
+        })
         .map(|(key, value)| KeyedString {
             key,
             value,
             call: None,
         })
+}
+
+/// The key and value of `$a[...]['key'] = 'value'` when the value covers `offset`.
+fn offset_pair(assignment: &Assignment<'_>, offset: u32) -> Option<(String, String)> {
+    let Expression::ArrayAccess(access) = assignment.lhs else {
+        return None;
+    };
+    let Expression::Literal(Literal::String(key)) = access.index else {
+        return None;
+    };
+    let Expression::Literal(Literal::String(_)) = assignment.rhs else {
+        return None;
+    };
+    let value = string_literal_at(assignment.rhs, offset)?;
+    Some((String::from_utf8_lossy(key.value?).into_owned(), value))
+}
+
+struct OffsetAssignments;
+
+impl<'ast, 'arena> Walker<'ast, 'arena, Vec<&'ast Assignment<'arena>>> for OffsetAssignments {
+    fn walk_in_assignment(
+        &self,
+        assignment: &'ast Assignment<'arena>,
+        found: &mut Vec<&'ast Assignment<'arena>>,
+    ) {
+        if assignment.operator.is_assign() && matches!(assignment.lhs, Expression::ArrayAccess(_)) {
+            found.push(assignment);
+        }
+    }
 }
 
 /// The key and value of an element of the array `expression` whose value covers

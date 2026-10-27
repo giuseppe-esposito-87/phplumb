@@ -4,7 +4,7 @@ Results of `phplumb bench` on the reference Drupal project. The case file lives 
 
 ## 2026-10-27, step 4d Drupal plugins
 
-Same machine and project. The Drupal module reads plugin types from the constructors of plugin managers and plugins from each type's subdirectory of every module and core component namespace, by attribute or annotation.
+Same machine and project. The Drupal module reads plugin types from the constructors of plugin managers and plugins from each type's subdirectory of every module and core component namespace, by attribute or annotation, imported or not, and managers with the older constructor that reads annotations only.
 
 | Metric                                  | Value                             | Target          |
 | --------------------------------------- | --------------------------------- | --------------- |
@@ -13,9 +13,9 @@ Same machine and project. The Drupal module reads plugin types from the construc
 | Peak resident memory                    | 421 to 453 MB                     | under 1024 MB   |
 | Slowest definition case                 | 29 to 101 ms                      | under 1 s       |
 | Slowest implementation case             | 79 to 98 ms                       |                 |
-| All cases                               | 76 passed, 0 failed               | all pass        |
+| All cases                               | 77 passed, 0 failed               | all pass        |
 
-New cases cover `#type` values in custom forms, field types in `BaseFieldDefinition::create()`, a widget and a formatter in display options, a custom constraint added to a narrowed field config, `createInstance()` on a contrib plugin manager, and the plugins of a core plugin manager. An entity type constraint added through `$entity_types['node']->addConstraint()` stays unresolved, because the type of an array element is not inferred.
+New cases cover `#type` values in custom forms, field types in `BaseFieldDefinition::create()`, a widget and a formatter in display options, a custom constraint added to a narrowed field config, `createInstance()` on a contrib plugin manager, the plugins of a core plugin manager, and the plugins of a contrib manager with the older constructor, whose annotations are not imported. An entity type constraint added through `$entity_types['node']->addConstraint()` stays unresolved, because the type of an array element is not inferred.
 
 ## 2026-10-27, step 4c Drupal hooks
 

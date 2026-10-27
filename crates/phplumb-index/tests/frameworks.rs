@@ -816,7 +816,10 @@ fn plugin_types_come_from_manager_constructors() {
         .map(|t| {
             format!(
                 "{} {} {} {}",
-                t.manager, t.subdir, t.attribute, t.annotation
+                t.manager,
+                t.subdir,
+                t.attribute.as_deref().unwrap_or("-"),
+                t.annotation.as_deref().unwrap_or("-")
             )
         })
         .filter(|t| {
@@ -841,6 +844,7 @@ fn plugins_are_read_from_attributes_and_annotations() {
         plugin_list(index.drupal().unwrap().plugins_of(BLOCKS)),
         vec![
             "gadget_block Drupal\\gadget\\Plugin\\Block\\GadgetBlock",
+            "unimported_block Drupal\\gadget\\Plugin\\Block\\UnimportedBlock",
             "menu_block Drupal\\mymodule\\Plugin\\Block\\MenuBlock",
             "my_block Drupal\\mymodule\\Plugin\\Block\\MyBlock",
         ]
@@ -994,8 +998,9 @@ fn implementations_in(file: &str, needle: &str) -> Vec<String> {
     found
 }
 
-const BLOCK_PLUGINS: [&str; 3] = [
+const BLOCK_PLUGINS: [&str; 4] = [
     "modules/contrib/gadget/src/Plugin/Block/GadgetBlock.php: GadgetBlock",
+    "modules/contrib/gadget/src/Plugin/Block/UnimportedBlock.php: UnimportedBlock",
     "modules/custom/mymodule/src/Plugin/Block/MenuBlock.php: MenuBlock",
     "modules/custom/mymodule/src/Plugin/Block/MyBlock.php: MyBlock",
 ];
@@ -1035,5 +1040,67 @@ fn implementations_of_a_generic_manager_interface_have_no_plugins() {
     assert!(
         !found.iter().any(|f| f.contains("/Plugin/Block/")),
         "{found:?}"
+    );
+}
+
+#[test]
+fn old_signature_managers_read_annotations_only() {
+    let (_root, index) = drupal_fixture();
+    let drupal = index.drupal().unwrap();
+    let foo = "Drupal\\gadget\\FooManager";
+
+    let found = drupal
+        .plugin_types()
+        .iter()
+        .find(|t| t.manager == foo)
+        .unwrap();
+    assert_eq!(found.attribute, None);
+    assert_eq!(
+        found.annotation.as_deref(),
+        Some("Drupal\\gadget\\Annotation\\Foo")
+    );
+    assert_eq!(
+        plugin_list(drupal.plugins(foo, "foo_one")),
+        vec!["foo_one Drupal\\gadget\\Plugin\\Foo\\FooOne"]
+    );
+    assert!(drupal.plugins(foo, "attr_in_foo").is_empty());
+}
+
+#[test]
+fn implementations_of_a_non_plugin_interface_have_no_plugins() {
+    let found = implementations_in(
+        "core/lib/Drupal/Core/Block/BlockManager.php",
+        "interface Describ",
+    );
+
+    assert!(
+        found.iter().any(|f| f.ends_with(": BlockManager")),
+        "{found:?}"
+    );
+    assert!(
+        found.iter().any(|f| f.ends_with(": DescribedThing")),
+        "{found:?}"
+    );
+    assert!(
+        !found.iter().any(|f| f.contains("/Plugin/Block/")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn entity_type_constraints_lead_to_their_plugins() {
+    assert_eq!(
+        definitions_in(PLUGIN_CALLS, "type->addConstraint('Uniq"),
+        vec![
+            "core/lib/Drupal/Core/Validation/Plugin/Validation/Constraint/UniqueFieldConstraint.php: UniqueFieldConstraint"
+        ]
+    );
+}
+
+#[test]
+fn render_element_types_set_by_offset_lead_to_their_element_class() {
+    assert_eq!(
+        definitions_in(PLUGIN_ARRAYS, "['#type'] = 'textf"),
+        vec!["core/lib/Drupal/Core/Render/Element/Textfield.php: Textfield"]
     );
 }

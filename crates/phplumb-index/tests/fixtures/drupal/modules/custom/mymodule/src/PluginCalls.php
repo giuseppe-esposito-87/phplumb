@@ -15,4 +15,9 @@ class PluginCalls
         $blocks->hasDefinition('nothing_here');
         BaseFieldDefinition::create('string')->addConstraint('UniqueField');
     }
+
+    public function entity(\Drupal\Core\Entity\EntityTypeInterface $type): void
+    {
+        $type->addConstraint('UniqueField');
+    }
 }

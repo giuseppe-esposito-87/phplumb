@@ -9,7 +9,15 @@ interface BlockManagerInterface extends PluginManagerInterface
 {
 }
 
-class BlockManager extends DefaultPluginManager implements BlockManagerInterface
+interface Describable
+{
+}
+
+class DescribedThing implements Describable
+{
+}
+
+class BlockManager extends DefaultPluginManager implements BlockManagerInterface, Describable
 {
     public function __construct(\Traversable $namespaces, $cache_backend, $module_handler)
     {

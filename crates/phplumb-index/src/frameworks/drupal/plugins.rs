@@ -18,8 +18,12 @@ pub struct PluginType {
     /// The plugin manager class.
     pub manager: String,
     pub subdir: String,
-    pub attribute: String,
-    pub annotation: String,
+    /// The attribute class plugins declare themselves with; none when the manager
+    /// reads annotations only.
+    pub attribute: Option<String>,
+    /// The annotation class plugins declare themselves with; none when the manager
+    /// reads attributes only.
+    pub annotation: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,13 +45,17 @@ const WIDGETS: &str = "Drupal\\Core\\Field\\WidgetPluginManager";
 const FORMATTERS: &str = "Drupal\\Core\\Field\\FormatterPluginManager";
 const BASE_FIELD: &str = "Drupal\\Core\\Field\\BaseFieldDefinition";
 /// Classes whose `addConstraint` takes a constraint plugin id.
-const CONSTRAINED: [&str; 2] = [
+const CONSTRAINED: [&str; 3] = [
+    "Drupal\\Core\\Entity\\EntityTypeInterface",
     "Drupal\\Core\\TypedData\\DataDefinitionInterface",
     "Drupal\\Core\\Field\\FieldConfigInterface",
 ];
 /// Plugin manager methods whose first argument is a plugin id.
 const BY_ID: [&str; 3] = ["createInstance", "getDefinition", "hasDefinition"];
-const DEFAULT_ATTRIBUTE: &str = "Drupal\\Component\\Plugin\\Attribute\\Plugin";
+const ATTRIBUTE_INTERFACE: &str = "Drupal\\Component\\Plugin\\Attribute\\AttributeInterface";
+const PLUGIN_MANAGER: &str = "Drupal\\Component\\Plugin\\PluginManagerInterface";
+/// Where unimported annotations resolve besides the annotation class's namespace.
+const ANNOTATION_NAMESPACE: &str = "Drupal\\Component\\Annotation";
 const DEFAULT_ANNOTATION: &str = "Drupal\\Component\\Annotation\\Plugin";
 
 /// Plugin types, and the plugins of each by lowercased manager.
@@ -198,12 +206,13 @@ impl Plugins {
                 .find(|t| t.manager.eq_ignore_ascii_case(class))
             {
                 Some(own) => vec![own.manager.as_str()],
-                None => self
+                None if is_a(index, class, &[PLUGIN_MANAGER]) => self
                     .types
                     .iter()
                     .filter(|t| is_a(index, &t.manager, &[class.as_str()]))
                     .map(|t| t.manager.as_str())
                     .collect(),
+                None => return None,
             };
             if managers.len() != 1 {
                 return None;
@@ -258,13 +267,23 @@ impl Plugins {
                 continue;
             };
             files.insert(manager.path.to_path_buf());
+            let class = |position: usize| {
+                argument(position).map(|name| name.trim_start_matches('\\').to_string())
+            };
+            // As the default constructor does: argument 4 names an attribute when it
+            // is one, else it is the annotation of a manager reading annotations only.
+            let (attribute, annotation) = match class(4) {
+                Some(attribute) if is_attribute(index, &attribute) => (Some(attribute), class(5)),
+                fourth => (
+                    None,
+                    Some(fourth.unwrap_or_else(|| DEFAULT_ANNOTATION.to_string())),
+                ),
+            };
             types.push(PluginType {
                 manager: fqn.clone(),
                 subdir,
-                attribute: argument(4).unwrap_or_else(|| DEFAULT_ATTRIBUTE.to_string()),
-                annotation: argument(5)
-                    .map(|a| a.trim_start_matches('\\').to_string())
-                    .unwrap_or_else(|| DEFAULT_ANNOTATION.to_string()),
+                attribute,
+                annotation,
             });
         }
         types.sort_by(|a, b| a.manager.cmp(&b.manager));
@@ -330,26 +349,28 @@ impl Plugins {
             }
             for prefix in prefixes {
                 for plugin_type in by_subdir.get(prefix).into_iter().flatten() {
-                    let mut matches = |metadata: &Metadata, target: &str| {
-                        if metadata.name.eq_ignore_ascii_case(target) {
+                    let mut matches = |name: &str, target: &str| {
+                        if name.eq_ignore_ascii_case(target) {
                             return true;
                         }
                         *is_a_cache
-                            .entry((
-                                metadata.name.to_ascii_lowercase(),
-                                target.to_ascii_lowercase(),
-                            ))
-                            .or_insert_with(|| is_a(index, &metadata.name, &[target]))
+                            .entry((name.to_ascii_lowercase(), target.to_ascii_lowercase()))
+                            .or_insert_with(|| is_a(index, name, &[target]))
                     };
-                    let attribute = shape
-                        .metadata
-                        .iter()
-                        .find(|m| !m.annotation && matches(m, &plugin_type.attribute));
-                    let declared = attribute.or_else(|| {
+                    let attribute = plugin_type.attribute.as_deref().and_then(|target| {
                         shape
                             .metadata
                             .iter()
-                            .find(|m| m.annotation && matches(m, &plugin_type.annotation))
+                            .find(|m| !m.annotation && matches(&m.name, target))
+                    });
+                    let declared = attribute.or_else(|| {
+                        let target = plugin_type.annotation.as_deref()?;
+                        shape.metadata.iter().find(|m| {
+                            m.annotation
+                                && annotation_names(index, &m.name, target)
+                                    .iter()
+                                    .any(|name| matches(name, target))
+                        })
                     });
                     let Some(id) = declared.and_then(plugin_id) else {
                         continue;
@@ -373,6 +394,34 @@ impl Plugins {
         }
         self.by_manager = found;
     }
+}
+
+/// Whether a class named as a manager's argument 4 is an attribute: it is or
+/// extends the attribute interface, or, when it is not indexed, it is not in an
+/// `Annotation` namespace.
+fn is_attribute(index: &Index, class: &str) -> bool {
+    if index.has_class(class) {
+        return is_a(index, class, &[ATTRIBUTE_INTERFACE]);
+    }
+    !class.to_ascii_lowercase().contains("\\annotation\\")
+}
+
+/// The classes an annotation name can be. An imported name is itself; a name that
+/// names no indexed class may be unimported, which Drupal resolves in the namespace
+/// of the type's annotation class and in the component annotation namespace.
+fn annotation_names(index: &Index, name: &str, target: &str) -> Vec<String> {
+    if index.has_class(name) {
+        return vec![name.to_string()];
+    }
+    let short = name.rsplit('\\').next().unwrap_or(name);
+    let own = target
+        .rsplit_once('\\')
+        .map_or("", |(namespace, _)| namespace);
+    vec![
+        name.to_string(),
+        format!("{own}\\{short}"),
+        format!("{ANNOTATION_NAMESPACE}\\{short}"),
+    ]
 }
 
 /// Plugin classes as targets, each with its class name as the expected text.

@@ -8,6 +8,7 @@ class PluginArrays
     public function form(): array
     {
         $form['name'] = ['#type' => 'textfield', '#title' => 'Name'];
+        $form['other']['#type'] = 'textfield';
         $plain = ['type' => 'string'];
         BaseFieldDefinition::create('string')
             ->setDisplayOptions('form', ['type' => 'string_textfield'])
