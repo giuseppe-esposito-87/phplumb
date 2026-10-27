@@ -380,3 +380,116 @@ defined('LIMIT');
         vec!["helper", "lib\\bar", "lib\\foo", "limit", "run"]
     );
 }
+
+fn metadata_of<'a>(summary: &'a FileSummary, fqn: &str) -> &'a [phplumb_index::metadata::Metadata] {
+    &summary
+        .declarations
+        .iter()
+        .find(|d| d.fqn == fqn)
+        .unwrap()
+        .class
+        .as_ref()
+        .unwrap()
+        .metadata
+}
+
+#[test]
+fn attributes_are_recorded_with_resolved_values() {
+    use phplumb_index::metadata::MetaValue;
+    let summary = summarize(&php("namespace App;
+use Drupal\\Core\\Entity\\Attribute\\ContentEntityType;
+use App\\Storage;
+#[ContentEntityType(
+  id: 'thing',
+  label: new T('X'),
+  handlers: ['storage' => Storage::class, 'form' => ['default' => F::class]],
+)]
+class Thing {}"));
+
+    let metadata = metadata_of(&summary, "App\\Thing");
+
+    assert_eq!(metadata.len(), 1);
+    let entity = &metadata[0];
+    assert_eq!(
+        entity.name,
+        "Drupal\\Core\\Entity\\Attribute\\ContentEntityType"
+    );
+    assert_eq!(
+        entity.argument("id"),
+        Some(&MetaValue::String("thing".to_string()))
+    );
+    let Some(MetaValue::List(handlers)) = entity.argument("handlers") else {
+        panic!("{:?}", entity.argument("handlers"));
+    };
+    assert_eq!(
+        handlers[0],
+        (
+            Some("storage".to_string()),
+            MetaValue::Class("App\\Storage".to_string())
+        )
+    );
+    let Some(MetaValue::Nested(label)) = entity.argument("label") else {
+        panic!("{:?}", entity.argument("label"));
+    };
+    assert_eq!(label.name, "App\\T");
+}
+
+#[test]
+fn annotations_are_recorded_with_resolved_names() {
+    use phplumb_index::metadata::MetaValue;
+    let summary = summarize(&php("namespace App;
+use Drupal\\Core\\Entity\\Annotation\\ContentEntityType;
+/**
+ * Docs about the thing.
+ *
+ * @ContentEntityType(
+ *   id = \"thing\",
+ *   label = @Translation(\"Thing\"),
+ *   handlers = {
+ *     \"storage\" = \"App\\Storage\",
+ *   },
+ *   revisionable = TRUE,
+ * )
+ */
+class Thing {}"));
+
+    let metadata = metadata_of(&summary, "App\\Thing");
+
+    assert_eq!(metadata.len(), 1, "{metadata:?}");
+    let entity = &metadata[0];
+    assert_eq!(
+        entity.name,
+        "Drupal\\Core\\Entity\\Annotation\\ContentEntityType"
+    );
+    assert_eq!(
+        entity.argument("id"),
+        Some(&MetaValue::String("thing".to_string()))
+    );
+    assert_eq!(
+        entity.argument("revisionable"),
+        Some(&MetaValue::Bool(true))
+    );
+    let Some(MetaValue::List(handlers)) = entity.argument("handlers") else {
+        panic!("{:?}", entity.argument("handlers"));
+    };
+    assert_eq!(
+        handlers[0],
+        (
+            Some("storage".to_string()),
+            MetaValue::String("App\\Storage".to_string())
+        )
+    );
+    let Some(MetaValue::Nested(label)) = entity.argument("label") else {
+        panic!("{:?}", entity.argument("label"));
+    };
+    assert_eq!(label.name, "App\\Translation");
+}
+
+#[test]
+fn broken_annotations_give_nothing() {
+    let summary = summarize(&php(
+        "/**\n * @ContentEntityType(\n *   id = \"x\",\n */\nclass Broken {}",
+    ));
+
+    assert_eq!(metadata_of(&summary, "Broken"), &[]);
+}

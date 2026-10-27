@@ -9,19 +9,20 @@ use mago_names::resolver::NameResolver;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Access, AnonymousClass, Argument, ArrayElement, ArrowFunction, Attribute, Class,
+    Access, AnonymousClass, Argument, ArrayElement, ArrowFunction, Attribute, AttributeList, Class,
     ClassConstantAccess, ClassLikeConstantSelector, ClassLikeMember, ClassLikeMemberSelector,
     Closure, Constant, ConstantAccess, Enum, EnumCaseItem, Expression, Function, FunctionCall,
     FunctionLikeParameterList, FunctionLikeReturnTypeHint, FunctionPartialApplication, Hint,
     Instantiation, Interface, Literal, Method, MethodCall, Modifier, Namespace, NullSafeMethodCall,
-    NullSafePropertyAccess, Program, Property, PropertyAccess, PropertyItem, Sequence,
-    StaticMethodCall, StaticMethodPartialApplication, StaticPropertyAccess, Trait,
+    NullSafePropertyAccess, PartialArgument, Program, Property, PropertyAccess, PropertyItem,
+    Sequence, StaticMethodCall, StaticMethodPartialApplication, StaticPropertyAccess, Trait,
     TraitUseAdaptation, TraitUseSpecification, Use, UseItems, UseType, Variable,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
 use serde::{Deserialize, Serialize};
 
+use crate::metadata::{self, MetaValue, Metadata};
 use crate::phpdoc::{NameContext, TypeExpr, parse_docblock, parse_type};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -122,6 +123,9 @@ pub struct ClassShape {
     /// Lowercased method names that trait `as` adaptations add.
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// The class-like's attributes, then its docblock annotations.
+    #[serde(default)]
+    pub metadata: Vec<Metadata>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -405,6 +409,12 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 aliases: shape.aliases,
                 members: shape.members,
                 is_abstract: shape.is_abstract,
+                metadata: shape
+                    .attributes
+                    .into_iter()
+                    .filter_map(|meta| meta.resolve(&fqn_at))
+                    .chain(shape.annotations)
+                    .collect(),
             });
             Some(Declaration {
                 kind: pending.kind,
@@ -587,6 +597,60 @@ struct PendingShape {
     aliases: Vec<String>,
     members: Vec<Member>,
     is_abstract: bool,
+    attributes: Vec<PendingMeta>,
+    annotations: Vec<Metadata>,
+}
+
+/// An attribute before names are resolved: offsets of the names the resolver knows.
+struct PendingMeta {
+    name: u32,
+    end: u32,
+    span: (u32, u32),
+    arguments: Vec<(Option<String>, PendingValue)>,
+}
+
+enum PendingValue {
+    Ready(MetaValue),
+    /// `X::class`: the offset of `X`.
+    Class(u32),
+    List(Vec<(Option<String>, PendingValue)>),
+    Nested(PendingMeta),
+}
+
+impl PendingMeta {
+    fn resolve(self, fqn_at: &dyn Fn(u32) -> Option<String>) -> Option<Metadata> {
+        Some(Metadata {
+            name: fqn_at(self.name)?,
+            arguments: self
+                .arguments
+                .into_iter()
+                .map(|(key, value)| (key, value.resolve(fqn_at)))
+                .collect(),
+            start: self.name,
+            end: self.end,
+            span: self.span,
+        })
+    }
+}
+
+impl PendingValue {
+    fn resolve(self, fqn_at: &dyn Fn(u32) -> Option<String>) -> MetaValue {
+        match self {
+            PendingValue::Ready(value) => value,
+            PendingValue::Class(offset) => {
+                fqn_at(offset).map_or(MetaValue::Other, MetaValue::Class)
+            }
+            PendingValue::List(entries) => MetaValue::List(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, value.resolve(fqn_at)))
+                    .collect(),
+            ),
+            PendingValue::Nested(meta) => meta
+                .resolve(fqn_at)
+                .map_or(MetaValue::Other, |m| MetaValue::Nested(Box::new(m))),
+        }
+    }
 }
 
 /// The class of a static access before names are resolved: the offset of a name the
@@ -607,6 +671,7 @@ struct ClassHead {
     left_brace: u32,
     parent: Option<u32>,
     interfaces: Vec<u32>,
+    attributes: Vec<PendingMeta>,
 }
 
 struct Collector<'a> {
@@ -695,6 +760,117 @@ impl Collector<'_> {
             Expression::LegacyArray(array) => self.guard_callable(array.elements.iter()),
             _ => {}
         }
+    }
+
+    /// The attributes of a class-like, with the names left to resolve.
+    fn attributes(&self, lists: &Sequence<'_, AttributeList<'_>>) -> Vec<PendingMeta> {
+        lists
+            .iter()
+            .flat_map(|list| list.attributes.iter())
+            .map(|attribute| {
+                let arguments = attribute
+                    .argument_list
+                    .iter()
+                    .flat_map(|list| list.arguments.iter())
+                    .filter_map(|argument| match argument {
+                        PartialArgument::Positional(a) => Some((None, self.meta_value(a.value))),
+                        PartialArgument::Named(a) => Some((
+                            Some(String::from_utf8_lossy(a.name.value).into_owned()),
+                            self.meta_value(a.value),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                let name = attribute.name.span();
+                let span = attribute.span();
+                PendingMeta {
+                    name: name.start.offset,
+                    end: name.end.offset,
+                    span: (span.start.offset, span.end.offset),
+                    arguments,
+                }
+            })
+            .collect()
+    }
+
+    fn meta_value(&self, expression: &Expression<'_>) -> PendingValue {
+        match expression {
+            Expression::Literal(Literal::String(literal)) => {
+                PendingValue::Ready(literal.value.map_or(MetaValue::Other, |v| {
+                    MetaValue::String(String::from_utf8_lossy(v).into_owned())
+                }))
+            }
+            Expression::Literal(Literal::True(_)) => PendingValue::Ready(MetaValue::Bool(true)),
+            Expression::Literal(Literal::False(_)) => PendingValue::Ready(MetaValue::Bool(false)),
+            Expression::Literal(Literal::Integer(_) | Literal::Float(_)) => {
+                let span = expression.span();
+                PendingValue::Ready(MetaValue::Number(
+                    self.text(span.start.offset, span.end.offset),
+                ))
+            }
+            Expression::Access(Access::ClassConstant(access)) => {
+                let is_class = matches!(&access.constant,
+                    ClassLikeConstantSelector::Identifier(name) if name.value.eq_ignore_ascii_case(b"class"));
+                match (is_class, access.class) {
+                    (true, Expression::Identifier(class)) => {
+                        PendingValue::Class(class.span().start.offset)
+                    }
+                    _ => PendingValue::Ready(MetaValue::Other),
+                }
+            }
+            Expression::Array(array) => self.meta_list(array.elements.iter()),
+            Expression::LegacyArray(array) => self.meta_list(array.elements.iter()),
+            Expression::Instantiation(instantiation) => {
+                let Expression::Identifier(class) = instantiation.class else {
+                    return PendingValue::Ready(MetaValue::Other);
+                };
+                let arguments = instantiation
+                    .argument_list
+                    .iter()
+                    .flat_map(|list| list.arguments.iter())
+                    .map(|argument| match argument {
+                        Argument::Positional(a) => (None, self.meta_value(a.value)),
+                        Argument::Named(a) => (
+                            Some(String::from_utf8_lossy(a.name.value).into_owned()),
+                            self.meta_value(a.value),
+                        ),
+                    })
+                    .collect();
+                let name = class.span();
+                let span = instantiation.span();
+                PendingValue::Nested(PendingMeta {
+                    name: name.start.offset,
+                    end: name.end.offset,
+                    span: (span.start.offset, span.end.offset),
+                    arguments,
+                })
+            }
+            _ => PendingValue::Ready(MetaValue::Other),
+        }
+    }
+
+    fn meta_list<'e>(&self, elements: impl Iterator<Item = &'e ArrayElement<'e>>) -> PendingValue {
+        PendingValue::List(
+            elements
+                .filter_map(|element| match element {
+                    ArrayElement::KeyValue(entry) => {
+                        let key = match entry.key {
+                            Expression::Literal(Literal::String(literal)) => literal
+                                .value
+                                .map(|v| String::from_utf8_lossy(v).into_owned()),
+                            Expression::Literal(Literal::Integer(_)) => {
+                                let span = entry.key.span();
+                                Some(self.text(span.start.offset, span.end.offset))
+                            }
+                            _ => None,
+                        };
+                        Some((key, self.meta_value(entry.value)))
+                    }
+                    ArrayElement::Value(entry) => Some((None, self.meta_value(entry.value))),
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 
     /// Records `class_alias(X::class, 'Alias')` as a class-like named `Alias`, with no
@@ -832,6 +1008,14 @@ impl Collector<'_> {
 
     fn class_like(&mut self, head: ClassHead, members: &Sequence<'_, ClassLikeMember<'_>>) {
         let (members, traits, aliases) = self.members(members, head.kind == SymbolKind::Interface);
+        let annotations =
+            get_docblock_before_position(self.program.trivia.as_slice(), head.node_start)
+                .map(|trivia| {
+                    let offset = trivia.span.start.offset;
+                    let doc = String::from_utf8_lossy(trivia.value);
+                    metadata::annotations(&doc, offset, &self.names.at(offset))
+                })
+                .unwrap_or_default();
         self.pending.push(Pending {
             kind: head.kind,
             start: head.name.0,
@@ -849,6 +1033,8 @@ impl Collector<'_> {
                 aliases,
                 members,
                 is_abstract: head.is_abstract || head.kind == SymbolKind::Interface,
+                attributes: head.attributes,
+                annotations,
             }),
         });
     }
@@ -1210,6 +1396,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: class.left_brace.start.offset,
                 parent,
                 interfaces,
+                attributes: c.attributes(&class.attribute_lists),
             },
             &class.members,
         );
@@ -1282,6 +1469,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: interface.left_brace.start.offset,
                 parent: None,
                 interfaces,
+                attributes: c.attributes(&interface.attribute_lists),
             },
             &interface.members,
         );
@@ -1299,6 +1487,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: r#trait.left_brace.start.offset,
                 parent: None,
                 interfaces: Vec::new(),
+                attributes: c.attributes(&r#trait.attribute_lists),
             },
             &r#trait.members,
         );
@@ -1321,6 +1510,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: r#enum.left_brace.start.offset,
                 parent: None,
                 interfaces,
+                attributes: c.attributes(&r#enum.attribute_lists),
             },
             &r#enum.members,
         );

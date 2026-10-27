@@ -150,3 +150,30 @@ fn save_cache_creates_its_directory() {
 
     assert!(nested.exists());
 }
+
+#[test]
+fn metadata_survives_the_cache() {
+    let ws = Workspace::new();
+    ws.write(
+        "src/Thing.php",
+        "<?php\nnamespace App;\n#[Marker(id: 'thing')]\nclass Thing {}\n",
+    );
+    let (cold, _) = ws.build(&DiscoverOptions::default());
+    cold.save_cache(&ws.cache).unwrap();
+    let metadata = |index: &Index| {
+        index.classes_named("App\\Thing")[0]
+            .declaration
+            .class
+            .as_ref()
+            .unwrap()
+            .metadata
+            .clone()
+    };
+    let before = metadata(&cold);
+
+    let (warm, stats) = ws.build(&DiscoverOptions::default());
+
+    assert!(stats.reused > 0);
+    assert_eq!(before.len(), 1);
+    assert_eq!(metadata(&warm), before);
+}

@@ -13,6 +13,7 @@ pub mod index;
 mod infer;
 pub mod line_index;
 mod members;
+pub mod metadata;
 pub mod phpdoc;
 mod references;
 pub mod summary;
