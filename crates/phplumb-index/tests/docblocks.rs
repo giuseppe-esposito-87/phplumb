@@ -10,7 +10,9 @@ use tempfile::TempDir;
 
 const BASE: &str =
     "<?php\nnamespace Lib;\n\nclass Base\n{\n    public function inherited() {}\n}\n";
-const FOO: &str = "<?php\nnamespace Lib;\n\nclass Foo extends Base implements FooInterface\n{\n    const LIMIT = 1;\n    public $name;\n    public function run() {}\n}\n";
+const FOO: &str = "<?php\nnamespace Lib;\n\nclass Foo extends Base implements FooInterface\n{\n    const LIMIT = 1;\n    /**\n     * @see self::run()\n     */\n    public $name;\n    public function run() {}\n}\n";
+const FUNCTIONS: &str = "<?php\nnamespace Lib;\n\nfunction helper() {}\n";
+const GLOBAL: &str = "<?php\n\nfunction global_helper() {}\n";
 const FOO_INTERFACE: &str = "<?php\nnamespace Lib;\n\ninterface FooInterface\n{\n}\n";
 const FOO_EXCEPTION: &str =
     "<?php\nnamespace Lib;\n\nclass FooException extends \\Exception\n{\n}\n";
@@ -90,6 +92,21 @@ class Consumer
     {
         return $this;
     }
+
+    /**
+     * @see Foo::run() for the Bar::stop() case
+     * @see Foo::$name
+     * @see \Lib\Foo::LIMIT
+     * @covers \Lib\Foo::run
+     * @see Foo::inherited()
+     * @see Foo::missing()
+     * @see https://example.com/a::b()
+     * @see \Lib\helper()
+     * @see global_helper()
+     */
+    public function members()
+    {
+    }
 }
 "#;
 
@@ -116,6 +133,8 @@ fn workspace() -> (TempDir, PathBuf, Index) {
         ("lib/Sub/Thing.php", THING),
         ("Use.php", USE),
         ("Braced.php", BRACED),
+        ("lib/functions.php", FUNCTIONS),
+        ("global.php", GLOBAL),
     ];
     for (path, content) in files {
         let path = root.join(path);
@@ -387,4 +406,110 @@ fn docblock_names_are_not_diagnosed() {
         .collect();
 
     assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn see_members_lead_to_their_declarations() {
+    let (_dir, root, mut index) = workspace();
+    let cases = [
+        ("Use.php", "@see Foo::run() for", "run", "lib/Foo.php: run"),
+        ("Use.php", "@see Foo::$name", "$name", "lib/Foo.php: name"),
+        (
+            "Use.php",
+            "@see \\Lib\\Foo::LIMIT",
+            "LIMIT",
+            "lib/Foo.php: LIMIT",
+        ),
+        (
+            "Use.php",
+            "@covers \\Lib\\Foo::run",
+            "run",
+            "lib/Foo.php: run",
+        ),
+        (
+            "Use.php",
+            "@see Foo::inherited()",
+            "inherited",
+            "lib/Base.php: inherited",
+        ),
+        ("lib/Foo.php", "@see self::run()", "run", "lib/Foo.php: run"),
+    ];
+    for (file, needle, word, expected) in cases {
+        assert_eq!(
+            definitions(&mut index, &root, file, needle, word),
+            vec![expected],
+            "{needle}"
+        );
+    }
+}
+
+#[test]
+fn see_functions_lead_to_their_declarations() {
+    let (_dir, root, mut index) = workspace();
+
+    assert_eq!(
+        definitions(
+            &mut index,
+            &root,
+            "Use.php",
+            "@see \\Lib\\helper()",
+            "helper"
+        ),
+        vec!["lib/functions.php: helper"]
+    );
+    assert_eq!(
+        definitions(
+            &mut index,
+            &root,
+            "Use.php",
+            "@see global_helper()",
+            "global_helper"
+        ),
+        vec!["global.php: global_helper"]
+    );
+}
+
+#[test]
+fn see_words_that_are_not_members_lead_nowhere() {
+    let (_dir, root, mut index) = workspace();
+    let cases = [
+        ("@see Foo::missing()", "missing"),
+        ("https://example.com/a::b()", "b()"),
+        ("the Bar::stop() case", "stop"),
+    ];
+    for (needle, word) in cases {
+        assert_eq!(
+            definitions(&mut index, &root, "Use.php", needle, word),
+            Vec::<String>::new(),
+            "{needle}"
+        );
+    }
+}
+
+#[test]
+fn references_of_a_method_include_see_mentions() {
+    let (_dir, root, mut index) = workspace();
+
+    let found = references(&mut index, &root, "lib/Foo.php", "function run", "run");
+
+    let in_use = found.iter().filter(|f| *f == "Use.php: run").count();
+    assert_eq!(in_use, 3, "{found:?}");
+    assert!(found.contains(&"lib/Foo.php: run".to_string()), "{found:?}");
+}
+
+#[test]
+fn hover_on_a_see_member_shows_the_member() {
+    let (_dir, root, mut index) = workspace();
+    let path = root.join("Use.php");
+    let source = fs::read(&path).unwrap();
+    let at = offset(&root, "Use.php", "@see Foo::run() for", "run");
+
+    let hover = index.hover(&path, &source, at).map(|h| h.markdown);
+
+    assert!(
+        hover
+            .as_deref()
+            .is_some_and(|h| h.contains("Lib\\Foo::run()")),
+        "{hover:?}"
+    );
 }

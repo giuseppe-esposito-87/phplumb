@@ -435,6 +435,99 @@ pub fn doc_class_names(text: &str, names: &dyn NameContext) -> Vec<(usize, usize
     found
 }
 
+/// How a `@see`-like value names a member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SeeKind {
+    /// `Class::name()`
+    Method,
+    /// `Class::$name`
+    Property,
+    /// `Class::NAME`: a method or a constant.
+    MethodOrConstant,
+}
+
+/// A member or function a `@see`-like value names, as written, with byte ranges
+/// relative to the docblock text.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SeeName<'a> {
+    /// The range covers the member name, `$` included.
+    Member {
+        class: &'a str,
+        name: &'a str,
+        start: usize,
+        end: usize,
+        kind: SeeKind,
+    },
+    /// `name()`, the range covering the name.
+    Function {
+        name: &'a str,
+        start: usize,
+        end: usize,
+    },
+}
+
+/// The members and functions the `@see`-like values of a docblock name.
+pub(crate) fn doc_see_names(text: &str) -> Vec<SeeName<'_>> {
+    let mut found = Vec::new();
+    for (start, line) in doc_lines(text) {
+        let Some((tag, rest)) = doc_tag(line) else {
+            continue;
+        };
+        if !SEE_TAGS.contains(&tag) {
+            continue;
+        }
+        let value = split_type(rest).0;
+        if value.contains("://") {
+            continue;
+        }
+        let value_start = start + offset_in(line, value);
+        match value.split_once("::") {
+            Some((class, member)) if is_name(class) => {
+                let written = member.strip_suffix("()").unwrap_or(member);
+                let (name, kind) = match written.strip_prefix('$') {
+                    Some(name) => (name, SeeKind::Property),
+                    None if written.len() < member.len() => (written, SeeKind::Method),
+                    None => (written, SeeKind::MethodOrConstant),
+                };
+                if is_identifier(name) {
+                    let start = value_start + offset_in(value, written);
+                    found.push(SeeName::Member {
+                        class,
+                        name,
+                        start,
+                        end: start + written.len(),
+                        kind,
+                    });
+                }
+            }
+            None => {
+                if let Some(name) = value.strip_suffix("()").filter(|name| is_name(name)) {
+                    found.push(SeeName::Function {
+                        name,
+                        start: value_start,
+                        end: value_start + name.len(),
+                    });
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    found
+}
+
+/// Whether `text` is a PHP identifier.
+fn is_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
+        && chars.all(|c| c == '_' || c.is_alphanumeric())
+}
+
+/// Whether `text` is a class or function name, qualified or not.
+fn is_name(text: &str) -> bool {
+    let text = text.strip_prefix('\\').unwrap_or(text);
+    !text.is_empty() && text.split('\\').all(is_identifier)
+}
+
 /// The content of each docblock line with its byte offset in `text`: without the
 /// leading `/**` or `*`, the closing `*/` and surrounding whitespace.
 fn doc_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {

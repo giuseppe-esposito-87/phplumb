@@ -23,7 +23,10 @@ use mago_syntax::walker::Walker;
 use serde::{Deserialize, Serialize};
 
 use crate::metadata::{self, MetaValue, Metadata};
-use crate::phpdoc::{NameContext, TypeExpr, doc_class_names, parse_docblock, parse_type};
+use crate::phpdoc::{
+    NameContext, SeeKind, SeeName, TypeExpr, doc_class_names, doc_see_names, parse_docblock,
+    parse_type,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
@@ -301,9 +304,12 @@ pub struct FileSummary {
     pub declarations: Vec<Declaration>,
     pub names: Vec<NameRef>,
     /// Names written in docblocks, sorted by start: classes in type positions and
-    /// `@see`-like values. Kept apart from `names`, which diagnostics and call
-    /// hierarchy read.
+    /// `@see`-like values, and functions in `@see`-like values. Kept apart from
+    /// `names`, which diagnostics and call hierarchy read.
     pub doc_names: Vec<NameRef>,
+    /// Members named in `@see`-like docblock values, sorted by start. Kept apart
+    /// from `static_refs`.
+    pub doc_members: Vec<DocMemberRef>,
     pub has_parse_errors: bool,
     pub file_names: FileNames,
     pub static_refs: Vec<StaticRef>,
@@ -346,29 +352,95 @@ impl FileSummary {
 
 /// Parses `source` and returns its declarations and resolved names. Parsing is
 /// tolerant: a syntax error does not hide the declarations around it.
-/// The class names every docblock of `program` writes, resolved in the docblock's
-/// scope. A docblock that is not valid UTF-8 is skipped, so ranges stay exact.
-fn doc_names(program: &Program<'_>, names: &FileNames) -> Vec<NameRef> {
-    let mut found: Vec<NameRef> = program
+/// The names every docblock of `program` writes, resolved in the docblock's scope:
+/// classes and functions, and members. A docblock that is not valid UTF-8 is
+/// skipped, so ranges stay exact.
+fn doc_names(program: &Program<'_>, names: &FileNames) -> (Vec<NameRef>, Vec<DocMemberRef>) {
+    let mut found: Vec<NameRef> = Vec::new();
+    let mut members: Vec<DocMemberRef> = Vec::new();
+    let docblocks = program
         .trivia
         .iter()
         .filter(|t| t.kind == TriviaKind::DocBlockComment)
-        .filter_map(|t| Some((t.span.start.offset, std::str::from_utf8(t.value).ok()?)))
-        .flat_map(|(start, text)| {
-            doc_class_names(text, &names.at(start))
-                .into_iter()
-                .map(move |(s, e, fqn)| NameRef {
-                    kind: NameKind::ClassLike,
-                    fqn,
-                    start: start + s as u32,
-                    end: start + e as u32,
-                    qualified: text[s..e].contains('\\'),
-                    imported: false,
-                })
-        })
-        .collect();
+        .filter_map(|t| Some((t.span.start.offset, std::str::from_utf8(t.value).ok()?)));
+    for (start, text) in docblocks {
+        let scope = names.at(start);
+        let at = |offset: usize| start + offset as u32;
+        for (s, e, fqn) in doc_class_names(text, &scope) {
+            found.push(NameRef {
+                kind: NameKind::ClassLike,
+                fqn,
+                start: at(s),
+                end: at(e),
+                qualified: text[s..e].contains('\\'),
+                imported: false,
+            });
+        }
+        for see in doc_see_names(text) {
+            match see {
+                SeeName::Member {
+                    class,
+                    name,
+                    start: s,
+                    end: e,
+                    kind,
+                } => members.push(DocMemberRef {
+                    class: match class.to_ascii_lowercase().as_str() {
+                        "self" => ClassSel::SelfKw,
+                        "static" => ClassSel::StaticKw,
+                        "parent" => ClassSel::ParentKw,
+                        _ => ClassSel::Named(match class.strip_prefix('\\') {
+                            Some(qualified) => qualified.to_string(),
+                            None => scope.resolve_class(class),
+                        }),
+                    },
+                    name: name.to_string(),
+                    kind: match kind {
+                        SeeKind::Method => Some(MemberKind::Method),
+                        SeeKind::Property => Some(MemberKind::Property),
+                        SeeKind::MethodOrConstant => None,
+                    },
+                    start: at(s),
+                    end: at(e),
+                }),
+                SeeName::Function {
+                    name,
+                    start: s,
+                    end: e,
+                } => {
+                    let fqn = match name.strip_prefix('\\') {
+                        Some(qualified) => qualified.to_string(),
+                        None if name.contains('\\') => scope.resolve_class(name),
+                        None if scope.namespace().is_empty() => name.to_string(),
+                        None => format!("{}\\{name}", scope.namespace()),
+                    };
+                    found.push(NameRef {
+                        kind: NameKind::Function,
+                        fqn,
+                        start: at(s),
+                        end: at(e),
+                        qualified: name.contains('\\'),
+                        imported: false,
+                    });
+                }
+            }
+        }
+    }
     found.sort_by_key(|n| n.start);
-    found
+    members.sort_by_key(|m| m.start);
+    (found, members)
+}
+
+/// A member named in a `@see`-like docblock value: `Foo::bar()`, `Foo::$bar`,
+/// `Foo::BAR`. The range covers the member name as written, `$` included.
+#[derive(Clone, Debug)]
+pub struct DocMemberRef {
+    pub class: ClassSel,
+    pub name: String,
+    /// `None` for `Foo::NAME` without parentheses: a method or a constant.
+    pub kind: Option<MemberKind>,
+    pub start: u32,
+    pub end: u32,
 }
 
 pub fn summarize(source: &[u8]) -> FileSummary {
@@ -517,7 +589,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         })
         .collect();
 
-    let doc_names = doc_names(program, &collector.names);
+    let (doc_names, doc_members) = doc_names(program, &collector.names);
 
     let mut keys: HashSet<u64> = HashSet::new();
     for name in names.iter().chain(&doc_names) {
@@ -551,6 +623,9 @@ pub fn summarize(source: &[u8]) -> FileSummary {
             keys.insert(RefKey::Member(member.name.clone()).hash());
         }
     }
+    for member in &doc_members {
+        keys.insert(RefKey::Member(member.name.clone()).hash());
+    }
     let accessed = collector.member_names.iter();
     for name in accessed.chain(static_refs.iter().map(|r: &StaticRef| &r.name)) {
         keys.insert(RefKey::Member(name.clone()).hash());
@@ -572,6 +647,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         declarations,
         names,
         doc_names,
+        doc_members,
         has_parse_errors: program.has_errors(),
         file_names: collector.names,
         static_refs,

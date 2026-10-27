@@ -159,6 +159,26 @@ fn scan_file(
                     });
                 }
             }
+            for doc in &summary.doc_members {
+                let kind_matches = match doc.kind {
+                    Some(doc_kind) => doc_kind == *kind,
+                    None => matches!(kind, MemberKind::Method | MemberKind::Constant),
+                };
+                if !kind_matches || !same_name(&doc.name, name, *kind) {
+                    continue;
+                }
+                let as_static = crate::summary::StaticRef {
+                    kind: *kind,
+                    name: doc.name.clone(),
+                    start: doc.start,
+                    end: doc.end,
+                    class: doc.class.clone(),
+                };
+                let targets = static_targets(index, path, summary, &as_static, *kind, name);
+                if targets.iter().any(|(target, _)| target == own) {
+                    found.push(at(doc.start, doc.end));
+                }
+            }
             for (start, end, receiver, access_kind) in
                 infer::member_accesses_named(index, summary, source, name)
             {

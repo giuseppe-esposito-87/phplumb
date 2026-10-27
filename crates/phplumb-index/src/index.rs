@@ -1344,6 +1344,26 @@ impl Index {
                 .map(|class| self.member_targets(&[class], member.kind, &member.name))
                 .unwrap_or_default();
         }
+        if let Some(member) = summary.doc_members.iter().find(|r| covers(r.start, r.end)) {
+            let Some(class) = class_of(&member.class) else {
+                return Vec::new();
+            };
+            return match member.kind {
+                Some(kind) => self.member_targets(&[class], kind, &member.name),
+                None => {
+                    let methods = self.member_targets(
+                        std::slice::from_ref(&class),
+                        MemberKind::Method,
+                        &member.name,
+                    );
+                    if methods.is_empty() {
+                        self.member_targets(&[class], MemberKind::Constant, &member.name)
+                    } else {
+                        methods
+                    }
+                }
+            };
+        }
         if let Some((receiver, kind, name)) = infer::member_at(self, &summary, source, offset) {
             return match receiver {
                 Receiver::Classes(classes) => self.member_targets(&classes, kind, &name),
