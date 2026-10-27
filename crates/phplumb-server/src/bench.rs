@@ -19,6 +19,9 @@ pub struct BenchArgs {
     pub cache: Option<PathBuf>,
     /// A directory relative to the root whose member accesses are measured.
     pub coverage: Option<PathBuf>,
+    /// A directory relative to the root whose files are checked for broken
+    /// references, whatever their location.
+    pub diagnostics: Option<PathBuf>,
     pub exclude: Vec<String>,
 }
 
@@ -28,6 +31,7 @@ impl BenchArgs {
         let mut cases = None;
         let mut cache = None;
         let mut coverage = None;
+        let mut diagnostics = None;
         let mut exclude = Vec::new();
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -37,6 +41,7 @@ impl BenchArgs {
                 "--cases" => cases = Some(PathBuf::from(value()?)),
                 "--cache" => cache = Some(PathBuf::from(value()?)),
                 "--coverage" => coverage = Some(PathBuf::from(value()?)),
+                "--diagnostics" => diagnostics = Some(PathBuf::from(value()?)),
                 "--exclude" => exclude.push(value()?.clone()),
                 other => bail!("unknown bench option {other}"),
             }
@@ -46,6 +51,7 @@ impl BenchArgs {
             cases,
             cache,
             coverage,
+            diagnostics,
             exclude,
         })
     }
@@ -92,12 +98,24 @@ pub struct Report {
     references_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     coverage: Option<Coverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostics: Option<Diagnostics>,
     /// The slowest of the workspace symbol queries in `SYMBOL_QUERIES`.
     symbols_ms: u128,
     peak_rss_mb: u64,
     cases_passed: usize,
     cases_failed: usize,
     failures: Vec<Failure>,
+}
+
+/// Broken references found under a directory: each as `path:line:column message`,
+/// and the slowest file.
+#[derive(Serialize)]
+struct Diagnostics {
+    files: usize,
+    count: usize,
+    slowest_file_ms: u128,
+    entries: Vec<String>,
 }
 
 /// How many member accesses under a directory reach at least one definition.
@@ -140,6 +158,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         implementation_ms: None,
         references_ms: None,
         coverage: None,
+        diagnostics: None,
         symbols_ms: 0,
         peak_rss_mb: 0,
         cases_passed: 0,
@@ -163,6 +182,9 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
     }
     if let Some(dir) = &args.coverage {
         report.coverage = Some(coverage(&mut index, &root, &root.join(dir), &opts)?);
+    }
+    if let Some(dir) = &args.diagnostics {
+        report.diagnostics = Some(diagnostics(&index, &root, &root.join(dir), &opts)?);
     }
     for query in SYMBOL_QUERIES {
         let started = std::time::Instant::now();
@@ -217,6 +239,48 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
                     actual: vec![format!("error: {err:#}")],
                 });
             }
+        }
+    }
+    Ok(report)
+}
+
+fn diagnostics(
+    index: &Index,
+    root: &Path,
+    dir: &Path,
+    opts: &DiscoverOptions,
+) -> anyhow::Result<Diagnostics> {
+    let dir = dir.canonicalize()?;
+    let mut report = Diagnostics {
+        files: 0,
+        count: 0,
+        slowest_file_ms: 0,
+        entries: Vec::new(),
+    };
+    for path in discover(root, opts)?
+        .into_iter()
+        .filter(|p| p.starts_with(&dir))
+    {
+        let source = std::fs::read(&path)?;
+        let started = std::time::Instant::now();
+        let found = index.diagnostics(&path, &source);
+        report.slowest_file_ms = report.slowest_file_ms.max(started.elapsed().as_millis());
+        report.files += 1;
+        report.count += found.len();
+        let lines = LineIndex::new(&source);
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        for diagnostic in found {
+            let (line, col) = lines.position(&source, diagnostic.start);
+            report.entries.push(format!(
+                "{relative}:{}:{} {}",
+                line + 1,
+                col + 1,
+                diagnostic.message
+            ));
         }
     }
     Ok(report)

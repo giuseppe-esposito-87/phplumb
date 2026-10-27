@@ -2,6 +2,29 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 3 broken reference diagnostics
+
+Same machine and project. `phplumb bench --diagnostics <dir>` checks every file below a directory, whatever the editor's project-code scope, and lists each diagnostic.
+
+| Area                  | Files  | Diagnostics | In `tests` | Slowest file |
+| --------------------- | ------ | ----------- | ---------- | ------------ |
+| `web/modules/custom`  | 1,228  | 88          | 0          | 1 ms         |
+| `web/core`            | 11,473 | 127         | 111        | 47 ms        |
+| `web/modules/contrib` | 6,596  | 266         | 95         | 26 ms        |
+
+Cold index 3.9 s, peak memory 400 MB, 48 of 48 cases, member coverage 90.7%.
+
+**Custom code: no false alarms.** All 88 diagnostics come from one module that uses three Composer packages (a SOAP client, its encoding library and a type library) that the project does not install; those classes and functions exist nowhere on disk.
+
+**Core and contrib** were used to hunt false alarms, since that code works. The first run found four classes of false alarm, each now covered by a fixture case and fixed:
+
+- A class declared twice (a static-analysis stub and the real class): member lookups now try every declaration of a name, which also fixes go to definition through such a parent.
+- A receiver typed only by a wrong docblock, or holding a test mock: a method on any receiver other than `$this` is flagged only when no indexed or built-in class declares a method with that name.
+- Methods added by trait `as` aliases.
+- Example code in `*.api.php` hook documentation.
+
+What remains are references to modules and libraries the project does not install (optional integrations), Drupal 7 and Drush 8 functions in legacy files, and methods no class declares at all, such as `ModuleHandlerInterface::getImplementations()`, which Drupal 11 removed. One known false alarm class remains: classes that a vendor package loads with `include` instead of through Composer's autoloader (geoPHP's `Geometry`), because the vendor filter does not index those files. It does not occur in this project's custom code.
+
 ## 2026-10-27, step 2e Linux binary
 
 Static musl builds in Docker Desktop on the same Mac, with the project copied into the container's own filesystem. Bind-mounting the project from macOS instead raises the cold index to 18 to 19 seconds on both architectures, so that number measures Docker Desktop's file sharing, not the engine.

@@ -203,3 +203,44 @@ fn bench_reports_symbol_search_time() {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(report["symbols_ms"].is_number(), "{report}");
 }
+
+#[test]
+fn bench_reports_diagnostics() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../phplumb-index/tests/fixtures/diagnostics")
+        .canonicalize()
+        .unwrap();
+    let markers: usize = discover(&root, &DiscoverOptions::default())
+        .unwrap()
+        .iter()
+        .map(|path| {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .matches("/*@broken*/")
+                .count()
+        })
+        .sum();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .arg("--diagnostics")
+        .arg(".")
+        .output()
+        .unwrap();
+
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"]["count"], markers, "{report}");
+    assert!(
+        report["diagnostics"]["slowest_file_ms"].is_number(),
+        "{report}"
+    );
+    let entries = report["diagnostics"]["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), markers);
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.as_str().unwrap().contains("Undefined class 'App\\Ghost'"))
+    );
+}
