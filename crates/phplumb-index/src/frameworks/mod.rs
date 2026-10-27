@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::diagnostics::Diagnostic;
 use crate::index::{Index, Location};
 use crate::metadata::Metadata;
 use crate::phpdoc::TypeExpr;
@@ -77,6 +78,11 @@ pub struct FoundCall {
     /// with `*` for each part that is not literal, one per element of an array, or
     /// `*` for any other value.
     pub shapes: Vec<Vec<String>>,
+    /// The byte range of each positional argument that is a string literal (inside
+    /// its quotes) or `X::class`, by position.
+    pub ranges: Vec<Option<(u32, u32)>>,
+    /// The receiver's type; `Other` when unknown.
+    pub receiver: TypeExpr,
     /// The method or function holding the call: `Class::method` with the declaring
     /// class's fully qualified name, or the function's fully qualified name.
     pub caller: Option<String>,
@@ -122,6 +128,9 @@ pub trait Framework: Send + Sync {
         value: &str,
         call: Option<(&FrameworkCall<'_>, usize)>,
     ) -> Vec<(Location, String)>;
+    /// Broken references the framework finds in the PHP file at `path`, whose
+    /// current content is `source`.
+    fn diagnostics(&self, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic>;
     /// Implementations the framework adds to the class-like `class`, each with the
     /// text expected at its range.
     fn class_implementations(&self, index: &Index, class: &str) -> Vec<(Location, String)>;

@@ -133,17 +133,7 @@ impl Routes {
         argument: usize,
         value: &str,
     ) -> Vec<(Location, String)> {
-        let takes_route = call.targets.iter().any(|target| {
-            let CallTarget::Method { class, name } = target else {
-                return false;
-            };
-            ROUTE_CALLS.iter().any(|(owner, method, position)| {
-                *position == argument
-                    && name.eq_ignore_ascii_case(method)
-                    && is_a(index, class, &[owner])
-            })
-        });
-        if !takes_route {
+        if !takes_route(index, call.targets, argument) {
             return Vec::new();
         }
         self.targets(value)
@@ -163,6 +153,25 @@ impl Routes {
             })
             .collect()
     }
+}
+
+/// Whether position `argument` of a call to `targets` takes a route name.
+pub(crate) fn takes_route(index: &Index, targets: &[CallTarget], argument: usize) -> bool {
+    targets.iter().any(|target| {
+        let CallTarget::Method { class, name } = target else {
+            return false;
+        };
+        ROUTE_CALLS.iter().any(|(owner, method, position)| {
+            *position == argument
+                && name.eq_ignore_ascii_case(method)
+                && is_a(index, class, &[owner])
+        })
+    })
+}
+
+/// The names of the methods taking a route name.
+pub(crate) fn route_methods() -> Vec<&'static str> {
+    ROUTE_CALLS.iter().map(|(_, method, _)| *method).collect()
 }
 
 /// The routes of one file; nothing when it does not parse.

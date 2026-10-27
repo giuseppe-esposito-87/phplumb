@@ -341,7 +341,14 @@ impl Index {
         if is_yaml(path) {
             return Vec::new();
         }
-        diagnostics::find(self, path, source)
+        let mut found = diagnostics::find(self, path, source);
+        found.extend(
+            self.frameworks
+                .iter()
+                .flat_map(|f| f.diagnostics(self, path, source)),
+        );
+        found.sort_by_key(|d| (d.start, d.end));
+        found
     }
 
     /// Whether a class-like named `fqn` is indexed.

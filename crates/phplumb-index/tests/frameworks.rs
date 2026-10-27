@@ -1390,3 +1390,36 @@ fn drupal_ids_defined_anywhere_include_test_modules_and_php() {
     assert!(drupal.routes("mymodule_test.route").is_empty());
     assert!(drupal.plugins(BLOCKS, "test_block").is_empty());
 }
+
+#[test]
+fn broken_drupal_references_are_flagged() {
+    let (root, index) = drupal_fixture();
+    let path = root.join("modules/custom/mymodule/src/Broken.php");
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+
+    let found: Vec<String> = index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| {
+            format!(
+                "{:?} {} [{}]",
+                d.severity,
+                d.message,
+                &text[d.start as usize..d.end as usize]
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        found,
+        vec![
+            "Error Undefined service 'nowhere.service' [nowhere.service]",
+            "Error Undefined service 'nowhere.container_service' [nowhere.container_service]",
+            "Error Undefined route 'nowhere.route' [nowhere.route]",
+            "Error Undefined plugin 'nowhere_field' of FieldTypePluginManager [nowhere_field]",
+            "Warning Undefined plugin 'nowhere_widget' of WidgetPluginManager [nowhere_widget]",
+            "Warning Undefined plugin 'nowhere_element' of ElementInfoManager [nowhere_element]",
+        ]
+    );
+}

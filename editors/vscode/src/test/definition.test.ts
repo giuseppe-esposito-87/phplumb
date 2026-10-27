@@ -177,6 +177,24 @@ suite("definition", () => {
     assert.ok(messages.includes("Undefined class 'App\\Ghost'"), JSON.stringify(messages));
   });
 
+  test("unknown Drupal service ids are reported", async () => {
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+    const document = await open("src/BrokenService.php");
+    await vscode.window.showTextDocument(document);
+
+    const deadline = Date.now() + 10_000;
+    let messages: string[] = [];
+    while (Date.now() < deadline) {
+      messages = vscode.languages.getDiagnostics(document.uri).map((d) => d.message);
+      if (messages.includes("Undefined service 'basic.missing'")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    assert.ok(messages.includes("Undefined service 'basic.missing'"), JSON.stringify(messages));
+  });
+
   test("Cmd+click on a service id opens its YAML", async () => {
     await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
     const document = await open("src/Services.php");

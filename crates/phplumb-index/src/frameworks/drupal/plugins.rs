@@ -125,6 +125,7 @@ impl Plugins {
     }
 
     /// The plugin classes a plugin id at position `argument` of `call` names, each
+    /// The plugin classes a plugin id at position `argument` of `call` names, each
     /// with its class name as the expected text.
     pub(crate) fn call_targets(
         &self,
@@ -133,8 +134,20 @@ impl Plugins {
         argument: usize,
         value: &str,
     ) -> Vec<(Location, String)> {
+        self.call_manager(index, call, argument)
+            .map_or_else(Vec::new, |manager| self.targets(&manager, value))
+    }
+
+    /// The plugin manager whose plugin id position `argument` of `call` takes, by the
+    /// call contexts of the id context table.
+    pub(crate) fn call_manager(
+        &self,
+        index: &Index,
+        call: &FrameworkCall<'_>,
+        argument: usize,
+    ) -> Option<String> {
         if argument != 0 {
-            return Vec::new();
+            return None;
         }
         let named = |wanted: &str| -> Vec<&str> {
             call.targets
@@ -147,7 +160,7 @@ impl Plugins {
                 })
                 .collect()
         };
-        let manager = if BY_ID.iter().any(|m| !named(m).is_empty()) {
+        if BY_ID.iter().any(|m| !named(m).is_empty()) {
             call.receiver
                 .and_then(|receiver| self.manager_of(index, &class_names(receiver)))
         } else if named("create")
@@ -162,13 +175,10 @@ impl Plugins {
             Some(CONSTRAINTS.to_string())
         } else {
             None
-        };
-        manager.map_or_else(Vec::new, |manager| self.targets(&manager, value))
+        }
     }
 
-    /// The plugin classes a string literal names as the value of the array key `key`:
-    /// a render element for `#type`; a widget or formatter for `type` in the options
-    /// of `setDisplayOptions('form' or 'view', ...)` on a base field definition.
+    /// The plugin classes a string literal names as the value of the array key `key`.
     pub(crate) fn keyed_targets(
         &self,
         index: &Index,
@@ -176,24 +186,8 @@ impl Plugins {
         value: &str,
         call: Option<(&FrameworkCall<'_>, usize)>,
     ) -> Vec<(Location, String)> {
-        if key == "#type" {
-            return self.targets(ELEMENTS, value);
-        }
-        let Some((call, 1)) = call.filter(|_| key == "type") else {
-            return Vec::new();
-        };
-        let displays = call.targets.iter().any(|target| {
-            matches!(target, CallTarget::Method { class, name }
-                if name.eq_ignore_ascii_case("setDisplayOptions") && is_a(index, class, &[BASE_FIELD]))
-        });
-        if !displays {
-            return Vec::new();
-        }
-        match call.strings.first().cloned().flatten().as_deref() {
-            Some("form") => self.targets(WIDGETS, value),
-            Some("view") => self.targets(FORMATTERS, value),
-            _ => Vec::new(),
-        }
+        keyed_manager(index, key, call)
+            .map_or_else(Vec::new, |manager| self.targets(manager, value))
     }
 
     /// The plugin manager that a receiver of these classes is: a manager class, or an
@@ -451,6 +445,34 @@ fn annotation_names(index: &Index, name: &str, target: &str) -> Vec<String> {
         format!("{own}\\{short}"),
         format!("{ANNOTATION_NAMESPACE}\\{short}"),
     ]
+}
+
+/// The plugin manager whose plugin id the value of the array key `key` is: render
+/// elements for `#type`; widgets or formatters for `type` in the options of
+/// `setDisplayOptions('form' or 'view', ...)` on a base field definition.
+pub(crate) fn keyed_manager(
+    index: &Index,
+    key: &str,
+    call: Option<(&FrameworkCall<'_>, usize)>,
+) -> Option<&'static str> {
+    if key == "#type" {
+        return Some(ELEMENTS);
+    }
+    let (call, 1) = call.filter(|_| key == "type")? else {
+        return None;
+    };
+    let displays = call.targets.iter().any(|target| {
+        matches!(target, CallTarget::Method { class, name }
+            if name.eq_ignore_ascii_case("setDisplayOptions") && is_a(index, class, &[BASE_FIELD]))
+    });
+    if !displays {
+        return None;
+    }
+    match call.strings.first().cloned().flatten().as_deref() {
+        Some("form") => Some(WIDGETS),
+        Some("view") => Some(FORMATTERS),
+        _ => None,
+    }
 }
 
 /// Plugin classes as targets, each with its class name as the expected text.

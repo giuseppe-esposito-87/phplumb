@@ -1,5 +1,6 @@
 //! Drupal: services, entity types, hooks, plugins and routes.
 
+mod broken;
 mod entities;
 mod extensions;
 mod hooks;
@@ -15,6 +16,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
+use crate::diagnostics::Diagnostic;
 use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
@@ -309,6 +311,11 @@ impl Framework for Drupal {
         offset: u32,
     ) -> Vec<(Location, String)> {
         navigation::targets(self, index, path, source, offset)
+    }
+
+    /// Service ids, route names and plugin ids defined nowhere on disk.
+    fn diagnostics(&self, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+        broken::find(self, index, path, source)
     }
 
     /// A plugin manager, or an interface only one plugin manager implements, has its
