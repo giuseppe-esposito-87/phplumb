@@ -90,7 +90,7 @@ PHPlumb is for reading code. It has no autocomplete, signature help, rename or o
 
 ## Status
 
-PHPlumb is young (0.1.0). Core PHP navigation and diagnostics are complete. The Drupal features above land one at a time.
+PHPlumb is young (0.1.0). Core PHP navigation, diagnostics and the Drupal features above are complete.
 
 ## Development
 
