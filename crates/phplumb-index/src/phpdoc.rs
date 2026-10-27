@@ -96,8 +96,27 @@ pub fn parse_type(text: &str, names: &dyn NameContext) -> TypeExpr {
         text: text.trim().as_bytes(),
         pos: 0,
         names,
+        found: Vec::new(),
     };
     finish(parser.union())
+}
+
+/// The classes a type names, with their byte ranges in `text`: the names
+/// `parse_type` resolves to `TypeExpr::Named`.
+fn type_class_names(text: &str, names: &dyn NameContext) -> Vec<(usize, usize, String)> {
+    let lead = text.len() - text.trim_start().len();
+    let mut parser = TypeParser {
+        text: text.trim().as_bytes(),
+        pos: 0,
+        names,
+        found: Vec::new(),
+    };
+    parser.union();
+    parser
+        .found
+        .into_iter()
+        .map(|(start, end, fqn)| (lead + start, lead + end, fqn))
+        .collect()
 }
 
 /// Parsed form before `null` is folded away.
@@ -117,6 +136,8 @@ struct TypeParser<'a> {
     text: &'a [u8],
     pos: usize,
     names: &'a dyn NameContext,
+    /// The byte range and name of each class the type names.
+    found: Vec<(usize, usize, String)>,
 }
 
 impl TypeParser<'_> {
@@ -214,7 +235,9 @@ impl TypeParser<'_> {
     }
 
     fn named(&mut self) -> Parsed {
+        let start = self.pos;
         let word = self.word();
+        let end = self.pos;
         self.skip_spaces();
         let args = match self.peek() {
             Some(b'<') => {
@@ -248,10 +271,14 @@ impl TypeParser<'_> {
             "static" => TypeExpr::StaticType,
             "parent" => TypeExpr::ParentType,
             _ if NON_CLASS.contains(&lower.as_str()) => TypeExpr::Other,
-            _ => match word.strip_prefix('\\') {
-                Some(qualified) => TypeExpr::Named(qualified.to_string()),
-                None => TypeExpr::Named(self.names.resolve_class(&word)),
-            },
+            _ => {
+                let fqn = match word.strip_prefix('\\') {
+                    Some(qualified) => qualified.to_string(),
+                    None => self.names.resolve_class(&word),
+                };
+                self.found.push((start, end, fqn.clone()));
+                TypeExpr::Named(fqn)
+            }
         })
     }
 
@@ -348,7 +375,7 @@ fn split_type(text: &str) -> (&str, &str) {
             _ => {}
         }
     }
-    (text, "")
+    (text, &text[text.len()..])
 }
 
 /// A `$name` at the start of `text`, without the `$`, `&` or `...`.
@@ -359,6 +386,162 @@ fn variable_name(text: &str) -> Option<String> {
         .find(|c: char| !(c.is_alphanumeric() || c == '_'))
         .unwrap_or(name.len());
     (end > 0).then(|| name[..end].to_string())
+}
+
+/// Tags whose leading type names classes.
+const TYPE_TAGS: &[&str] = &[
+    "var",
+    "param",
+    "return",
+    "throws",
+    "property",
+    "property-read",
+    "property-write",
+    "mixin",
+    "extends",
+    "implements",
+    "use",
+    "template-extends",
+    "template-implements",
+    "template-use",
+    "assert",
+];
+
+/// Tags whose leading value may name a class, a member or a function.
+const SEE_TAGS: &[&str] = &["see", "uses", "covers"];
+
+/// Tags whose bound after `of` names classes.
+const TEMPLATE_TAGS: &[&str] = &["template", "template-covariant", "template-contravariant"];
+
+/// The class names a docblock writes in type positions and as `@see`-like values:
+/// byte ranges relative to `text`, fully qualified names without a leading
+/// backslash.
+pub fn doc_class_names(text: &str, names: &dyn NameContext) -> Vec<(usize, usize, String)> {
+    let mut found = Vec::new();
+    for (start, line) in doc_lines(text) {
+        let Some((tag, rest)) = doc_tag(line) else {
+            continue;
+        };
+        let rest_start = start + offset_in(line, rest);
+        for type_text in type_positions(tag, rest) {
+            let type_start = rest_start + offset_in(rest, type_text);
+            found.extend(
+                type_class_names(type_text, names)
+                    .into_iter()
+                    .map(|(s, e, fqn)| (type_start + s, type_start + e, fqn)),
+            );
+        }
+    }
+    found
+}
+
+/// The content of each docblock line with its byte offset in `text`: without the
+/// leading `/**` or `*`, the closing `*/` and surrounding whitespace.
+fn doc_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut offset = 0;
+    text.split_inclusive('\n').map(move |raw| {
+        let start = offset;
+        offset += raw.len();
+        let mut line = raw.trim_end_matches(['\n', '\r']);
+        line = line.trim_start();
+        if let Some(rest) = line.strip_prefix("/**") {
+            line = rest;
+        } else if !line.starts_with("*/")
+            && let Some(rest) = line.strip_prefix('*')
+        {
+            line = rest;
+        }
+        line = line.trim_start();
+        line = line.strip_suffix("*/").unwrap_or(line).trim_end();
+        (start + offset_in(raw, line), line)
+    })
+}
+
+/// A tag line's tag, without a `phpstan-` or `psalm-` prefix, and the text after it.
+fn doc_tag(line: &str) -> Option<(&str, &str)> {
+    let tag_line = line.strip_prefix('@')?;
+    let (tag, rest) = tag_line
+        .split_once(char::is_whitespace)
+        .unwrap_or((tag_line, &tag_line[tag_line.len()..]));
+    let tag = tag
+        .strip_prefix("phpstan-")
+        .or_else(|| tag.strip_prefix("psalm-"))
+        .unwrap_or(tag);
+    Some((tag, rest.trim_start()))
+}
+
+/// The slices of a tag's text that hold types naming classes.
+fn type_positions<'a>(tag: &str, rest: &'a str) -> Vec<&'a str> {
+    if TYPE_TAGS.contains(&tag) {
+        return vec![split_type(rest).0];
+    }
+    if SEE_TAGS.contains(&tag) {
+        let value = split_type(rest).0;
+        return if value.contains("://") || (value.ends_with("()") && !value.contains("::")) {
+            Vec::new()
+        } else {
+            vec![value]
+        };
+    }
+    if TEMPLATE_TAGS.contains(&tag) {
+        return rest
+            .split_once(" of ")
+            .map(|(_, bound)| vec![split_type(bound.trim_start()).0])
+            .unwrap_or_default();
+    }
+    if tag == "method" {
+        return method_types(rest);
+    }
+    Vec::new()
+}
+
+/// The return type and parameter types of a `@method` tag's text.
+fn method_types(rest: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let (mut first, mut after) = split_type(rest);
+    // `static` is a modifier when a return type or the name follows it.
+    if first == "static" && !after.is_empty() && !after.starts_with('(') {
+        (first, after) = split_type(after);
+    }
+    let signature = if first.contains('(') {
+        first
+    } else {
+        found.push(first);
+        after
+    };
+    let Some(open) = signature.find('(') else {
+        return found;
+    };
+    let mut depth = 0i32;
+    let mut part_start = open + 1;
+    for (i, c) in signature.char_indices().skip_while(|(i, _)| *i <= open) {
+        match c {
+            '<' | '{' | '(' | '[' => depth += 1,
+            ')' if depth == 0 => {
+                found.extend(parameter_type(&signature[part_start..i]));
+                break;
+            }
+            '>' | '}' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                found.extend(parameter_type(&signature[part_start..i]));
+                part_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// The type of one `@method` parameter, none when it has no type.
+fn parameter_type(parameter: &str) -> Option<&str> {
+    let parameter = parameter.trim_start();
+    let ty = split_type(parameter).0;
+    (!ty.is_empty() && !ty.starts_with(['$', '&', '.'])).then_some(ty)
+}
+
+/// The byte offset of `inner`, a slice of `outer`, in `outer`.
+fn offset_in(outer: &str, inner: &str) -> usize {
+    inner.as_ptr() as usize - outer.as_ptr() as usize
 }
 
 pub fn parse_docblock(text: &str, names: &dyn NameContext) -> DocBlock {

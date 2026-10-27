@@ -1360,7 +1360,9 @@ impl Index {
             return found;
         }
 
-        let Some(name) = name_at(&summary.names, offset) else {
+        let Some(name) =
+            name_at(&summary.names, offset).or_else(|| name_at(&summary.doc_names, offset))
+        else {
             return Vec::new();
         };
         let (key, entries): (String, &[Entry]) = match name.kind {

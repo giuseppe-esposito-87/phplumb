@@ -16,14 +16,14 @@ use mago_syntax::cst::{
     Instantiation, Interface, Literal, Method, MethodCall, Modifier, Namespace, NullSafeMethodCall,
     NullSafePropertyAccess, PartialArgument, Program, Property, PropertyAccess, PropertyItem,
     Sequence, StaticMethodCall, StaticMethodPartialApplication, StaticPropertyAccess, Trait,
-    TraitUseAdaptation, TraitUseSpecification, Use, UseItems, UseType, Variable,
+    TraitUseAdaptation, TraitUseSpecification, TriviaKind, Use, UseItems, UseType, Variable,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
 use serde::{Deserialize, Serialize};
 
 use crate::metadata::{self, MetaValue, Metadata};
-use crate::phpdoc::{NameContext, TypeExpr, parse_docblock, parse_type};
+use crate::phpdoc::{NameContext, TypeExpr, doc_class_names, parse_docblock, parse_type};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
@@ -300,6 +300,10 @@ pub struct ClassRange {
 pub struct FileSummary {
     pub declarations: Vec<Declaration>,
     pub names: Vec<NameRef>,
+    /// Names written in docblocks, sorted by start: classes in type positions and
+    /// `@see`-like values. Kept apart from `names`, which diagnostics and call
+    /// hierarchy read.
+    pub doc_names: Vec<NameRef>,
     pub has_parse_errors: bool,
     pub file_names: FileNames,
     pub static_refs: Vec<StaticRef>,
@@ -342,6 +346,31 @@ impl FileSummary {
 
 /// Parses `source` and returns its declarations and resolved names. Parsing is
 /// tolerant: a syntax error does not hide the declarations around it.
+/// The class names every docblock of `program` writes, resolved in the docblock's
+/// scope. A docblock that is not valid UTF-8 is skipped, so ranges stay exact.
+fn doc_names(program: &Program<'_>, names: &FileNames) -> Vec<NameRef> {
+    let mut found: Vec<NameRef> = program
+        .trivia
+        .iter()
+        .filter(|t| t.kind == TriviaKind::DocBlockComment)
+        .filter_map(|t| Some((t.span.start.offset, std::str::from_utf8(t.value).ok()?)))
+        .flat_map(|(start, text)| {
+            doc_class_names(text, &names.at(start))
+                .into_iter()
+                .map(move |(s, e, fqn)| NameRef {
+                    kind: NameKind::ClassLike,
+                    fqn,
+                    start: start + s as u32,
+                    end: start + e as u32,
+                    qualified: text[s..e].contains('\\'),
+                    imported: false,
+                })
+        })
+        .collect();
+    found.sort_by_key(|n| n.start);
+    found
+}
+
 pub fn summarize(source: &[u8]) -> FileSummary {
     let arena = LocalArena::new();
     let program = parse_file_content(&arena, FileId::zero(), source);
@@ -488,8 +517,10 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         })
         .collect();
 
+    let doc_names = doc_names(program, &collector.names);
+
     let mut keys: HashSet<u64> = HashSet::new();
-    for name in &names {
+    for name in names.iter().chain(&doc_names) {
         let fallback = !name.qualified && !name.imported;
         let short = name
             .fqn
@@ -540,6 +571,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
     FileSummary {
         declarations,
         names,
+        doc_names,
         has_parse_errors: program.has_errors(),
         file_names: collector.names,
         static_refs,

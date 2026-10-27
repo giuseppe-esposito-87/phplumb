@@ -109,6 +109,7 @@ fn scan_file(
         summary
             .names
             .iter()
+            .chain(&summary.doc_names)
             .filter(|n| n.kind == kind && matches(n))
             .map(|n| at(n.start, n.end))
             .collect()
