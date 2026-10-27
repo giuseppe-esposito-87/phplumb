@@ -66,6 +66,7 @@ impl Drupal {
             || SYNTHETIC.contains(&id)
             || self.hooks.is_hook_class(index, id)
             || self.literals.services.contains(id)
+            || self.literals.matches_service(id)
     }
 
     /// Whether the route `name` is defined anywhere on disk: in a routing file, test
@@ -76,13 +77,12 @@ impl Drupal {
         }
     }
 
-    /// Whether `manager` has a plugin `id` (or its base, for `base:derivative`)
+    /// Whether `manager` has a plugin `id` (or one of its bases, for a derivative id)
     /// anywhere on disk, test modules included, or possibly added by PHP code.
     pub fn defines_plugin(&self, manager: &str, id: &str) -> bool {
-        let base = id.split_once(':').map_or(id, |(base, _)| base);
-        self.plugins.defines(manager, id) || {
-            self.literals.plugins.contains(id) || self.literals.plugins.contains(base)
-        }
+        self.plugins.defines(manager, id)
+            || self.literals.plugins.contains(id)
+            || plugins::derivative_bases(id).any(|base| self.literals.plugins.contains(base))
     }
 
     /// Every definition of the route `name`, sorted by path.

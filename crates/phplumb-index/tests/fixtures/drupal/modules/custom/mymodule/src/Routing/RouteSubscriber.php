@@ -13,5 +13,10 @@ class RouteSubscriber
             $collection->add('mymodule.dynamic.' . $type . '.view', new Route('/d'));
             $collection->add(sprintf('mymodule.sprintf.%s', $type), new Route('/s'));
         }
+        foreach (['mymodule.page'] as $name) {
+            $collection->add($name . '.json', new Route('/j'));
+            $collection->add(sprintf('%1$s.xml', $name), new Route('/x'));
+            $collection->add($name . '.' . $type, new Route('/t'));
+        }
     }
 }

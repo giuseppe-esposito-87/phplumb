@@ -67,6 +67,8 @@ pub(crate) struct Routes {
     defined: HashSet<String>,
     /// Routes declared by attributes on classes and methods.
     attributes: Vec<RouteDefinition>,
+    /// Some route attribute names a route with something else than a literal string.
+    uncertain: bool,
     root: PathBuf,
 }
 
@@ -114,63 +116,98 @@ impl Routes {
         self.alias_targets.insert(path, aliases);
     }
 
-    /// Reads the routes that attributes on the index's classes and methods declare.
+    /// Reads the routes that attributes on the index's classes and methods declare,
+    /// as Drupal's attribute route discovery does: the class attribute's name prefixes
+    /// the names of its methods' routes, and names a route itself only on an
+    /// invokable class whose methods declare none. A method with one route is also
+    /// `Class::method`, and an invokable class with one route is also `Class` and
+    /// `Class::__invoke`. A name that is not a literal string makes route names
+    /// uncertain.
     pub(crate) fn read_attributes(&mut self, index: &Index) {
         let mut found = Vec::new();
+        let mut uncertain = false;
         for (path, declaration) in index.declarations() {
             let Some(shape) = &declaration.class else {
                 continue;
             };
-            let mut add = |metadata: &[Metadata], start: u32, end: u32, text: &str| {
-                for attribute in metadata.iter().filter(|m| {
-                    !m.annotation
-                        && ROUTE_ATTRIBUTES
-                            .iter()
-                            .any(|a| m.name.eq_ignore_ascii_case(a))
-                }) {
-                    let name = attribute.argument("name").or_else(|| {
-                        attribute
-                            .arguments
-                            .get(1)
-                            .filter(|(key, _)| key.is_none())
-                            .map(|(_, value)| value)
-                    });
-                    if let Some(MetaValue::String(name)) = name {
-                        found.push(RouteDefinition {
-                            name: name.clone(),
-                            path: path.to_path_buf(),
-                            start,
-                            end,
-                            text: text.to_string(),
-                        });
-                    }
+            let class_names = route_names(&shape.metadata);
+            let prefix = match class_names.first() {
+                Some(RouteName::Unreadable) => {
+                    uncertain = true;
+                    continue;
                 }
+                Some(RouteName::Literal(prefix)) => prefix.as_str(),
+                Some(RouteName::Missing) | None => "",
             };
-            let short = declaration
-                .fqn
-                .rsplit('\\')
-                .next()
-                .unwrap_or(&declaration.fqn);
-            add(
-                &shape.metadata,
-                declaration.name_start,
-                declaration.name_end,
-                short,
-            );
-            for member in shape
+            let fqn = &declaration.fqn;
+            let short = fqn.rsplit('\\').next().unwrap_or(fqn);
+            let mut routes: Vec<RouteDefinition> = Vec::new();
+            let mut aliases: Vec<RouteDefinition> = Vec::new();
+            let mut on_invoke = false;
+            let methods = shape
                 .members
                 .iter()
-                .filter(|m| m.kind == MemberKind::Method)
-            {
-                add(
-                    &member.metadata,
-                    member.name_start,
-                    member.name_end,
-                    &member.name,
-                );
+                .filter(|m| m.kind == MemberKind::Method);
+            for member in methods.clone() {
+                let names = route_names(&member.metadata);
+                let before = routes.len();
+                for name in &names {
+                    match name {
+                        RouteName::Literal(name) => routes.push(RouteDefinition {
+                            name: format!("{prefix}{name}"),
+                            path: path.to_path_buf(),
+                            start: member.name_start,
+                            end: member.name_end,
+                            text: member.name.clone(),
+                        }),
+                        RouteName::Unreadable => uncertain = true,
+                        // Drupal rejects a method route without a name.
+                        RouteName::Missing => {}
+                    }
+                }
+                on_invoke |= !names.is_empty() && member.name.eq_ignore_ascii_case("__invoke");
+                if names.len() == 1 && routes.len() == before + 1 {
+                    let mut alias = routes[before].clone();
+                    alias.name = format!("{fqn}::{}", member.name);
+                    aliases.push(alias);
+                }
             }
+            let invoke = methods
+                .clone()
+                .find(|m| m.name.eq_ignore_ascii_case("__invoke"));
+            if routes.is_empty()
+                && let Some(invoke) = invoke
+            {
+                for name in &class_names {
+                    match name {
+                        RouteName::Literal(name) => routes.push(RouteDefinition {
+                            name: name.clone(),
+                            path: path.to_path_buf(),
+                            start: declaration.name_start,
+                            end: declaration.name_end,
+                            text: short.to_string(),
+                        }),
+                        RouteName::Unreadable => uncertain = true,
+                        RouteName::Missing => {}
+                    }
+                }
+                on_invoke |= !class_names.is_empty();
+                if on_invoke && routes.len() == 1 {
+                    let mut alias = routes[0].clone();
+                    alias.name = format!("{fqn}::{}", invoke.name);
+                    aliases.push(alias);
+                }
+            }
+            if on_invoke && routes.len() == 1 {
+                let mut alias = routes[0].clone();
+                alias.name = fqn.clone();
+                aliases.push(alias);
+            }
+            found.extend(routes);
+            found.extend(aliases);
         }
         self.attributes = found;
+        self.uncertain = uncertain;
         self.reindex();
     }
 
@@ -202,9 +239,10 @@ impl Routes {
         self.by_name = by_name;
     }
 
-    /// Whether some routing file defines `name`, test modules included.
+    /// Whether some routing file or route attribute defines `name`, test modules
+    /// included; always, when a route attribute's name cannot be read.
     pub(crate) fn defines(&self, name: &str) -> bool {
-        self.defined.contains(name)
+        self.uncertain || self.defined.contains(name)
     }
 
     pub(crate) fn get(&self, name: &str) -> &[RouteDefinition] {
@@ -259,6 +297,42 @@ pub(crate) fn takes_route(index: &Index, targets: &[CallTarget], argument: usize
 /// The names of the methods taking a route name.
 pub(crate) fn route_methods() -> Vec<&'static str> {
     ROUTE_CALLS.iter().map(|(_, method, _)| *method).collect()
+}
+
+/// The name a route attribute gives.
+enum RouteName {
+    Literal(String),
+    /// A constant or an expression.
+    Unreadable,
+    Missing,
+}
+
+/// The names of the route attributes in `metadata`: the `name` argument, named or at
+/// position 1.
+fn route_names(metadata: &[Metadata]) -> Vec<RouteName> {
+    metadata
+        .iter()
+        .filter(|m| {
+            !m.annotation
+                && ROUTE_ATTRIBUTES
+                    .iter()
+                    .any(|a| m.name.eq_ignore_ascii_case(a))
+        })
+        .map(|attribute| {
+            let name = attribute.argument("name").or_else(|| {
+                attribute
+                    .arguments
+                    .get(1)
+                    .filter(|(key, _)| key.is_none())
+                    .map(|(_, value)| value)
+            });
+            match name {
+                Some(MetaValue::String(name)) => RouteName::Literal(name.clone()),
+                Some(_) => RouteName::Unreadable,
+                None => RouteName::Missing,
+            }
+        })
+        .collect()
 }
 
 /// The routes of one file, and the routes its aliases point to; nothing when it does

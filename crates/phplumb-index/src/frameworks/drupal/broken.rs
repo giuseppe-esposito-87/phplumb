@@ -10,7 +10,7 @@ use crate::diagnostics::{Diagnostic, Severity};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
 use crate::index::Index;
 use crate::infer;
-use crate::summary::summarize;
+use crate::summary::{FileSummary, RefKey, summarize};
 
 /// Containers whose `get(id)` takes a service id. A plain PSR container may be any
 /// other container.
@@ -25,13 +25,37 @@ const SPECIAL_ROUTES: [&str; 5] = ["<front>", "<none>", "<nolink>", "<current>",
 /// Prefixes of routes that entity route providers and views build at run time.
 const GENERATED_ROUTES: [&str; 2] = ["entity.", "view."];
 
+/// Exceptions a missing service, route or plugin throws: a file that mentions one
+/// may catch it, so its lookups of that kind tolerate missing ids. Render element
+/// types and display options throw nothing and stay checked.
+const SERVICE_NOT_FOUND: [&str; 2] = [
+    "Symfony\\Component\\DependencyInjection\\Exception\\ServiceNotFoundException",
+    "Psr\\Container\\NotFoundExceptionInterface",
+];
+const ROUTE_NOT_FOUND: [&str; 1] =
+    ["Symfony\\Component\\Routing\\Exception\\RouteNotFoundException"];
+const PLUGIN_NOT_FOUND: [&str; 2] = [
+    "Drupal\\Component\\Plugin\\Exception\\PluginNotFoundException",
+    "Drupal\\Component\\Plugin\\Exception\\PluginException",
+];
+
 pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+    // Ids defined in excluded files are unknown.
+    if index.has_exclusions() {
+        return Vec::new();
+    }
     // Test code mocks containers, routes and plugin managers; running the tests
     // catches its mistakes.
-    if in_tests(index.filter().root(), path) {
+    if in_tests(index.filter().root(), &index.filter().under_root(path)) {
         return Vec::new();
     }
     let summary = summarize(source);
+    let catches = |exceptions: &[&str]| mentions(&summary, exceptions);
+    let (services_caught, routes_caught, plugins_caught) = (
+        catches(&SERVICE_NOT_FOUND),
+        catches(&ROUTE_NOT_FOUND),
+        catches(&PLUGIN_NOT_FOUND),
+    );
     let mut names = vec![
         "service",
         "get",
@@ -59,6 +83,8 @@ pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -
             receiver: Some(&call.receiver),
         };
         if let Some((id, range)) = service_id(index, call)
+            && !services_caught
+            && !soft(call)
             && !guarded("has", id)
             && !guarded("hasService", id)
             && !drupal.defines_service(index, id)
@@ -74,6 +100,7 @@ pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -
                 continue;
             };
             if takes_route(index, &call.targets, position)
+                && !routes_caught
                 && !SPECIAL_ROUTES.contains(&name.as_str())
                 && !GENERATED_ROUTES
                     .iter()
@@ -87,6 +114,8 @@ pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -
                 ));
             }
             if let Some(manager) = drupal.plugins.call_manager(index, &framework, position)
+                && !plugins_caught
+                && !soft(call)
                 && let Some(message) =
                     undefined_plugin(drupal, &manager, name, call_method(call), &guarded)
             {
@@ -169,6 +198,23 @@ fn undefined_plugin(
     }
     let short = manager.rsplit('\\').next().unwrap_or(manager);
     Some(format!("Undefined plugin '{id}' of {short}"))
+}
+
+/// Whether the summary mentions one of `classes`.
+fn mentions(summary: &FileSummary, classes: &[&str]) -> bool {
+    classes.iter().any(|class| {
+        let key = RefKey::Class(class.to_string()).hash();
+        summary.ref_keys.binary_search(&key).is_ok()
+    })
+}
+
+/// Whether a call looks an id up softly: a container's `get()` or a plugin manager's
+/// `getDefinition()` with a second argument, which may ask for no exception.
+fn soft(call: &FoundCall) -> bool {
+    call.shapes.len() > 1
+        && call_method(call).is_some_and(|m| {
+            m.eq_ignore_ascii_case("get") || m.eq_ignore_ascii_case("getDefinition")
+        })
 }
 
 /// The method name a call resolves to.

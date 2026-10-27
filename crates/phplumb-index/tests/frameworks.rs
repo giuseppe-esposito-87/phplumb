@@ -847,6 +847,7 @@ fn plugins_are_read_from_attributes_and_annotations() {
         vec![
             "gadget_block Drupal\\gadget\\Plugin\\Block\\GadgetBlock",
             "unimported_block Drupal\\gadget\\Plugin\\Block\\UnimportedBlock",
+            "entity:thing Drupal\\mymodule\\Plugin\\Block\\EntityThingBlock",
             "menu_block Drupal\\mymodule\\Plugin\\Block\\MenuBlock",
             "my_block Drupal\\mymodule\\Plugin\\Block\\MyBlock",
         ]
@@ -1000,9 +1001,10 @@ fn implementations_in(file: &str, needle: &str) -> Vec<String> {
     found
 }
 
-const BLOCK_PLUGINS: [&str; 4] = [
+const BLOCK_PLUGINS: [&str; 5] = [
     "modules/contrib/gadget/src/Plugin/Block/GadgetBlock.php: GadgetBlock",
     "modules/contrib/gadget/src/Plugin/Block/UnimportedBlock.php: UnimportedBlock",
+    "modules/custom/mymodule/src/Plugin/Block/EntityThingBlock.php: EntityThingBlock",
     "modules/custom/mymodule/src/Plugin/Block/MenuBlock.php: MenuBlock",
     "modules/custom/mymodule/src/Plugin/Block/MyBlock.php: MyBlock",
 ];
@@ -1496,4 +1498,204 @@ fn services_registered_in_php_follow_updates() {
     let drupal = index.drupal().unwrap();
     assert!(!drupal.defines_service(&index, "m.first"));
     assert!(drupal.defines_service(&index, "m.second"));
+}
+
+/// The broken Drupal reference messages of a file.
+fn broken_in(index: &Index, path: &Path) -> Vec<String> {
+    let source = fs::read(path).unwrap();
+    index
+        .diagnostics(path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .filter(|m| {
+            [
+                "Undefined service '",
+                "Undefined route '",
+                "Undefined plugin '",
+            ]
+            .iter()
+            .any(|prefix| m.starts_with(prefix))
+        })
+        .collect()
+}
+
+fn broken_in_fixture(file: &str) -> Vec<String> {
+    let (root, index) = drupal_fixture();
+    broken_in(&index, &root.join(file))
+}
+
+#[test]
+fn exclusions_silence_broken_drupal_references() {
+    let (root, _) = drupal_fixture();
+    let opts = DiscoverOptions {
+        exclude: vec!["modules/contrib/gadget/**".to_string()],
+        ..DiscoverOptions::default()
+    };
+    let (index, _) = Index::build(&root, &opts).unwrap();
+
+    assert_eq!(
+        broken_in(&index, &root.join("modules/custom/mymodule/src/Broken.php")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn services_of_service_provider_subclasses_are_defined() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/Quiet/ProviderServices.php"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn soft_lookups_are_not_flagged() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/Quiet/SoftLookups.php"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn lookups_catching_not_found_are_not_flagged() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/Quiet/CaughtLookups.php"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn plugin_ids_the_registry_cannot_read_silence_their_manager() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/Quiet/ConstIds.php"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn route_names_the_registry_cannot_read_silence_routes() {
+    let (_dir, root, index) = temp_drupal(&[
+        (
+            "core/lib/Drupal/Core/Url.php",
+            "<?php\nnamespace Drupal\\Core;\nclass Url { public static function fromRoute($route_name, $route_parameters = [], $options = []) {} }\n",
+        ),
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        (
+            "modules/custom/m/src/Controller/ConstController.php",
+            "<?php\nnamespace Drupal\\m\\Controller;\nuse Symfony\\Component\\Routing\\Attribute\\Route;\nclass ConstController\n{\n    const NAME = 'm.const';\n    #[Route('/c', name: self::NAME)]\n    public function page() {}\n}\n",
+        ),
+        (
+            "modules/custom/m/src/Links.php",
+            "<?php\nnamespace Drupal\\m;\nuse Drupal\\Core\\Url;\nclass Links { public function run() { Url::fromRoute('m.const'); } }\n",
+        ),
+    ]);
+
+    assert_eq!(
+        broken_in(&index, &root.join("modules/custom/m/src/Links.php")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn derivatives_of_bases_with_colons_are_defined() {
+    let (_root, index) = drupal_fixture();
+    let drupal = index.drupal().unwrap();
+
+    assert!(drupal.defines_plugin(BLOCKS, "entity:thing:node"));
+    assert_eq!(
+        plugin_list(drupal.plugins(BLOCKS, "entity:thing:node")),
+        vec!["entity:thing Drupal\\mymodule\\Plugin\\Block\\EntityThingBlock"]
+    );
+}
+
+#[test]
+fn route_names_built_with_a_literal_tail_are_defined() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/Quiet/BuiltRoutes.php"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn class_route_attributes_prefix_method_routes_and_give_aliases() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/Quiet/AttributeRoutes.php"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/src/Quiet/AttributeRoutes.php",
+            "fromRoute('mymodule.prefix.l"
+        ),
+        vec!["modules/custom/mymodule/src/Controller/PrefixController.php: list"]
+    );
+    let (_root, index) = drupal_fixture();
+    assert!(!index.drupal().unwrap().defines_route("mymodule.prefix."));
+}
+
+#[test]
+fn site_services_files_define_services() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/Quiet/SiteServices.php"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn test_code_under_a_symlinked_root_gets_no_drupal_diagnostics() {
+    let (root, _) = drupal_fixture();
+    let dir = TempDir::new().unwrap();
+    let link = dir.path().join("root");
+    std::os::unix::fs::symlink(&root, &link).unwrap();
+    let (index, _) = Index::build(&link, &DiscoverOptions::default()).unwrap();
+
+    assert!(!broken_in(&index, &link.join("modules/custom/mymodule/src/Broken.php")).is_empty());
+    assert_eq!(
+        broken_in(
+            &index,
+            &link.join("modules/custom/mymodule/tests/src/Kernel/ServiceTest.php")
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn services_registered_in_php_follow_updates_through_symlinks() {
+    let provider = |id: &str| {
+        format!(
+            "<?php\nnamespace Drupal\\m;\nuse Drupal\\Core\\DependencyInjection\\ServiceProviderInterface;\nclass MServiceProvider implements ServiceProviderInterface {{ public function register($container) {{ $container->register('{id}', 'X'); }} }}\n"
+        )
+    };
+    let (_dir, root, _) = temp_drupal(&[
+        ("packages/m/m.info.yml", "name: M\ntype: module\n"),
+        ("packages/m/src/MServiceProvider.php", &provider("m.first")),
+    ]);
+    fs::create_dir_all(root.join("modules/custom")).unwrap();
+    std::os::unix::fs::symlink(root.join("packages/m"), root.join("modules/custom/m")).unwrap();
+    let opts = DiscoverOptions {
+        frameworks: FrameworkSettings {
+            drupal: Activation::On,
+        },
+        ..DiscoverOptions::default()
+    };
+    let mut index = Index::build(&root, &opts).unwrap().0;
+    assert!(index.drupal().unwrap().defines_service(&index, "m.first"));
+
+    for (spelling, id) in [("modules/custom/m", "m.second"), ("packages/m", "m.third")] {
+        let file = format!("{spelling}/src/MServiceProvider.php");
+        write(&root, &file, &provider(id));
+        index.update(&[root.join(&file)], &[]);
+
+        assert!(
+            index.drupal().unwrap().defines_service(&index, id),
+            "{spelling}"
+        );
+    }
+}
+
+#[test]
+fn caught_plugin_lookups_still_flag_render_element_types() {
+    assert_eq!(
+        broken_in_fixture("modules/custom/mymodule/src/CaughtElements.php"),
+        vec!["Undefined plugin 'nowhere_caught_element' of ElementInfoManager"]
+    );
 }

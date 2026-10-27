@@ -94,6 +94,9 @@ pub(crate) struct Plugins {
     by_manager: HashMap<String, Vec<Plugin>>,
     /// Plugin ids of test modules by lowercased manager, which navigation ignores.
     test_ids: HashMap<String, HashSet<String>>,
+    /// Lowercased managers with a plugin whose id the registry cannot read, such as
+    /// a class constant.
+    uncertain: HashSet<String>,
 }
 
 impl Plugins {
@@ -138,20 +141,21 @@ impl Plugins {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// The plugins of `manager` named `id`; for an id `base:derivative` with none,
-    /// those named `base`.
+    /// The plugins of `manager` named `id`; for a derivative id with none, those
+    /// named after its longest base that has some.
     pub(crate) fn named(&self, manager: &str, id: &str) -> Vec<&Plugin> {
         let exact: Vec<&Plugin> = self.of(manager).iter().filter(|p| p.id == id).collect();
         if !exact.is_empty() {
             return exact;
         }
-        let Some((base, _)) = id.split_once(':') else {
-            return Vec::new();
-        };
-        self.of(manager).iter().filter(|p| p.id == base).collect()
+        derivative_bases(id)
+            .map(|base| -> Vec<&Plugin> {
+                self.of(manager).iter().filter(|p| p.id == base).collect()
+            })
+            .find(|found| !found.is_empty())
+            .unwrap_or_default()
     }
 
-    /// The plugin classes a plugin id at position `argument` of `call` names, each
     /// The plugin classes a plugin id at position `argument` of `call` names, each
     /// with its class name as the expected text.
     pub(crate) fn call_targets(
@@ -353,6 +357,7 @@ impl Plugins {
         let mut is_a_cache: HashMap<(String, String), bool> = HashMap::new();
         let mut found: HashMap<String, Vec<Plugin>> = HashMap::new();
         let mut test_ids: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut uncertain: HashSet<String> = HashSet::new();
         for (path, declaration) in index.declarations() {
             if declaration.kind != SymbolKind::Class {
                 continue;
@@ -416,6 +421,9 @@ impl Plugins {
                         })
                     });
                     let Some(id) = declared.and_then(plugin_id) else {
+                        if declared.is_some() {
+                            uncertain.insert(plugin_type.manager.to_ascii_lowercase());
+                        }
                         continue;
                     };
                     if tests {
@@ -444,22 +452,27 @@ impl Plugins {
         }
         self.by_manager = found;
         self.test_ids = test_ids;
+        self.uncertain = uncertain;
     }
 
-    /// Whether `manager` has a plugin `id`, or its base for `base:derivative`, test
-    /// modules included.
+    /// Whether `manager` has a plugin `id`, or one of its bases for a derivative id,
+    /// test modules included; always, when the manager has a plugin whose id the
+    /// registry cannot read.
     pub(crate) fn defines(&self, manager: &str, id: &str) -> bool {
-        if !self.named(manager, id).is_empty() {
+        let manager = manager.to_ascii_lowercase();
+        if self.uncertain.contains(&manager) || !self.named(&manager, id).is_empty() {
             return true;
         }
-        let Some(ids) = self.test_ids.get(&manager.to_ascii_lowercase()) else {
+        let Some(ids) = self.test_ids.get(&manager) else {
             return false;
         };
-        ids.contains(id)
-            || id
-                .split_once(':')
-                .is_some_and(|(base, _)| ids.contains(base))
+        ids.contains(id) || derivative_bases(id).any(|base| ids.contains(base))
     }
+}
+
+/// The bases of a derivative id, longest first: `a:b:c` gives `a:b`, then `a`.
+pub(crate) fn derivative_bases(id: &str) -> impl Iterator<Item = &str> {
+    id.rmatch_indices(':').map(move |(at, _)| &id[..at])
 }
 
 /// Whether a class named as a manager's argument 4 is an attribute: it is or

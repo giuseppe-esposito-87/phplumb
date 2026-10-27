@@ -1,0 +1,6 @@
+parameters:
+  twig.config:
+    debug: false
+services:
+  site.only:
+    class: Drupal\mymodule\Greeter

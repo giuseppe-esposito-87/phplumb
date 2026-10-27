@@ -190,7 +190,7 @@ pub(crate) fn first_arguments(source: &[u8], names: &[&str]) -> Vec<String> {
 
 /// The shapes of the strings a file builds: concatenations and interpolated strings
 /// with `*` for each part that is not literal, and literals with `%s` or `%d`
-/// placeholders, as for `sprintf()`, with `*` for each placeholder. Only shapes with
+/// placeholders (numbered or not), as for `sprintf()`, with `*` for each placeholder. Only shapes with
 /// a `*` are kept.
 pub(crate) fn string_shapes(source: &[u8]) -> Vec<String> {
     let arena = LocalArena::new();
@@ -230,11 +230,42 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Vec<String>> for StringShapes {
         let Some(value) = literal.value else {
             return;
         };
-        let text = String::from_utf8_lossy(value);
-        if text.contains("%s") || text.contains("%d") {
-            found.push(text.replace("%s", "*").replace("%d", "*"));
+        if let Some(shape) = placeholder_shape(&String::from_utf8_lossy(value)) {
+            found.push(shape);
         }
     }
+}
+
+/// `text` with `*` for each `%s` or `%d` placeholder, numbered (`%1$s`) or not;
+/// none without a placeholder.
+fn placeholder_shape(text: &str) -> Option<String> {
+    let mut shape = String::new();
+    let mut found = false;
+    let mut rest = text;
+    while let Some(at) = rest.find('%') {
+        shape.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        if let Some(after) = after.strip_prefix('%') {
+            shape.push('%');
+            rest = after;
+            continue;
+        }
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let spec = match after[digits..].strip_prefix('$') {
+            Some(spec) if digits > 0 => spec,
+            _ => after,
+        };
+        if let Some(tail) = spec.strip_prefix(['s', 'd']) {
+            shape.push('*');
+            found = true;
+            rest = tail;
+        } else {
+            shape.push('%');
+            rest = after;
+        }
+    }
+    shape.push_str(rest);
+    found.then_some(shape)
 }
 
 /// The values of every string literal in a file.

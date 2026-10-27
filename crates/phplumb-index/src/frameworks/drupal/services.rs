@@ -1,5 +1,5 @@
-//! Drupal services: every `*.services.yml` on disk outside `vendor` and test
-//! modules, and the classes a service id can give.
+//! Drupal services: every `*.services.yml` and site `services.yml` on disk outside
+//! `vendor` and test modules, and the classes a service id can give.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -174,6 +174,9 @@ impl Services {
 
 const SERVICES: &str = ".services.yml";
 
+/// A site's services file, such as `sites/default/services.yml`.
+const SITE_SERVICES: &str = "services.yml";
+
 /// Whether the Drupal registries read files of test modules.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Tests {
@@ -187,14 +190,15 @@ pub(super) fn in_tests(root: &Path, path: &Path) -> bool {
         .is_ok_and(|relative| relative.components().any(|c| c.as_os_str() == "tests"))
 }
 
-/// Whether `path` is a file named `*{suffix}` that the Drupal registries read:
+/// Whether `path` is a file named `*{suffix}` (or a site `services.yml`, for services
+/// files) that the Drupal registries read:
 /// outside `vendor`, hidden or skipped directories, and test modules unless `tests`
 /// includes them.
 pub(super) fn is_drupal_file(filter: &PathFilter, path: &Path, suffix: &str, tests: Tests) -> bool {
     let name_matches = path
         .file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n.ends_with(suffix));
+        .is_some_and(|n| n.ends_with(suffix) || (suffix == SERVICES && n == SITE_SERVICES));
     let Ok(relative) = path.strip_prefix(filter.root()) else {
         return false;
     };

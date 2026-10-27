@@ -1,20 +1,23 @@
 //! What PHP code may define as Drupal ids at run time. Every string literal and
 //! class name of a service provider or compiler pass, and the first argument of
-//! every `set()`, `register()`, `setAlias()` or `setDefinition()` call, may be a
-//! service; every string literal of a file building routes may be a route, and the
+//! every `set()`, `register()`, `autowire()`, `setAlias()` or `setDefinition()`
+//! call, may be a service, and the strings a service provider builds give service id
+//! shapes; every string literal of a file building routes may be a route, and the
 //! strings it builds give route name shapes; every string literal of a file adding
 //! plugin definitions may be a plugin. Such an id is never reported as undefined.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::discover::chosen_path;
 use crate::index::Index;
 use crate::infer;
 use rayon::prelude::*;
 
 use crate::summary::{NameKind, RefKey, summarize};
 
-/// Classes whose mention makes a file one that may define services.
+/// Classes whose mention, or the mention of a subtype, makes a file one that may
+/// define services.
 const SERVICE_DEFINERS: [&str; 4] = [
     "Symfony\\Component\\DependencyInjection\\ContainerBuilder",
     "Drupal\\Core\\DependencyInjection\\ServiceProviderInterface",
@@ -29,12 +32,13 @@ const ROUTE_DEFINERS: [&str; 2] = [
 ];
 
 /// Methods whose first argument may name a service they define.
-const SERVICE_SETTERS: [&str; 4] = ["set", "register", "setAlias", "setDefinition"];
+const SERVICE_SETTERS: [&str; 5] = ["set", "register", "autowire", "setAlias", "setDefinition"];
 
 /// What one file contributes.
 #[derive(Default)]
 struct FileLiterals {
     services: Vec<String>,
+    service_shapes: Vec<String>,
     routes: Vec<String>,
     route_shapes: Vec<String>,
     plugins: Vec<String>,
@@ -46,10 +50,12 @@ struct FileLiterals {
 pub(crate) struct PhpLiterals {
     by_file: HashMap<PathBuf, FileLiterals>,
     pub(crate) services: HashSet<String>,
+    /// Shapes of service ids built from parts, as for routes.
+    service_shapes: Vec<String>,
     pub(crate) routes: HashSet<String>,
     /// Shapes of route names built from parts, `*` for each part that is not
-    /// literal; each starts with literal text holding a `.`.
-    pub(crate) route_shapes: Vec<String>,
+    /// literal; each has a literal part holding a `.` and a letter or digit.
+    route_shapes: Vec<String>,
     pub(crate) plugins: HashSet<String>,
 }
 
@@ -60,12 +66,23 @@ impl PhpLiterals {
         literals
     }
 
-    /// Reads the changed files again and drops the removed ones.
+    /// Reads the changed files again, under the paths the index chose for them, and
+    /// drops the removed ones.
     pub(crate) fn update(&mut self, changed: &[PathBuf], removed: &[PathBuf], index: &Index) {
+        let filter = index.filter();
         for path in removed.iter().chain(changed) {
-            self.by_file.retain(|file, _| !file.starts_with(path));
+            let path = filter.under_root(path);
+            let chosen = chosen_path(filter.root(), &path).map(|(_, chosen)| chosen);
+            self.by_file.retain(|file, _| {
+                !file.starts_with(&path) && chosen.as_ref().is_none_or(|c| !file.starts_with(c))
+            });
         }
         self.refresh(index);
+    }
+
+    /// Whether a service id shape matches `id`.
+    pub(crate) fn matches_service(&self, id: &str) -> bool {
+        self.service_shapes.iter().any(|shape| glob(shape, id))
     }
 
     /// Whether a route shape matches `name`.
@@ -93,10 +110,28 @@ impl PhpLiterals {
                 .map(|name| RefKey::Member(name.to_string()))
                 .collect()
         };
-        let service_files = candidates(classes(&SERVICE_DEFINERS));
+        let definers: Vec<String> = SERVICE_DEFINERS
+            .iter()
+            .map(|name| name.to_string())
+            .chain(SERVICE_DEFINERS.iter().flat_map(|name| {
+                index
+                    .all_subtypes(name)
+                    .into_iter()
+                    .map(|subtype| subtype.declaration.fqn.clone())
+            }))
+            .collect();
+        let definers: Vec<&str> = definers.iter().map(String::as_str).collect();
+        let service_files = candidates(classes(&definers));
         let setter_files = candidates(members(&SERVICE_SETTERS));
         let route_files = candidates(classes(&ROUTE_DEFINERS));
         let plugin_files = candidates(members(&["setDefinition"]));
+        // Removed files, and files that no longer mention what made them candidates.
+        self.by_file.retain(|path, _| {
+            service_files.contains(path)
+                || setter_files.contains(path)
+                || route_files.contains(path)
+                || plugin_files.contains(path)
+        });
         let mut all: Vec<&PathBuf> = service_files
             .iter()
             .chain(&setter_files)
@@ -112,8 +147,15 @@ impl PhpLiterals {
                 let source = std::fs::read(path).ok()?;
                 let mut found = FileLiterals::default();
                 let literals = infer::string_literals(&source);
+                let shapes = || -> Vec<String> {
+                    infer::string_shapes(&source)
+                        .into_iter()
+                        .filter(|shape| telling(shape))
+                        .collect()
+                };
                 if service_files.contains(*path) {
                     found.services.extend(literals.iter().cloned());
+                    found.service_shapes = shapes();
                     found.services.extend(
                         summarize(&source)
                             .names
@@ -129,14 +171,7 @@ impl PhpLiterals {
                 }
                 if route_files.contains(*path) {
                     found.routes.extend(literals.iter().cloned());
-                    found.route_shapes = infer::string_shapes(&source)
-                        .into_iter()
-                        .filter(|shape| {
-                            shape
-                                .split_once('*')
-                                .is_some_and(|(head, _)| head.contains('.'))
-                        })
-                        .collect();
+                    found.route_shapes = shapes();
                 }
                 if plugin_files.contains(*path) {
                     found.plugins.extend(literals);
@@ -154,6 +189,13 @@ impl PhpLiterals {
             .clone()
             .flat_map(|f| f.routes.iter().cloned())
             .collect();
+        let mut shapes: Vec<String> = files
+            .clone()
+            .flat_map(|f| f.service_shapes.iter().cloned())
+            .collect();
+        shapes.sort();
+        shapes.dedup();
+        self.service_shapes = shapes;
         self.plugins = files
             .clone()
             .flat_map(|f| f.plugins.iter().cloned())
@@ -163,6 +205,14 @@ impl PhpLiterals {
         shapes.dedup();
         self.route_shapes = shapes;
     }
+}
+
+/// Whether a shape is specific enough to stand for ids: one of its literal parts
+/// holds a `.` and a letter or digit, so `*.json` is kept and `*.*` is not.
+fn telling(shape: &str) -> bool {
+    shape
+        .split('*')
+        .any(|part| part.contains('.') && part.chars().any(|c| c.is_alphanumeric()))
 }
 
 /// Whether `text` matches `shape`, where each `*` stands for a non-empty run.
