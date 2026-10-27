@@ -1699,3 +1699,82 @@ fn caught_plugin_lookups_still_flag_render_element_types() {
         vec!["Undefined plugin 'nowhere_caught_element' of ElementInfoManager"]
     );
 }
+
+#[test]
+fn unimported_annotation_names_lead_to_drupal_annotation_classes() {
+    let file = "modules/contrib/gadget/src/Plugin/Block/UnimportedBlock.php";
+
+    assert_eq!(
+        definitions_in(file, " * @"),
+        vec!["core/lib/Drupal/Core/Block/Annotation/Block.php: Block"]
+    );
+    assert_eq!(
+        definitions_in(file, "= @"),
+        vec!["core/lib/Drupal/Core/Annotation/Translation.php: Translation"]
+    );
+}
+
+/// References of the class declared at `needle` in `file`, as `path: text`.
+fn references_in(index: &mut Index, root: &Path, file: &str, needle: &str) -> Vec<String> {
+    let path = root.join(file);
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+    let offset = text.find(needle).unwrap() + needle.len();
+    let mut found: Vec<String> = index
+        .references(&path, &source, offset as u32, false)
+        .into_iter()
+        .map(|l| {
+            let content = fs::read_to_string(&l.path).unwrap();
+            let name = l.path.strip_prefix(root).unwrap().display().to_string();
+            format!("{name}: {}", &content[l.start as usize..l.end as usize])
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn references_of_an_annotation_class_include_unimported_uses() {
+    let (root, mut index) = drupal_fixture();
+
+    let found = references_in(
+        &mut index,
+        &root,
+        "core/lib/Drupal/Core/Annotation/Translation.php",
+        "class ",
+    );
+
+    assert!(
+        found.contains(
+            &"modules/contrib/gadget/src/Plugin/Block/UnimportedBlock.php: Translation".to_string()
+        ),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn annotation_names_follow_updates() {
+    const TRANSLATION: &str = "core/lib/Drupal/Core/Annotation/Translation.php";
+    let (_dir, root, mut index) = temp_drupal(&[
+        (
+            TRANSLATION,
+            "<?php\nnamespace Drupal\\Core\\Annotation;\n\nclass Translation\n{\n}\n",
+        ),
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        (
+            "modules/custom/m/src/Plugin/Thing.php",
+            "<?php\nnamespace Drupal\\m\\Plugin;\n\nclass Thing\n{\n}\n",
+        ),
+    ]);
+    write(
+        &root,
+        "modules/custom/m/src/Plugin/Thing.php",
+        "<?php\nnamespace Drupal\\m\\Plugin;\n\n/**\n * @Thing(\n *   label = @Translation(\"Thing\"),\n * )\n */\nclass Thing\n{\n}\n",
+    );
+    index.update(&[root.join("modules/custom/m/src/Plugin/Thing.php")], &[]);
+
+    assert_eq!(
+        references_in(&mut index, &root, TRANSLATION, "class "),
+        vec!["modules/custom/m/src/Plugin/Thing.php: Translation"]
+    );
+}

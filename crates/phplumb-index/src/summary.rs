@@ -53,6 +53,9 @@ pub enum RefKey {
     Function(String),
     Constant(String),
     Member(String),
+    /// An unqualified annotation name no import resolves, by its short name: the
+    /// frameworks may resolve it to any class with that short name.
+    Annotation(String),
 }
 
 impl RefKey {
@@ -72,6 +75,7 @@ impl RefKey {
                 },
             ),
             RefKey::Member(name) => (b'm', name.to_ascii_lowercase()),
+            RefKey::Annotation(short) => (b'a', short.to_ascii_lowercase()),
         };
         let mut hasher = DefaultHasher::new();
         hasher.write_u8(prefix);
@@ -233,6 +237,13 @@ impl ScopeNames<'_> {
     pub fn namespace(&self) -> &str {
         self.scope.map_or("", |s| s.namespace.as_str())
     }
+
+    /// Whether the first segment of the class name `name` is imported.
+    pub fn is_imported(&self, name: &str) -> bool {
+        let first = name.split('\\').next().unwrap_or(name);
+        self.scope
+            .is_some_and(|s| s.imports.contains_key(&first.to_ascii_lowercase()))
+    }
 }
 
 impl NameContext for ScopeNames<'_> {
@@ -310,6 +321,9 @@ pub struct FileSummary {
     /// Members named in `@see`-like docblock values, sorted by start. Kept apart
     /// from `static_refs`.
     pub doc_members: Vec<DocMemberRef>,
+    /// Annotation names written in docblocks, nested ones included, resolved by
+    /// the file's imports; sorted by start.
+    pub annotation_names: Vec<NameRef>,
     pub has_parse_errors: bool,
     pub file_names: FileNames,
     pub static_refs: Vec<StaticRef>,
@@ -352,12 +366,20 @@ impl FileSummary {
 
 /// Parses `source` and returns its declarations and resolved names. Parsing is
 /// tolerant: a syntax error does not hide the declarations around it.
+/// What the docblocks of a file name.
+struct DocRefs {
+    names: Vec<NameRef>,
+    members: Vec<DocMemberRef>,
+    annotations: Vec<NameRef>,
+}
+
 /// The names every docblock of `program` writes, resolved in the docblock's scope:
-/// classes and functions, and members. A docblock that is not valid UTF-8 is
-/// skipped, so ranges stay exact.
-fn doc_names(program: &Program<'_>, names: &FileNames) -> (Vec<NameRef>, Vec<DocMemberRef>) {
+/// classes and functions, members, and annotation names. A docblock that is not
+/// valid UTF-8 is skipped, so ranges stay exact.
+fn doc_names(program: &Program<'_>, names: &FileNames) -> DocRefs {
     let mut found: Vec<NameRef> = Vec::new();
     let mut members: Vec<DocMemberRef> = Vec::new();
+    let mut annotations: Vec<NameRef> = Vec::new();
     let docblocks = program
         .trivia
         .iter()
@@ -374,6 +396,21 @@ fn doc_names(program: &Program<'_>, names: &FileNames) -> (Vec<NameRef>, Vec<Doc
                 end: at(e),
                 qualified: text[s..e].contains('\\'),
                 imported: false,
+            });
+        }
+        let mut spans = Vec::new();
+        for annotation in metadata::annotations(text, start, &scope) {
+            annotation_spans(&annotation, &mut spans);
+        }
+        for (s, e, resolved) in spans {
+            let written = &text[(s - start) as usize..(e - start) as usize];
+            annotations.push(NameRef {
+                kind: NameKind::ClassLike,
+                fqn: written.strip_prefix('\\').map_or(resolved, str::to_string),
+                start: s,
+                end: e,
+                qualified: written.contains('\\'),
+                imported: scope.is_imported(written),
             });
         }
         for see in doc_see_names(text) {
@@ -428,7 +465,26 @@ fn doc_names(program: &Program<'_>, names: &FileNames) -> (Vec<NameRef>, Vec<Doc
     }
     found.sort_by_key(|n| n.start);
     members.sort_by_key(|m| m.start);
-    (found, members)
+    annotations.sort_by_key(|n| n.start);
+    DocRefs {
+        names: found,
+        members,
+        annotations,
+    }
+}
+
+/// The name range and resolved name of an annotation and of every annotation
+/// nested in its arguments.
+fn annotation_spans(annotation: &Metadata, out: &mut Vec<(u32, u32, String)>) {
+    out.push((annotation.start, annotation.end, annotation.name.clone()));
+    let mut values: Vec<&MetaValue> = annotation.arguments.iter().map(|(_, v)| v).collect();
+    while let Some(value) = values.pop() {
+        match value {
+            MetaValue::Nested(nested) => annotation_spans(nested, out),
+            MetaValue::List(entries) => values.extend(entries.iter().map(|(_, v)| v)),
+            _ => {}
+        }
+    }
 }
 
 /// A member named in a `@see`-like docblock value: `Foo::bar()`, `Foo::$bar`,
@@ -589,7 +645,11 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         })
         .collect();
 
-    let (doc_names, doc_members) = doc_names(program, &collector.names);
+    let DocRefs {
+        names: doc_names,
+        members: doc_members,
+        annotations: annotation_names,
+    } = doc_names(program, &collector.names);
 
     let mut keys: HashSet<u64> = HashSet::new();
     for name in names.iter().chain(&doc_names) {
@@ -626,6 +686,13 @@ pub fn summarize(source: &[u8]) -> FileSummary {
     for member in &doc_members {
         keys.insert(RefKey::Member(member.name.clone()).hash());
     }
+    for name in &annotation_names {
+        keys.insert(RefKey::Class(name.fqn.clone()).hash());
+        if !name.qualified && !name.imported {
+            let short = name.fqn.rsplit('\\').next().unwrap_or(&name.fqn);
+            keys.insert(RefKey::Annotation(short.to_string()).hash());
+        }
+    }
     let accessed = collector.member_names.iter();
     for name in accessed.chain(static_refs.iter().map(|r: &StaticRef| &r.name)) {
         keys.insert(RefKey::Member(name.clone()).hash());
@@ -648,6 +715,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         names,
         doc_names,
         doc_members,
+        annotation_names,
         has_parse_errors: program.has_errors(),
         file_names: collector.names,
         static_refs,

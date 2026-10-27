@@ -135,6 +135,31 @@ impl Plugins {
         &self.types
     }
 
+    /// The plugin types whose subdirectory holds `class`, by the namespace rules of
+    /// plugin discovery.
+    pub(crate) fn types_of_class(&self, class: &str) -> Vec<&PluginType> {
+        let lower = class.to_ascii_lowercase();
+        let Some((extension, rest)) = lower
+            .strip_prefix("drupal\\")
+            .and_then(|rest| rest.split_once('\\'))
+        else {
+            return Vec::new();
+        };
+        let rest = if extension == "core" || extension == "component" {
+            rest.split_once('\\').map_or("", |(_, below)| below)
+        } else {
+            rest
+        };
+        self.types
+            .iter()
+            .filter(|t| {
+                let namespace = t.subdir.trim_matches('/').replace('/', "\\");
+                rest.strip_prefix(&namespace.to_ascii_lowercase())
+                    .is_some_and(|below| below.starts_with('\\'))
+            })
+            .collect()
+    }
+
     pub(crate) fn of(&self, manager: &str) -> &[Plugin] {
         self.by_manager
             .get(&manager.to_ascii_lowercase())

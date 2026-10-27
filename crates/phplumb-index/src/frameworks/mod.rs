@@ -13,7 +13,7 @@ use crate::diagnostics::Diagnostic;
 use crate::index::{Index, Location};
 use crate::metadata::Metadata;
 use crate::phpdoc::TypeExpr;
-use crate::summary::{Declaration, Member};
+use crate::summary::{Declaration, Member, NameRef};
 
 /// Whether a framework module runs: detected from the project, or forced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -134,6 +134,11 @@ pub trait Framework: Send + Sync {
     /// Implementations the framework adds to the class-like `class`, each with the
     /// text expected at its range.
     fn class_implementations(&self, index: &Index, class: &str) -> Vec<(Location, String)>;
+    /// The classes an unqualified annotation name may be when no import resolves
+    /// it and no indexed class has its name; `class` is the class whose
+    /// annotations hold it.
+    fn annotation_classes(&self, index: &Index, class: Option<&str>, name: &NameRef)
+    -> Vec<String>;
     /// Targets at `offset` in a file the PHP engine does not read, whose current
     /// content is `source`, each with the text expected at its range.
     fn file_targets(

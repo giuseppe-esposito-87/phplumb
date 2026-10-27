@@ -19,12 +19,17 @@ use crate::diagnostics::Diagnostic;
 use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
+use crate::summary::NameRef;
 
 pub use entities::EntityType;
 use entities::EntityTypes;
 pub use hooks::{ExtensionKind, HookDoc, HookImplementation};
 use hooks::{Hooks, Storage};
 use literals::PhpLiterals;
+
+/// Namespaces plugin discovery reads annotations in for every plugin type.
+const ANNOTATION_NAMESPACES: [&str; 2] =
+    ["Drupal\\Component\\Annotation", "Drupal\\Core\\Annotation"];
 use plugins::Plugins;
 pub use plugins::{Plugin, PluginType};
 pub use routes::RouteDefinition;
@@ -296,6 +301,37 @@ impl Framework for Drupal {
 
     /// A plugin manager, or an interface only one plugin manager implements, has its
     /// plugins as implementations.
+    /// Plugin discovery reads annotations in the component and core annotation
+    /// namespaces and in the namespace of the plugin type's own annotation class.
+    fn annotation_classes(
+        &self,
+        index: &Index,
+        class: Option<&str>,
+        name: &NameRef,
+    ) -> Vec<String> {
+        let short = name.fqn.rsplit('\\').next().unwrap_or(&name.fqn);
+        let own = class.map_or_else(Vec::new, |class| self.plugins.types_of_class(class));
+        let types: Vec<&PluginType> = if own.is_empty() {
+            self.plugins.types().iter().collect()
+        } else {
+            own
+        };
+        let mut namespaces: Vec<&str> = ANNOTATION_NAMESPACES.to_vec();
+        namespaces.extend(types.iter().filter_map(|t| {
+            t.annotation
+                .as_deref()?
+                .rsplit_once('\\')
+                .map(|(namespace, _)| namespace)
+        }));
+        namespaces.sort_unstable();
+        namespaces.dedup();
+        namespaces
+            .into_iter()
+            .map(|namespace| format!("{namespace}\\{short}"))
+            .filter(|candidate| index.has_class(candidate))
+            .collect()
+    }
+
     fn class_implementations(&self, index: &Index, class: &str) -> Vec<(Location, String)> {
         self.plugins
             .manager_of(index, &[class.to_string()])

@@ -311,6 +311,35 @@ impl Index {
     }
 
     /// Every indexed declaration with the path of its file.
+    /// The classes an annotation name of `summary` may be: its imported name when a
+    /// class has it or the name is qualified or imported, otherwise what the
+    /// frameworks resolve it to.
+    pub(crate) fn annotation_classes(&self, summary: &FileSummary, name: &NameRef) -> Vec<String> {
+        if name.qualified || name.imported || self.has_class(&name.fqn) {
+            return vec![name.fqn.clone()];
+        }
+        let class = summary
+            .declarations
+            .iter()
+            .find(|d| {
+                d.class.as_ref().is_some_and(|shape| {
+                    shape
+                        .metadata
+                        .iter()
+                        .any(|m| m.annotation && m.span.0 <= name.start && name.start <= m.span.1)
+                })
+            })
+            .map(|d| d.fqn.as_str());
+        let mut found: Vec<String> = self
+            .frameworks
+            .iter()
+            .flat_map(|f| f.annotation_classes(self, class, name))
+            .collect();
+        found.sort();
+        found.dedup();
+        found
+    }
+
     pub fn declarations(&self) -> impl Iterator<Item = (&Path, &Declaration)> {
         self.files
             .iter()
@@ -1383,7 +1412,9 @@ impl Index {
         let Some(name) =
             name_at(&summary.names, offset).or_else(|| name_at(&summary.doc_names, offset))
         else {
-            return Vec::new();
+            return name_at(&summary.annotation_names, offset)
+                .map(|name| self.class_targets(&self.annotation_classes(&summary, name)))
+                .unwrap_or_default();
         };
         let (key, entries): (String, &[Entry]) = match name.kind {
             NameKind::ClassLike => {

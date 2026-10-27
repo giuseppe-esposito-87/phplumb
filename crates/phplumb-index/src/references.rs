@@ -30,7 +30,10 @@ pub(crate) enum Symbol {
 impl Symbol {
     fn keys(&self) -> Vec<RefKey> {
         match self {
-            Symbol::Class(fqn) => vec![RefKey::Class(fqn.clone())],
+            Symbol::Class(fqn) => vec![
+                RefKey::Class(fqn.clone()),
+                RefKey::Annotation(fqn.rsplit('\\').next().unwrap_or(fqn).to_string()),
+            ],
             Symbol::Function(fqn) => vec![RefKey::Function(fqn.clone())],
             Symbol::Constant(fqn) => vec![RefKey::Constant(fqn.clone())],
             Symbol::Member {
@@ -115,7 +118,22 @@ fn scan_file(
             .collect()
     };
     match symbol {
-        Symbol::Class(fqn) => names(NameKind::ClassLike, &|n| n.fqn.eq_ignore_ascii_case(fqn)),
+        Symbol::Class(fqn) => {
+            let mut found = names(NameKind::ClassLike, &|n| n.fqn.eq_ignore_ascii_case(fqn));
+            found.extend(
+                summary
+                    .annotation_names
+                    .iter()
+                    .filter(|n| {
+                        index
+                            .annotation_classes(summary, n)
+                            .iter()
+                            .any(|class| class.eq_ignore_ascii_case(fqn))
+                    })
+                    .map(|n| at(n.start, n.end)),
+            );
+            found
+        }
         Symbol::Function(fqn) => names(NameKind::Function, &|n| index.function_matches(n, fqn)),
         Symbol::Constant(fqn) => names(NameKind::Constant, &|n| index.constant_matches(n, fqn)),
         Symbol::Member {

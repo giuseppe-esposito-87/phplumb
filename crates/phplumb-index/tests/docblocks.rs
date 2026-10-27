@@ -13,6 +13,7 @@ const BASE: &str =
 const FOO: &str = "<?php\nnamespace Lib;\n\nclass Foo extends Base implements FooInterface\n{\n    const LIMIT = 1;\n    /**\n     * @see self::run()\n     */\n    public $name;\n    public function run() {}\n}\n";
 const FUNCTIONS: &str = "<?php\nnamespace Lib;\n\nfunction helper() {}\n";
 const GLOBAL: &str = "<?php\n\nfunction global_helper() {}\n";
+const ROUTE: &str = "<?php\nnamespace Lib\\Ann;\n\nclass Route\n{\n}\n";
 const FOO_INTERFACE: &str = "<?php\nnamespace Lib;\n\ninterface FooInterface\n{\n}\n";
 const FOO_EXCEPTION: &str =
     "<?php\nnamespace Lib;\n\nclass FooException extends \\Exception\n{\n}\n";
@@ -21,6 +22,7 @@ const THING: &str = "<?php\nnamespace Lib\\Sub;\n\nclass Thing\n{\n}\n";
 const USE: &str = r#"<?php
 namespace App;
 
+use Lib\Ann\Route;
 use Lib\Foo;
 use Lib\FooInterface;
 
@@ -107,6 +109,23 @@ class Consumer
     public function members()
     {
     }
+
+    /**
+     * @Route("/x")
+     */
+    public function routed()
+    {
+    }
+
+    /**
+     * Declares a route like this:
+     * @code
+     * @Route("/example")
+     * @endcode
+     */
+    public function documented()
+    {
+    }
 }
 "#;
 
@@ -135,6 +154,7 @@ fn workspace() -> (TempDir, PathBuf, Index) {
         ("Braced.php", BRACED),
         ("lib/functions.php", FUNCTIONS),
         ("global.php", GLOBAL),
+        ("lib/Ann/Route.php", ROUTE),
     ];
     for (path, content) in files {
         let path = root.join(path);
@@ -511,5 +531,31 @@ fn hover_on_a_see_member_shows_the_member() {
             .as_deref()
             .is_some_and(|h| h.contains("Lib\\Foo::run()")),
         "{hover:?}"
+    );
+}
+
+#[test]
+fn imported_annotation_names_lead_to_their_class() {
+    let (_dir, root, mut index) = workspace();
+
+    assert_eq!(
+        definitions(&mut index, &root, "Use.php", "@Route(\"/x\")", "Route"),
+        vec!["lib/Ann/Route.php: Route"]
+    );
+}
+
+#[test]
+fn annotation_examples_lead_nowhere() {
+    let (_dir, root, mut index) = workspace();
+
+    assert_eq!(
+        definitions(
+            &mut index,
+            &root,
+            "Use.php",
+            "@Route(\"/example\")",
+            "Route"
+        ),
+        Vec::<String>::new()
     );
 }

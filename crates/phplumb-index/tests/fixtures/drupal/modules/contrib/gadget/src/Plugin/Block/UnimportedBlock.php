@@ -6,6 +6,7 @@ namespace Drupal\gadget\Plugin\Block;
  *
  * @Block(
  *   id = "unimported_block",
+ *   admin_label = @Translation("Unimported"),
  * )
  */
 class UnimportedBlock
