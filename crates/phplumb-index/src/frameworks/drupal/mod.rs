@@ -1,7 +1,9 @@
 //! Drupal: services from `*.services.yml`, entity types, and hooks.
 
 mod entities;
+mod extensions;
 mod hooks;
+mod plugins;
 mod services;
 
 use std::any::Any;
@@ -16,6 +18,8 @@ pub use entities::EntityType;
 use entities::EntityTypes;
 pub use hooks::{ExtensionKind, HookDoc, HookImplementation};
 use hooks::{Hooks, Storage};
+use plugins::Plugins;
+pub use plugins::{Plugin, PluginType};
 pub use services::ServiceDefinition;
 use services::Services;
 
@@ -24,6 +28,7 @@ pub struct Drupal {
     services: Services,
     entities: EntityTypes,
     hooks: Hooks,
+    plugins: Plugins,
 }
 
 impl Drupal {
@@ -36,6 +41,22 @@ impl Drupal {
             Storage::Config => found.iter().any(config),
             Storage::Content => found.iter().any(|entity| !config(entity)),
         }
+    }
+
+    /// Every plugin type, sorted by manager.
+    pub fn plugin_types(&self) -> &[PluginType] {
+        self.plugins.types()
+    }
+
+    /// Every plugin of `manager`, sorted by path and offset.
+    pub fn plugins_of(&self, manager: &str) -> &[Plugin] {
+        self.plugins.of(manager)
+    }
+
+    /// The plugins of `manager` an id names: that id, or for `base:derivative` with
+    /// none, `base`.
+    pub fn plugins(&self, manager: &str, id: &str) -> Vec<&Plugin> {
+        self.plugins.named(manager, id)
     }
 
     /// Every implementation of `hook`, sorted by path and offset.
@@ -90,12 +111,15 @@ impl Framework for Drupal {
         self.services = Services::read(index.filter());
         self.entities = EntityTypes::read(index);
         self.hooks = Hooks::read(index);
+        self.plugins = Plugins::read(index, self.hooks.extensions());
     }
 
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
         self.services.update(index.filter(), changed, removed);
         self.entities = EntityTypes::read(index);
         self.hooks.update(index, changed, removed);
+        self.plugins
+            .update(index, self.hooks.extensions(), changed, removed);
     }
 
     /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes;

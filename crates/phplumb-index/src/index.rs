@@ -171,6 +171,11 @@ impl Index {
             framework.rebuild(&index);
         }
         index.frameworks = frameworks;
+        index
+            .property_types
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         stats.elapsed_ms = started.elapsed().as_millis();
         Ok((index, stats))
     }

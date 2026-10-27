@@ -791,3 +791,110 @@ fn names_inside_hook_attributes_keep_their_targets() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].path, root.join("core/lib/Order.php"));
 }
+
+const BLOCKS: &str = "Drupal\\Core\\Block\\BlockManager";
+const ELEMENTS: &str = "Drupal\\Core\\Render\\ElementInfoManager";
+
+fn plugin_list<'a>(
+    plugins: impl IntoIterator<Item = &'a phplumb_index::frameworks::drupal::Plugin>,
+) -> Vec<String> {
+    plugins
+        .into_iter()
+        .map(|p| format!("{} {}", p.id, p.class))
+        .collect()
+}
+
+#[test]
+fn plugin_types_come_from_manager_constructors() {
+    let (_root, index) = drupal_fixture();
+
+    let types: Vec<String> = index
+        .drupal()
+        .unwrap()
+        .plugin_types()
+        .iter()
+        .map(|t| {
+            format!(
+                "{} {} {} {}",
+                t.manager, t.subdir, t.attribute, t.annotation
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        types,
+        vec![
+            "Drupal\\Core\\Block\\BlockManager Plugin/Block Drupal\\Core\\Block\\Attribute\\Block Drupal\\Core\\Block\\Annotation\\Block",
+            "Drupal\\Core\\Render\\ElementInfoManager Element Drupal\\Core\\Render\\Attribute\\RenderElement Drupal\\Core\\Render\\Annotation\\RenderElement",
+        ]
+    );
+}
+
+#[test]
+fn plugins_are_read_from_attributes_and_annotations() {
+    let (_root, index) = drupal_fixture();
+
+    assert_eq!(
+        plugin_list(index.drupal().unwrap().plugins_of(BLOCKS)),
+        vec![
+            "gadget_block Drupal\\gadget\\Plugin\\Block\\GadgetBlock",
+            "menu_block Drupal\\mymodule\\Plugin\\Block\\MenuBlock",
+            "my_block Drupal\\mymodule\\Plugin\\Block\\MyBlock",
+        ]
+    );
+}
+
+#[test]
+fn plugins_follow_attribute_subclasses_annotations_and_derivatives() {
+    let (_root, index) = drupal_fixture();
+    let drupal = index.drupal().unwrap();
+
+    assert_eq!(
+        plugin_list(drupal.plugins(ELEMENTS, "textfield")),
+        vec!["textfield Drupal\\Core\\Render\\Element\\Textfield"]
+    );
+    assert_eq!(
+        plugin_list(drupal.plugins(ELEMENTS, "markup")),
+        vec!["markup Drupal\\Core\\Render\\Element\\Markup"]
+    );
+    assert_eq!(
+        plugin_list(drupal.plugins(BLOCKS, "menu_block:main")),
+        vec!["menu_block Drupal\\mymodule\\Plugin\\Block\\MenuBlock"]
+    );
+    assert!(drupal.plugins(BLOCKS, "stray").is_empty());
+}
+
+#[test]
+fn plugins_follow_updates() {
+    let (_dir, root, mut index) = temp_drupal(&[
+        (
+            "core/lib/Drupal/Core/Plugin/DefaultPluginManager.php",
+            "<?php\nnamespace Drupal\\Core\\Plugin;\nclass DefaultPluginManager { public function __construct($subdir, $namespaces, $module_handler, $plugin_interface = NULL, $attribute = NULL, $annotation = NULL) {} }\n",
+        ),
+        (
+            "core/lib/Drupal/Core/Thing/ThingManager.php",
+            "<?php\nnamespace Drupal\\Core\\Thing;\nuse Drupal\\Core\\Plugin\\DefaultPluginManager;\nclass ThingManager extends DefaultPluginManager { public function __construct($namespaces, $module_handler) { parent::__construct('Plugin/Thing', $namespaces, $module_handler, NULL, Thing::class); } }\n",
+        ),
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        (
+            "modules/custom/m/src/Plugin/Thing/One.php",
+            "<?php\nnamespace Drupal\\m\\Plugin\\Thing;\nuse Drupal\\Core\\Thing\\Thing;\n#[Thing(id: 'one')]\nclass One {}\n",
+        ),
+    ]);
+    let manager = "Drupal\\Core\\Thing\\ThingManager";
+    assert_eq!(index.drupal().unwrap().plugins(manager, "one").len(), 1);
+
+    write(
+        &root,
+        "modules/custom/m/src/Plugin/Thing/One.php",
+        "<?php\nnamespace Drupal\\m\\Plugin\\Thing;\nuse Drupal\\Core\\Thing\\Thing;\n#[Thing(id: 'uno')]\nclass One {}\n",
+    );
+    index.update(
+        &[root.join("modules/custom/m/src/Plugin/Thing/One.php")],
+        &[],
+    );
+
+    let drupal = index.drupal().unwrap();
+    assert!(drupal.plugins(manager, "one").is_empty());
+    assert_eq!(drupal.plugins(manager, "uno").len(), 1);
+}
