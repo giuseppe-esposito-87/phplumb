@@ -211,3 +211,18 @@ fn constructors_are_referenced_by_new() {
         vec!["X.php:X", "X.php:Y", "X.php:__construct", "X.php:static"]
     );
 }
+
+const STORES: &str = "interface Store { public function load($id); }
+abstract class Base implements Store { public function load($id) {} }
+class Concrete extends Base {}
+class Unrelated { public function load($id) {} }
+function f(Concrete $c, Store $s, Unrelated $u) { $c->load(1); $s->load(2); $u->load(3); }";
+
+#[test]
+fn interface_methods_find_calls_typed_as_implementations() {
+    let (_dir, root, mut index) = workspace(&[("S.php", STORES)]);
+
+    let store_load = references_at(&mut index, &root, "S.php", "load($id); }", 0);
+
+    assert_eq!(store_load, vec!["S.php:load", "S.php:load"]);
+}

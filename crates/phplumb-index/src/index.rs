@@ -423,11 +423,20 @@ impl Index {
                 vec![declaration.fqn.clone()]
             };
             // A private member overrides and implements nothing.
-            let family = if member.is_private {
+            let mut family = if member.is_private {
                 Vec::new()
             } else {
                 self.family(&owners, kind, name, target)
             };
+            // An abstract member has no body of its own: a call that resolves to one
+            // of its implementations is a call to it.
+            if member.is_abstract {
+                for implementation in self.implementations_of(&owners, kind, name, target) {
+                    if !family.iter().any(|(l, _)| *l == implementation.0) {
+                        family.push(implementation);
+                    }
+                }
+            }
             let constructed =
                 if kind == MemberKind::Method && name.eq_ignore_ascii_case("__construct") {
                     owners
@@ -491,6 +500,50 @@ impl Index {
             }
         }
         family
+    }
+
+    /// The declarations that concrete subtypes of `owners` resolve the member to, other
+    /// than `own`, labeled `Class::member`.
+    fn implementations_of(
+        &self,
+        owners: &[String],
+        kind: MemberKind,
+        name: &str,
+        own: &Location,
+    ) -> Vec<(Location, String)> {
+        let mut found: Vec<(Location, String)> = Vec::new();
+        for owner in owners {
+            for subtype in self.all_subtypes(owner) {
+                let concrete = subtype
+                    .declaration
+                    .class
+                    .as_ref()
+                    .is_some_and(|s| !s.is_abstract)
+                    && !matches!(
+                        subtype.declaration.kind,
+                        SymbolKind::Interface | SymbolKind::Trait
+                    );
+                if !concrete {
+                    continue;
+                }
+                for (class, member) in self.find_member(&subtype.declaration.fqn, kind, name) {
+                    let location = Location {
+                        path: class.path.to_path_buf(),
+                        start: member.name_start,
+                        end: member.name_end,
+                    };
+                    if member.is_private
+                        || location == *own
+                        || found.iter().any(|(l, _)| *l == location)
+                    {
+                        continue;
+                    }
+                    let (_, short) = calls::split(&class.declaration.fqn);
+                    found.push((location, format!("{short}::{}", member.name)));
+                }
+            }
+        }
+        found
     }
 
     /// Whether `class` resolves member `name` to the declaration at `own`.
