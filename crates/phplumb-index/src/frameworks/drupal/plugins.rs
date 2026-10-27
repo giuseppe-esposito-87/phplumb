@@ -82,7 +82,8 @@ const BY_ID: [&str; 3] = ["createInstance", "getDefinition", "hasDefinition"];
 const ATTRIBUTE_INTERFACE: &str = "Drupal\\Component\\Plugin\\Attribute\\AttributeInterface";
 const PLUGIN_MANAGER: &str = "Drupal\\Component\\Plugin\\PluginManagerInterface";
 /// Where unimported annotations resolve besides the annotation class's namespace.
-const ANNOTATION_NAMESPACE: &str = "Drupal\\Component\\Annotation";
+/// The namespace core plugin discovery reads annotations in for every plugin type.
+const CORE_ANNOTATIONS: &str = "Drupal\\Core\\Annotation";
 const DEFAULT_ANNOTATION: &str = "Drupal\\Component\\Annotation\\Plugin";
 
 /// Plugin types, and the plugins of each by lowercased manager.
@@ -440,7 +441,7 @@ impl Plugins {
                         let target = plugin_type.annotation.as_deref()?;
                         shape.metadata.iter().find(|m| {
                             m.annotation
-                                && annotation_names(index, &m.name, target)
+                                && annotation_names(m, target)
                                     .iter()
                                     .any(|name| matches(name, target))
                         })
@@ -510,21 +511,32 @@ fn is_attribute(index: &Index, class: &str) -> bool {
     !class.to_ascii_lowercase().contains("\\annotation\\")
 }
 
-/// The classes an annotation name can be. An imported name is itself; a name that
-/// names no indexed class may be unimported, which Drupal resolves in the namespace
-/// of the type's annotation class and in the component annotation namespace.
-fn annotation_names(index: &Index, name: &str, target: &str) -> Vec<String> {
-    if index.has_class(name) {
-        return vec![name.to_string()];
+/// The classes an annotation on a plugin of a type whose annotation class is
+/// `target` can be: the class an explicit name names, or the classes plugin
+/// discovery reads an unimported name as.
+fn annotation_names(annotation: &Metadata, target: &str) -> Vec<String> {
+    if annotation.explicit {
+        return vec![annotation.name.clone()];
     }
-    let short = name.rsplit('\\').next().unwrap_or(name);
-    let own = target
+    let short = annotation
+        .name
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&annotation.name);
+    discovered_annotation_names(short, target).to_vec()
+}
+
+/// The classes an unqualified annotation name the file does not import is on a
+/// plugin of a type whose annotation class is `annotation`, as plugin discovery
+/// reads it: the name in that class's namespace and in `Drupal\Core\Annotation`,
+/// never in the plugin's own namespace.
+pub(crate) fn discovered_annotation_names(short: &str, annotation: &str) -> [String; 2] {
+    let own = annotation
         .rsplit_once('\\')
         .map_or("", |(namespace, _)| namespace);
-    vec![
-        name.to_string(),
+    [
         format!("{own}\\{short}"),
-        format!("{ANNOTATION_NAMESPACE}\\{short}"),
+        format!("{CORE_ANNOTATIONS}\\{short}"),
     ]
 }
 

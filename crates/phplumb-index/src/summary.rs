@@ -201,6 +201,8 @@ struct NameScope {
     namespace: String,
     /// Lowercased alias to fully qualified name.
     imports: HashMap<String, String>,
+    /// `use function` imports: lowercased alias to fully qualified name.
+    function_imports: HashMap<String, String>,
 }
 
 impl Default for FileNames {
@@ -238,15 +240,22 @@ impl ScopeNames<'_> {
         self.scope.map_or("", |s| s.namespace.as_str())
     }
 
-    /// Whether the first segment of the class name `name` is imported.
-    pub fn is_imported(&self, name: &str) -> bool {
-        let first = name.split('\\').next().unwrap_or(name);
-        self.scope
-            .is_some_and(|s| s.imports.contains_key(&first.to_ascii_lowercase()))
+    /// The function a `use function` import gives the unqualified name `name`.
+    pub fn imported_function(&self, name: &str) -> Option<&str> {
+        self.scope?
+            .function_imports
+            .get(&name.to_ascii_lowercase())
+            .map(String::as_str)
     }
 }
 
 impl NameContext for ScopeNames<'_> {
+    fn is_imported(&self, name: &str) -> bool {
+        let first = name.split('\\').next().unwrap_or(name);
+        self.scope
+            .is_some_and(|s| s.imports.contains_key(&first.to_ascii_lowercase()))
+    }
+
     fn resolve_class(&self, name: &str) -> String {
         let Some(scope) = self.scope else {
             return name.to_string();
@@ -364,8 +373,6 @@ impl FileSummary {
     }
 }
 
-/// Parses `source` and returns its declarations and resolved names. Parsing is
-/// tolerant: a syntax error does not hide the declarations around it.
 /// What the docblocks of a file name.
 struct DocRefs {
     names: Vec<NameRef>,
@@ -445,11 +452,13 @@ fn doc_names(program: &Program<'_>, names: &FileNames) -> DocRefs {
                     start: s,
                     end: e,
                 } => {
-                    let fqn = match name.strip_prefix('\\') {
-                        Some(qualified) => qualified.to_string(),
-                        None if name.contains('\\') => scope.resolve_class(name),
-                        None if scope.namespace().is_empty() => name.to_string(),
-                        None => format!("{}\\{name}", scope.namespace()),
+                    let imported = scope.imported_function(name);
+                    let fqn = match (name.strip_prefix('\\'), imported) {
+                        (Some(qualified), _) => qualified.to_string(),
+                        (None, _) if name.contains('\\') => scope.resolve_class(name),
+                        (None, Some(imported)) => imported.to_string(),
+                        (None, None) if scope.namespace().is_empty() => name.to_string(),
+                        (None, None) => format!("{}\\{name}", scope.namespace()),
                     };
                     found.push(NameRef {
                         kind: NameKind::Function,
@@ -457,7 +466,7 @@ fn doc_names(program: &Program<'_>, names: &FileNames) -> DocRefs {
                         start: at(s),
                         end: at(e),
                         qualified: name.contains('\\'),
-                        imported: false,
+                        imported: imported.is_some(),
                     });
                 }
             }
@@ -499,6 +508,8 @@ pub struct DocMemberRef {
     pub end: u32,
 }
 
+/// Parses `source` and returns its declarations and resolved names. Parsing is
+/// tolerant: a syntax error does not hide the declarations around it.
 pub fn summarize(source: &[u8]) -> FileSummary {
     let arena = LocalArena::new();
     let program = parse_file_content(&arena, FileId::zero(), source);
@@ -846,6 +857,7 @@ impl PendingMeta {
             end: self.end,
             span: self.span,
             annotation: false,
+            explicit: true,
         })
     }
 }
@@ -1532,7 +1544,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             start: span.start.offset,
             end: span.end.offset,
             namespace: name,
-            imports: HashMap::new(),
+            ..NameScope::default()
         });
     }
 
@@ -1560,6 +1572,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c.unchecked.push((span.start.offset, span.end.offset));
         let offset = r#use.span().start.offset;
         let mut imports: Vec<(String, String)> = Vec::new();
+        let mut functions: Vec<(String, String)> = Vec::new();
         match &r#use.items {
             UseItems::Sequence(seq) => {
                 for item in seq.items.iter() {
@@ -1573,12 +1586,26 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             UseItems::TypedSequence(seq) => {
                 for item in seq.items.iter() {
                     mark_use_item(c, Some(&seq.r#type), item.name.span().start.offset);
+                    if matches!(seq.r#type, UseType::Function(_)) {
+                        functions.push(import(
+                            item.name.value(),
+                            item.alias.as_ref().map(|a| a.identifier.value),
+                            None,
+                        ));
+                    }
                 }
             }
             UseItems::TypedList(list) => {
                 c.not_refs.insert(list.namespace.span().start.offset);
                 for item in list.items.iter() {
                     mark_use_item(c, Some(&list.r#type), item.name.span().start.offset);
+                    if matches!(list.r#type, UseType::Function(_)) {
+                        functions.push(import(
+                            item.name.value(),
+                            item.alias.as_ref().map(|a| a.identifier.value),
+                            Some(list.namespace.value()),
+                        ));
+                    }
                 }
             }
             UseItems::MixedList(list) => {
@@ -1589,18 +1616,22 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                         mixed.r#type.as_ref(),
                         mixed.item.name.span().start.offset,
                     );
-                    if mixed.r#type.is_none() {
-                        imports.push(import(
-                            mixed.item.name.value(),
-                            mixed.item.alias.as_ref().map(|a| a.identifier.value),
-                            Some(list.namespace.value()),
-                        ));
+                    let item = import(
+                        mixed.item.name.value(),
+                        mixed.item.alias.as_ref().map(|a| a.identifier.value),
+                        Some(list.namespace.value()),
+                    );
+                    match mixed.r#type {
+                        None => imports.push(item),
+                        Some(UseType::Function(_)) => functions.push(item),
+                        Some(_) => {}
                     }
                 }
             }
         }
         if let Some(index) = c.names.scope_index(offset) {
             c.names.scopes[index].imports.extend(imports);
+            c.names.scopes[index].function_imports.extend(functions);
         }
     }
 

@@ -31,6 +31,10 @@ pub enum TypeExpr {
 /// qualified form.
 pub trait NameContext {
     fn resolve_class(&self, name: &str) -> String;
+    /// Whether the first segment of the class name `name` is imported.
+    fn is_imported(&self, _name: &str) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -238,6 +242,7 @@ impl TypeParser<'_> {
         let start = self.pos;
         let word = self.word();
         let end = self.pos;
+        let recorded = self.found.len();
         self.skip_spaces();
         let args = match self.peek() {
             Some(b'<') => {
@@ -259,6 +264,10 @@ impl TypeParser<'_> {
         };
 
         let lower = word.to_ascii_lowercase();
+        // `int<0, max>` bounds are numbers, `min` and `max`, never classes.
+        if lower == "int" || lower == "integer" {
+            self.found.truncate(recorded);
+        }
         if ARRAY_LIKE.contains(&lower.as_str()) {
             return Parsed::Type(match args.and_then(|mut args| args.pop()) {
                 Some(Parsed::Type(element)) => array_of(element),
@@ -476,10 +485,9 @@ pub(crate) fn doc_see_names(text: &str) -> Vec<SeeName<'_>> {
         if !SEE_TAGS.contains(&tag) {
             continue;
         }
-        let value = split_type(rest).0;
-        if value.contains("://") {
+        let Some(value) = see_value(rest) else {
             continue;
-        }
+        };
         let value_start = start + offset_in(line, value);
         match value.split_once("::") {
             Some((class, member)) if is_name(class) => {
@@ -513,6 +521,22 @@ pub(crate) fn doc_see_names(text: &str) -> Vec<SeeName<'_>> {
         }
     }
     found
+}
+
+/// The leading value of a `@see`-like tag when it is a name: `Name`, `name()`,
+/// `Name::member`, `Name::member()` or `Name::$member`, without one trailing `,` or
+/// `.`. A file name, a URL or any other text gives none.
+fn see_value(rest: &str) -> Option<&str> {
+    let value = split_type(rest).0;
+    let value = value.strip_suffix([',', '.']).unwrap_or(value);
+    let named = match value.split_once("::") {
+        Some((class, member)) => {
+            let member = member.strip_suffix("()").unwrap_or(member);
+            is_name(class) && is_identifier(member.strip_prefix('$').unwrap_or(member))
+        }
+        None => is_name(value.strip_suffix("()").unwrap_or(value)),
+    };
+    named.then_some(value)
 }
 
 /// Whether `text` is a PHP identifier.
@@ -569,11 +593,9 @@ fn type_positions<'a>(tag: &str, rest: &'a str) -> Vec<&'a str> {
         return vec![split_type(rest).0];
     }
     if SEE_TAGS.contains(&tag) {
-        let value = split_type(rest).0;
-        return if value.contains("://") || (value.ends_with("()") && !value.contains("::")) {
-            Vec::new()
-        } else {
-            vec![value]
+        return match see_value(rest) {
+            Some(value) if !value.ends_with("()") || value.contains("::") => vec![value],
+            _ => Vec::new(),
         };
     }
     if TEMPLATE_TAGS.contains(&tag) {

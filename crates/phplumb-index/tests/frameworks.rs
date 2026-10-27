@@ -1755,26 +1755,58 @@ fn references_of_an_annotation_class_include_unimported_uses() {
 #[test]
 fn annotation_names_follow_updates() {
     const TRANSLATION: &str = "core/lib/Drupal/Core/Annotation/Translation.php";
+    const ONE: &str = "modules/custom/m/src/Plugin/Thing/One.php";
     let (_dir, root, mut index) = temp_drupal(&[
         (
             TRANSLATION,
             "<?php\nnamespace Drupal\\Core\\Annotation;\n\nclass Translation\n{\n}\n",
         ),
+        (
+            "core/lib/Drupal/Core/Plugin/DefaultPluginManager.php",
+            "<?php\nnamespace Drupal\\Core\\Plugin;\nclass DefaultPluginManager { public function __construct($subdir, $namespaces, $module_handler, $plugin_interface = NULL, $attribute = NULL, $annotation = NULL) {} }\n",
+        ),
+        (
+            "core/lib/Drupal/Core/Thing/ThingManager.php",
+            "<?php\nnamespace Drupal\\Core\\Thing;\nuse Drupal\\Core\\Plugin\\DefaultPluginManager;\nclass ThingManager extends DefaultPluginManager { public function __construct($namespaces, $module_handler) { parent::__construct('Plugin/Thing', $namespaces, $module_handler, NULL, NULL, 'Drupal\\Core\\Thing\\Annotation\\Thing'); } }\n",
+        ),
         ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
         (
-            "modules/custom/m/src/Plugin/Thing.php",
-            "<?php\nnamespace Drupal\\m\\Plugin;\n\nclass Thing\n{\n}\n",
+            ONE,
+            "<?php\nnamespace Drupal\\m\\Plugin\\Thing;\n\nclass One\n{\n}\n",
         ),
     ]);
     write(
         &root,
-        "modules/custom/m/src/Plugin/Thing.php",
-        "<?php\nnamespace Drupal\\m\\Plugin;\n\n/**\n * @Thing(\n *   label = @Translation(\"Thing\"),\n * )\n */\nclass Thing\n{\n}\n",
+        ONE,
+        "<?php\nnamespace Drupal\\m\\Plugin\\Thing;\n\n/**\n * @Thing(\n *   id = \"one\",\n *   label = @Translation(\"One\"),\n * )\n */\nclass One\n{\n}\n",
     );
-    index.update(&[root.join("modules/custom/m/src/Plugin/Thing.php")], &[]);
+    index.update(&[root.join(ONE)], &[]);
 
     assert_eq!(
         references_in(&mut index, &root, TRANSLATION, "class "),
-        vec!["modules/custom/m/src/Plugin/Thing.php: Translation"]
+        vec!["modules/custom/m/src/Plugin/Thing/One.php: Translation"]
+    );
+}
+
+#[test]
+fn unimported_annotation_names_ignore_classes_of_the_same_namespace() {
+    let (root, mut index) = drupal_fixture();
+
+    assert_eq!(
+        definitions_in(
+            "modules/contrib/gadget/src/Plugin/Block/UnimportedBlock.php",
+            " * @"
+        ),
+        vec!["core/lib/Drupal/Core/Block/Annotation/Block.php: Block"]
+    );
+    let found = references_in(
+        &mut index,
+        &root,
+        "modules/contrib/gadget/src/Plugin/Block/Block.php",
+        "class ",
+    );
+    assert!(
+        !found.iter().any(|f| f.contains("UnimportedBlock.php")),
+        "{found:?}"
     );
 }

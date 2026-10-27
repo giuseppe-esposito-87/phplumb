@@ -9,12 +9,12 @@ Same machine and project. Class names in PHPDoc types, members and functions in 
 | Metric                                  | Value                             | Target          |
 | --------------------------------------- | --------------------------------- | --------------- |
 | Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | at least 42,455 |
-| Cold index                              | 6.0 to 6.8 s                      | under 10 s      |
-| Peak resident memory                    | 424 to 434 MB                     | under 1024 MB   |
+| Cold index                              | 5.9 to 6.8 s, once 7.3 s          | under 10 s      |
+| Peak resident memory                    | 424 to 451 MB                     | under 1024 MB   |
 | Slowest definition case                 | 35 to 41 ms                       | under 1 s       |
-| All cases                               | 88 passed, 0 failed               | all pass        |
+| All cases                               | 89 passed, 0 failed               | all pass        |
 
-New cases cover a core interface in a `@param`, a core method in a `@see`, an unimported webform handler annotation and a nested `@Translation`. The references case for `EntityStorageInterface::load` gained the `@see` in `EntityDisplayRepositoryInterface`.
+New cases cover a core interface in a `@param`, a core method in a `@see`, an unimported webform handler annotation, a nested `@Translation`, and an unimported `@WebformElement` beside a plugin class of the same name, which leads to the annotation class as plugin discovery reads it. The references case for `EntityStorageInterface::load` gained the `@see` in `EntityDisplayRepositoryInterface`.
 
 ## 2026-10-27, step 4f broken Drupal references
 

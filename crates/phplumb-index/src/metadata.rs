@@ -33,6 +33,10 @@ pub struct Metadata {
     /// A docblock annotation rather than an attribute.
     #[serde(default)]
     pub annotation: bool,
+    /// The name is qualified or imported, so it names its class itself; always
+    /// true for an attribute.
+    #[serde(default)]
+    pub explicit: bool,
 }
 
 impl Metadata {
@@ -191,6 +195,7 @@ impl Annotations<'_> {
             end: self.offset + name_end as u32,
             span: (self.offset + start as u32, self.offset + self.pos as u32),
             annotation: true,
+            explicit: name.contains('\\') || self.names.is_imported(&name),
         })
     }
 

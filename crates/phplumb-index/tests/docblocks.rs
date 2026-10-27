@@ -10,9 +10,11 @@ use tempfile::TempDir;
 
 const BASE: &str =
     "<?php\nnamespace Lib;\n\nclass Base\n{\n    public function inherited() {}\n}\n";
-const FOO: &str = "<?php\nnamespace Lib;\n\nclass Foo extends Base implements FooInterface\n{\n    const LIMIT = 1;\n    /**\n     * @see self::run()\n     */\n    public $name;\n    public function run() {}\n}\n";
+const FOO: &str = "<?php\nnamespace Lib;\n\nclass Foo extends Base implements FooInterface\n{\n    const LIMIT = 1;\n    /**\n     * @see self::run()\n     */\n    public $name;\n    public function run() {}\n    public function limit() {}\n}\n";
 const FUNCTIONS: &str = "<?php\nnamespace Lib;\n\nfunction helper() {}\n";
-const GLOBAL: &str = "<?php\n\nfunction global_helper() {}\n";
+const GLOBAL: &str = "<?php\n\nfunction global_helper() {}\n\nfunction helper() {}\n";
+const MAX: &str = "<?php\nnamespace Lib;\n\nclass Max\n{\n}\n";
+const IMPORTS: &str = "<?php\nnamespace App;\n\nuse function Lib\\helper;\n\n/**\n * @see helper()\n */\nfunction imports_helper()\n{\n    helper();\n}\n";
 const ROUTE: &str = "<?php\nnamespace Lib\\Ann;\n\nclass Route\n{\n}\n";
 const FOO_INTERFACE: &str = "<?php\nnamespace Lib;\n\ninterface FooInterface\n{\n}\n";
 const FOO_EXCEPTION: &str =
@@ -25,6 +27,7 @@ namespace App;
 use Lib\Ann\Route;
 use Lib\Foo;
 use Lib\FooInterface;
+use Lib\Max;
 
 /**
  * Builds a Foo.
@@ -80,6 +83,7 @@ class Consumer
     /**
      * @param array<string,
      *   Foo> $continued
+     * @param int<0, max> $range
      * @var int
      * @return T
      */
@@ -105,6 +109,9 @@ class Consumer
      * @see https://example.com/a::b()
      * @see \Lib\helper()
      * @see global_helper()
+     * @see foo.links.yml
+     * @see Foo/Bar.php
+     * @see Foo::run().
      */
     public function members()
     {
@@ -155,6 +162,8 @@ fn workspace() -> (TempDir, PathBuf, Index) {
         ("lib/functions.php", FUNCTIONS),
         ("global.php", GLOBAL),
         ("lib/Ann/Route.php", ROUTE),
+        ("lib/Max.php", MAX),
+        ("Imports.php", IMPORTS),
     ];
     for (path, content) in files {
         let path = root.join(path);
@@ -273,6 +282,7 @@ fn docblock_words_that_are_not_classes_lead_nowhere() {
         ("Uses a Bar.", "Bar"),
         ("https://example.com/Foo", "Foo"),
         ("@var \\Nowhere\\Missing", "Missing"),
+        ("int<0, max>", "max"),
     ];
     for (needle, word) in cases {
         assert_eq!(
@@ -453,6 +463,7 @@ fn see_members_lead_to_their_declarations() {
             "lib/Base.php: inherited",
         ),
         ("lib/Foo.php", "@see self::run()", "run", "lib/Foo.php: run"),
+        ("Use.php", "@see Foo::run().", "run", "lib/Foo.php: run"),
     ];
     for (file, needle, word, expected) in cases {
         assert_eq!(
@@ -496,6 +507,9 @@ fn see_words_that_are_not_members_lead_nowhere() {
         ("@see Foo::missing()", "missing"),
         ("https://example.com/a::b()", "b()"),
         ("the Bar::stop() case", "stop"),
+        ("@see foo.links.yml", "foo"),
+        ("@see Foo/Bar.php", "Foo"),
+        ("@see Foo/Bar.php", "Bar"),
     ];
     for (needle, word) in cases {
         assert_eq!(
@@ -513,7 +527,7 @@ fn references_of_a_method_include_see_mentions() {
     let found = references(&mut index, &root, "lib/Foo.php", "function run", "run");
 
     let in_use = found.iter().filter(|f| *f == "Use.php: run").count();
-    assert_eq!(in_use, 3, "{found:?}");
+    assert_eq!(in_use, 4, "{found:?}");
     assert!(found.contains(&"lib/Foo.php: run".to_string()), "{found:?}");
 }
 
@@ -557,5 +571,44 @@ fn annotation_examples_lead_nowhere() {
             "Route"
         ),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn see_names_without_parentheses_prefer_an_exact_constant() {
+    let (_dir, root, mut index) = workspace();
+
+    let of_method = references(&mut index, &root, "lib/Foo.php", "function limit", "limit");
+    let of_constant = references(&mut index, &root, "lib/Foo.php", "const LIMIT", "LIMIT");
+
+    assert!(
+        !of_method.contains(&"Use.php: LIMIT".to_string()),
+        "{of_method:?}"
+    );
+    assert!(
+        of_constant.contains(&"Use.php: LIMIT".to_string()),
+        "{of_constant:?}"
+    );
+}
+
+#[test]
+fn see_functions_follow_function_imports() {
+    let (_dir, root, mut index) = workspace();
+
+    assert_eq!(
+        definitions(&mut index, &root, "Imports.php", "@see helper()", "helper"),
+        vec!["lib/functions.php: helper"]
+    );
+    let found = references(
+        &mut index,
+        &root,
+        "lib/functions.php",
+        "function helper",
+        "helper",
+    );
+    assert_eq!(
+        found.iter().filter(|f| *f == "Imports.php: helper").count(),
+        2,
+        "{found:?}"
     );
 }

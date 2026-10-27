@@ -178,21 +178,35 @@ fn scan_file(
                 }
             }
             for doc in &summary.doc_members {
-                let kind_matches = match doc.kind {
-                    Some(doc_kind) => doc_kind == *kind,
-                    None => matches!(kind, MemberKind::Method | MemberKind::Constant),
-                };
-                if !kind_matches || !same_name(&doc.name, name, *kind) {
+                if !same_name(&doc.name, name, *kind) {
                     continue;
                 }
-                let as_static = crate::summary::StaticRef {
-                    kind: *kind,
+                let as_static = |kind: MemberKind| crate::summary::StaticRef {
+                    kind,
                     name: doc.name.clone(),
                     start: doc.start,
                     end: doc.end,
                     class: doc.class.clone(),
                 };
-                let targets = static_targets(index, path, summary, &as_static, *kind, name);
+                // `Foo::NAME` names a constant of that exact name, else a method.
+                let kind_matches = match (doc.kind, *kind) {
+                    (Some(doc_kind), kind) => doc_kind == kind,
+                    (None, MemberKind::Constant) => true,
+                    (None, MemberKind::Method) => static_targets(
+                        index,
+                        path,
+                        summary,
+                        &as_static(MemberKind::Constant),
+                        MemberKind::Constant,
+                        &doc.name,
+                    )
+                    .is_empty(),
+                    (None, _) => false,
+                };
+                if !kind_matches {
+                    continue;
+                }
+                let targets = static_targets(index, path, summary, &as_static(*kind), *kind, name);
                 if targets.iter().any(|(target, _)| target == own) {
                     found.push(at(doc.start, doc.end));
                 }

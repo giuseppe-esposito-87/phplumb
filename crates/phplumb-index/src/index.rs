@@ -306,12 +306,12 @@ impl Index {
         found
     }
 
-    /// Every indexed declaration with the path of its file.
-    /// The classes an annotation name of `summary` may be: its imported name when a
-    /// class has it or the name is qualified or imported, otherwise what the
-    /// frameworks resolve it to.
+    /// The classes an annotation name of `summary` may be: the class a qualified or
+    /// imported name names; for an unimported name on a class whose annotations a
+    /// framework's discovery reads, what that framework reads it as; otherwise the
+    /// class of the file's namespace, as Doctrine reads it.
     pub(crate) fn annotation_classes(&self, summary: &FileSummary, name: &NameRef) -> Vec<String> {
-        if name.qualified || name.imported || self.has_class(&name.fqn) {
+        if name.qualified || name.imported {
             return vec![name.fqn.clone()];
         }
         let class = summary
@@ -326,16 +326,28 @@ impl Index {
                 })
             })
             .map(|d| d.fqn.as_str());
-        let mut found: Vec<String> = self
-            .frameworks
-            .iter()
-            .flat_map(|f| f.annotation_classes(self, class, name))
-            .collect();
+        let discovered: Vec<Vec<String>> = class
+            .map(|class| {
+                self.frameworks
+                    .iter()
+                    .filter_map(|f| f.annotation_classes(self, class, name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if discovered.is_empty() {
+            return if self.has_class(&name.fqn) {
+                vec![name.fqn.clone()]
+            } else {
+                Vec::new()
+            };
+        }
+        let mut found: Vec<String> = discovered.into_iter().flatten().collect();
         found.sort();
         found.dedup();
         found
     }
 
+    /// Every indexed declaration with the path of its file.
     pub fn declarations(&self) -> impl Iterator<Item = (&Path, &Declaration)> {
         self.files
             .iter()
@@ -1410,16 +1422,17 @@ impl Index {
             };
             return match member.kind {
                 Some(kind) => self.member_targets(&[class], kind, &member.name),
+                // A constant of that exact name, else a method.
                 None => {
-                    let methods = self.member_targets(
+                    let constants = self.member_targets(
                         std::slice::from_ref(&class),
-                        MemberKind::Method,
+                        MemberKind::Constant,
                         &member.name,
                     );
-                    if methods.is_empty() {
-                        self.member_targets(&[class], MemberKind::Constant, &member.name)
+                    if constants.is_empty() {
+                        self.member_targets(&[class], MemberKind::Method, &member.name)
                     } else {
-                        methods
+                        constants
                     }
                 }
             };

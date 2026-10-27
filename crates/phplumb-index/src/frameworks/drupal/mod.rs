@@ -27,9 +27,6 @@ pub use hooks::{ExtensionKind, HookDoc, HookImplementation};
 use hooks::{Hooks, Storage};
 use literals::PhpLiterals;
 
-/// Namespaces plugin discovery reads annotations in for every plugin type.
-const ANNOTATION_NAMESPACES: [&str; 2] =
-    ["Drupal\\Component\\Annotation", "Drupal\\Core\\Annotation"];
 use plugins::Plugins;
 pub use plugins::{Plugin, PluginType};
 pub use routes::RouteDefinition;
@@ -304,39 +301,35 @@ impl Framework for Drupal {
         broken::find(self, index, path, source)
     }
 
-    /// A plugin manager, or an interface only one plugin manager implements, has its
-    /// plugins as implementations.
-    /// Plugin discovery reads annotations in the component and core annotation
-    /// namespaces and in the namespace of the plugin type's own annotation class.
+    /// Plugin discovery reads the annotations of a class in the subdirectory of a
+    /// plugin type that has an annotation class.
     fn annotation_classes(
         &self,
         index: &Index,
-        class: Option<&str>,
+        class: &str,
         name: &NameRef,
-    ) -> Vec<String> {
-        let short = name.fqn.rsplit('\\').next().unwrap_or(&name.fqn);
-        let own = class.map_or_else(Vec::new, |class| self.plugins.types_of_class(class));
-        let types: Vec<&PluginType> = if own.is_empty() {
-            self.plugins.types().iter().collect()
-        } else {
-            own
-        };
-        let mut namespaces: Vec<&str> = ANNOTATION_NAMESPACES.to_vec();
-        namespaces.extend(types.iter().filter_map(|t| {
-            t.annotation
-                .as_deref()?
-                .rsplit_once('\\')
-                .map(|(namespace, _)| namespace)
-        }));
-        namespaces.sort_unstable();
-        namespaces.dedup();
-        namespaces
+    ) -> Option<Vec<String>> {
+        let annotations: Vec<&str> = self
+            .plugins
+            .types_of_class(class)
             .into_iter()
-            .map(|namespace| format!("{namespace}\\{short}"))
-            .filter(|candidate| index.has_class(candidate))
-            .collect()
+            .filter_map(|t| t.annotation.as_deref())
+            .collect();
+        if annotations.is_empty() {
+            return None;
+        }
+        let short = name.fqn.rsplit('\\').next().unwrap_or(&name.fqn);
+        Some(
+            annotations
+                .into_iter()
+                .flat_map(|annotation| plugins::discovered_annotation_names(short, annotation))
+                .filter(|candidate| index.has_class(candidate))
+                .collect(),
+        )
     }
 
+    /// A plugin manager, or an interface only one plugin manager implements, has its
+    /// plugins as implementations.
     fn class_implementations(&self, index: &Index, class: &str) -> Vec<(Location, String)> {
         self.plugins
             .manager_of(index, &[class.to_string()])
