@@ -14,7 +14,6 @@ mod yaml;
 use std::any::Any;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::diagnostics::Diagnostic;
 use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration};
@@ -40,9 +39,8 @@ pub struct Drupal {
     hooks: Hooks,
     plugins: Plugins,
     routes: Routes,
-    /// String literals of the PHP files that may define ids, read on first use and
-    /// emptied on every rebuild and update.
-    literals: RwLock<Option<Arc<PhpLiterals>>>,
+    /// What PHP code may define as ids.
+    literals: PhpLiterals,
 }
 
 /// Services the kernel sets itself.
@@ -66,40 +64,25 @@ impl Drupal {
     pub fn defines_service(&self, index: &Index, id: &str) -> bool {
         self.services.defines(id)
             || SYNTHETIC.contains(&id)
-            || self.literals(index).services.contains(id)
+            || self.hooks.is_hook_class(index, id)
+            || self.literals.services.contains(id)
     }
 
     /// Whether the route `name` is defined anywhere on disk: in a routing file, test
     /// modules included, or possibly by PHP code that builds routes.
-    pub fn defines_route(&self, index: &Index, name: &str) -> bool {
-        self.routes.defines(name) || self.literals(index).routes.contains(name)
+    pub fn defines_route(&self, name: &str) -> bool {
+        self.routes.defines(name) || {
+            self.literals.routes.contains(name) || self.literals.matches_route(name)
+        }
     }
 
     /// Whether `manager` has a plugin `id` (or its base, for `base:derivative`)
     /// anywhere on disk, test modules included, or possibly added by PHP code.
-    pub fn defines_plugin(&self, index: &Index, manager: &str, id: &str) -> bool {
+    pub fn defines_plugin(&self, manager: &str, id: &str) -> bool {
         let base = id.split_once(':').map_or(id, |(base, _)| base);
         self.plugins.defines(manager, id) || {
-            let literals = self.literals(index);
-            literals.plugins.contains(id) || literals.plugins.contains(base)
+            self.literals.plugins.contains(id) || self.literals.plugins.contains(base)
         }
-    }
-
-    fn literals(&self, index: &Index) -> Arc<PhpLiterals> {
-        if let Some(found) = self
-            .literals
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-        {
-            return found.clone();
-        }
-        let found = Arc::new(PhpLiterals::read(index));
-        self.literals
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get_or_insert(found)
-            .clone()
     }
 
     /// Every definition of the route `name`, sorted by path.
@@ -151,15 +134,6 @@ impl Drupal {
     }
 }
 
-impl Drupal {
-    fn clear_literals(&mut self) {
-        *self
-            .literals
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner) = None;
-    }
-}
-
 impl Framework for Drupal {
     fn name(&self) -> &'static str {
         "drupal"
@@ -186,7 +160,8 @@ impl Framework for Drupal {
         self.hooks = Hooks::read(index);
         self.plugins = Plugins::read(index, self.hooks.extensions());
         self.routes = Routes::read(index.filter());
-        self.clear_literals();
+        self.routes.read_attributes(index);
+        self.literals = PhpLiterals::read(index);
     }
 
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
@@ -196,7 +171,8 @@ impl Framework for Drupal {
         self.plugins
             .update(index, self.hooks.extensions(), changed, removed);
         self.routes.update(index.filter(), changed, removed);
-        self.clear_literals();
+        self.routes.read_attributes(index);
+        self.literals.update(changed, removed, index);
     }
 
     /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes;

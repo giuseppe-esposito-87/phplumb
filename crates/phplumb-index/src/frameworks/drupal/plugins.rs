@@ -12,7 +12,7 @@ use crate::frameworks::{CallTarget, FrameworkCall};
 use crate::index::{Index, Location};
 use crate::infer::{self, class_names};
 use crate::metadata::{MetaValue, Metadata};
-use crate::summary::{SymbolKind, summarize};
+use crate::summary::{MemberKind, SymbolKind, summarize};
 
 pub struct PluginType {
     /// The plugin manager class.
@@ -24,7 +24,34 @@ pub struct PluginType {
     /// The annotation class plugins declare themselves with; none when the manager
     /// reads attributes only.
     pub annotation: Option<String>,
+    /// The lookup methods (`createInstance`, `getDefinition`, `getDefinitions`,
+    /// `getDiscovery`) the manager gets from somewhere else than the default manager
+    /// does, as written in `LOOKUPS`.
+    pub overrides: Vec<&'static str>,
+    /// The manager sets its discovery itself.
+    pub sets_discovery: bool,
 }
+
+impl PluginType {
+    /// Whether the manager may find a plugin id its own way when it is looked up
+    /// through `method`, or by any means when no method is given: it sets its own
+    /// discovery, overrides how definitions are found, or overrides `method`.
+    pub(crate) fn finds_its_own_way(&self, method: Option<&str>) -> bool {
+        self.sets_discovery
+            || self.overrides.iter().any(|o| {
+                ["getDefinition", "getDefinitions", "getDiscovery"].contains(o)
+                    || method.is_some_and(|m| m.eq_ignore_ascii_case(o))
+            })
+    }
+}
+
+/// Methods a manager declares when it looks plugins up its own way.
+const LOOKUPS: [&str; 4] = [
+    "createInstance",
+    "getDefinition",
+    "getDefinitions",
+    "getDiscovery",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plugin {
@@ -40,7 +67,7 @@ pub struct Plugin {
 const DEFAULT_MANAGER: &str = "Drupal\\Core\\Plugin\\DefaultPluginManager";
 const FIELD_TYPES: &str = "Drupal\\Core\\Field\\FieldTypePluginManager";
 const CONSTRAINTS: &str = "Drupal\\Core\\Validation\\ConstraintManager";
-const ELEMENTS: &str = "Drupal\\Core\\Render\\ElementInfoManager";
+pub(crate) const ELEMENTS: &str = "Drupal\\Core\\Render\\ElementInfoManager";
 const WIDGETS: &str = "Drupal\\Core\\Field\\WidgetPluginManager";
 const FORMATTERS: &str = "Drupal\\Core\\Field\\FormatterPluginManager";
 const BASE_FIELD: &str = "Drupal\\Core\\Field\\BaseFieldDefinition";
@@ -275,11 +302,27 @@ impl Plugins {
                     Some(fourth.unwrap_or_else(|| DEFAULT_ANNOTATION.to_string())),
                 ),
             };
+            let text = String::from_utf8_lossy(&source);
+            // A lookup method counts when the manager gets it from somewhere else than
+            // the default manager does.
+            let declarer = |class: &str, method: &str| {
+                index
+                    .find_member(class, MemberKind::Method, method)
+                    .first()
+                    .map(|(declaring, _)| declaring.declaration.fqn.to_ascii_lowercase())
+            };
+            let overrides = LOOKUPS
+                .iter()
+                .copied()
+                .filter(|method| declarer(fqn, method) != declarer(DEFAULT_MANAGER, method))
+                .collect();
             types.push(PluginType {
                 manager: fqn.clone(),
                 subdir,
                 attribute,
                 annotation,
+                overrides,
+                sets_discovery: text.contains("->discovery ="),
             });
         }
         types.sort_by(|a, b| a.manager.cmp(&b.manager));

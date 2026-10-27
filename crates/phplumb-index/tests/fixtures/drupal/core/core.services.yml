@@ -25,3 +25,5 @@ services:
     class: Drupal\Core\SharedCore
   plugin.manager.block:
     class: Drupal\Core\Block\BlockManager
+  plugin.manager.config_action:
+    class: Drupal\Core\Config\Action\ConfigActionManager

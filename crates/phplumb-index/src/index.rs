@@ -342,11 +342,18 @@ impl Index {
             return Vec::new();
         }
         let mut found = diagnostics::find(self, path, source);
-        found.extend(
-            self.frameworks
-                .iter()
-                .flat_map(|f| f.diagnostics(self, path, source)),
-        );
+        // `*.api.php` files document hooks with example code that never runs.
+        let documentation = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".api.php"));
+        if !documentation {
+            found.extend(
+                self.frameworks
+                    .iter()
+                    .flat_map(|f| f.diagnostics(self, path, source)),
+            );
+        }
         found.sort_by_key(|d| (d.start, d.end));
         found
     }

@@ -18,7 +18,7 @@ interface EntityInterface
     public function /*@target:id*/ /*@target:mixed*/id();
 }
 
-interface EntityTypeManagerInterface
+interface EntityTypeManagerInterface extends \Drupal\Component\Plugin\PluginManagerInterface
 {
     /** @return \Drupal\Core\Entity\EntityStorageInterface */
     public function getStorage($entity_type_id);

@@ -11,6 +11,8 @@ use crate::discover::chosen_path;
 use crate::filter::PathFilter;
 use crate::frameworks::{CallTarget, FrameworkCall};
 use crate::index::{Index, Location};
+use crate::metadata::{MetaValue, Metadata};
+use crate::summary::MemberKind;
 
 const ROUTING: &str = ".routing.yml";
 
@@ -39,17 +41,32 @@ const ROUTE_CALLS: [(&str, &str, usize); 7] = [
 pub struct RouteDefinition {
     pub name: String,
     pub path: PathBuf,
+    /// The route key in a routing file, or the method or class a route attribute
+    /// is on.
     pub start: u32,
     pub end: u32,
+    /// The text at the range.
+    pub text: String,
 }
+
+/// Route attribute classes, whose `name` argument (named or at position 1) names a
+/// route.
+const ROUTE_ATTRIBUTES: [&str; 2] = [
+    "Symfony\\Component\\Routing\\Attribute\\Route",
+    "Symfony\\Component\\Routing\\Annotation\\Route",
+];
 
 #[derive(Default)]
 pub(crate) struct Routes {
     by_file: HashMap<PathBuf, Vec<RouteDefinition>>,
+    /// The routes each file's aliases point to, which exist wherever they are built.
+    alias_targets: HashMap<PathBuf, Vec<String>>,
     /// Routes outside test modules, which navigation uses.
     by_name: HashMap<String, Vec<RouteDefinition>>,
     /// Every route name defined, test modules included.
     defined: HashSet<String>,
+    /// Routes declared by attributes on classes and methods.
+    attributes: Vec<RouteDefinition>,
     root: PathBuf,
 }
 
@@ -60,7 +77,7 @@ impl Routes {
             ..Routes::default()
         };
         for path in drupal_files(filter, filter.root(), ROUTING, Tests::Include) {
-            routes.by_file.insert(path.clone(), parse_file(&path));
+            routes.insert(path);
         }
         routes.reindex();
         routes
@@ -70,6 +87,7 @@ impl Routes {
     pub(crate) fn update(&mut self, filter: &PathFilter, changed: &[PathBuf], removed: &[PathBuf]) {
         for path in removed.iter().chain(changed) {
             self.by_file.retain(|file, _| !file.starts_with(path));
+            self.alias_targets.retain(|file, _| !file.starts_with(path));
         }
         for path in changed {
             let files = if path.is_dir() {
@@ -84,9 +102,75 @@ impl Routes {
                     .collect()
             };
             for file in files {
-                self.by_file.insert(file.clone(), parse_file(&file));
+                self.insert(file);
             }
         }
+        self.reindex();
+    }
+
+    fn insert(&mut self, path: PathBuf) {
+        let (routes, aliases) = parse_file(&path);
+        self.by_file.insert(path.clone(), routes);
+        self.alias_targets.insert(path, aliases);
+    }
+
+    /// Reads the routes that attributes on the index's classes and methods declare.
+    pub(crate) fn read_attributes(&mut self, index: &Index) {
+        let mut found = Vec::new();
+        for (path, declaration) in index.declarations() {
+            let Some(shape) = &declaration.class else {
+                continue;
+            };
+            let mut add = |metadata: &[Metadata], start: u32, end: u32, text: &str| {
+                for attribute in metadata.iter().filter(|m| {
+                    !m.annotation
+                        && ROUTE_ATTRIBUTES
+                            .iter()
+                            .any(|a| m.name.eq_ignore_ascii_case(a))
+                }) {
+                    let name = attribute.argument("name").or_else(|| {
+                        attribute
+                            .arguments
+                            .get(1)
+                            .filter(|(key, _)| key.is_none())
+                            .map(|(_, value)| value)
+                    });
+                    if let Some(MetaValue::String(name)) = name {
+                        found.push(RouteDefinition {
+                            name: name.clone(),
+                            path: path.to_path_buf(),
+                            start,
+                            end,
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            };
+            let short = declaration
+                .fqn
+                .rsplit('\\')
+                .next()
+                .unwrap_or(&declaration.fqn);
+            add(
+                &shape.metadata,
+                declaration.name_start,
+                declaration.name_end,
+                short,
+            );
+            for member in shape
+                .members
+                .iter()
+                .filter(|m| m.kind == MemberKind::Method)
+            {
+                add(
+                    &member.metadata,
+                    member.name_start,
+                    member.name_end,
+                    &member.name,
+                );
+            }
+        }
+        self.attributes = found;
         self.reindex();
     }
 
@@ -95,14 +179,17 @@ impl Routes {
             .by_file
             .values()
             .flatten()
+            .chain(&self.attributes)
             .map(|r| r.name.clone())
+            .chain(self.alias_targets.values().flatten().cloned())
             .collect();
         let mut by_name: HashMap<String, Vec<RouteDefinition>> = HashMap::new();
         for definition in self
             .by_file
-            .iter()
-            .filter(|(file, _)| !in_tests(&self.root, file))
-            .flat_map(|(_, definitions)| definitions)
+            .values()
+            .flatten()
+            .chain(&self.attributes)
+            .filter(|definition| !in_tests(&self.root, &definition.path))
         {
             by_name
                 .entry(definition.name.clone())
@@ -149,7 +236,7 @@ impl Routes {
                     start: route.start,
                     end: route.end,
                 };
-                (location, route.name.clone())
+                (location, route.text.clone())
             })
             .collect()
     }
@@ -174,15 +261,20 @@ pub(crate) fn route_methods() -> Vec<&'static str> {
     ROUTE_CALLS.iter().map(|(_, method, _)| *method).collect()
 }
 
-/// The routes of one file; nothing when it does not parse.
-fn parse_file(path: &Path) -> Vec<RouteDefinition> {
+/// The routes of one file, and the routes its aliases point to; nothing when it does
+/// not parse.
+fn parse_file(path: &Path) -> (Vec<RouteDefinition>, Vec<String>) {
     let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let Some(Yaml::Map(entries)) = yaml::parse(&text) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    entries
+    let aliases = entries
+        .iter()
+        .filter_map(|(_, value)| value.get("alias")?.text().map(str::to_string))
+        .collect();
+    let routes = entries
         .iter()
         .filter_map(|(key, _)| {
             let Yaml::Scalar { value, start, end } = key else {
@@ -197,7 +289,9 @@ fn parse_file(path: &Path) -> Vec<RouteDefinition> {
                 path: path.to_path_buf(),
                 start,
                 end,
+                text: value.clone(),
             })
         })
-        .collect()
+        .collect();
+    (routes, aliases)
 }

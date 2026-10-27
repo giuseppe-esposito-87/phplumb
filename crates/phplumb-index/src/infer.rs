@@ -30,12 +30,12 @@ use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
     Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
-    AssignmentOperator, BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector,
-    Closure, CompositeString, DoWhile, Expression, For, Foreach, ForeachTarget, Function,
-    FunctionLikeParameterList, Global, Hint, If, IfBody, KeyValueArrayElement, Literal,
-    LiteralString, Method, MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program,
-    PropertyAccess, Static, StaticItem, StaticMethodCall, StringPart, Switch, TriviaKind, Try,
-    TryCatchClause, Variable, While,
+    AssignmentOperator, Binary, BinaryOperator, Call, ClassLikeConstantSelector,
+    ClassLikeMemberSelector, Closure, CompositeString, DoWhile, Expression, For, Foreach,
+    ForeachTarget, Function, FunctionLikeParameterList, Global, Hint, If, IfBody,
+    InterpolatedString, KeyValueArrayElement, Literal, LiteralString, Method, MethodCall,
+    NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem,
+    StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable, While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -140,6 +140,101 @@ pub(crate) fn string_argument_at(
         .iter()
         .rev()
         .find_map(|call| ctx.string_argument(call, offset))
+}
+
+/// The first positional argument of every call to a method named one of `names`
+/// (case-insensitively) in a file, when it is a string literal or `X::class`.
+pub(crate) fn first_arguments(source: &[u8], names: &[&str]) -> Vec<String> {
+    let summary = summarize(source);
+    let classes: HashMap<u32, &str> = summary
+        .names
+        .iter()
+        .filter(|n| n.kind == NameKind::ClassLike)
+        .map(|n| (n.start, n.fqn.as_str()))
+        .collect();
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut calls: Vec<CallRef<'_, '_>> = Vec::new();
+    CallsWithArguments.walk_program(program, &mut calls);
+    calls
+        .iter()
+        .filter_map(|call| {
+            let (selector, arguments) = match call {
+                CallRef::Method(c) => (&c.method, &c.argument_list),
+                CallRef::NullSafe(c) => (&c.method, &c.argument_list),
+                CallRef::Static(c) => (&c.method, &c.argument_list),
+            };
+            let ClassLikeMemberSelector::Identifier(name) = selector else {
+                return None;
+            };
+            let method = String::from_utf8_lossy(name.value);
+            if !names.iter().any(|n| n.eq_ignore_ascii_case(&method)) {
+                return None;
+            }
+            let Some(Argument::Positional(first)) = arguments.arguments.first() else {
+                return None;
+            };
+            match first.value {
+                Expression::Literal(Literal::String(literal)) => literal
+                    .value
+                    .map(|v| String::from_utf8_lossy(v).into_owned()),
+                Expression::Access(Access::ClassConstant(access)) => {
+                    let start = access.class.span().start.offset;
+                    classes.get(&start).map(|fqn| fqn.to_string())
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The shapes of the strings a file builds: concatenations and interpolated strings
+/// with `*` for each part that is not literal, and literals with `%s` or `%d`
+/// placeholders, as for `sprintf()`, with `*` for each placeholder. Only shapes with
+/// a `*` are kept.
+pub(crate) fn string_shapes(source: &[u8]) -> Vec<String> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut found = Vec::new();
+    StringShapes.walk_program(program, &mut found);
+    found.retain(|shape| shape.contains('*'));
+    found.sort();
+    found.dedup();
+    found
+}
+
+struct StringShapes;
+
+impl<'ast, 'arena> Walker<'ast, 'arena, Vec<String>> for StringShapes {
+    fn walk_in_binary(&self, binary: &'ast Binary<'arena>, found: &mut Vec<String>) {
+        if binary.operator.is_concatenation() {
+            found.push(shape(&Expression::Binary(binary.clone())));
+        }
+    }
+
+    fn walk_in_interpolated_string(
+        &self,
+        string: &'ast InterpolatedString<'arena>,
+        found: &mut Vec<String>,
+    ) {
+        found.push(shape(&Expression::CompositeString(
+            CompositeString::Interpolated(string.clone()),
+        )));
+    }
+
+    fn walk_in_literal_string(
+        &self,
+        literal: &'ast LiteralString<'arena>,
+        found: &mut Vec<String>,
+    ) {
+        let Some(value) = literal.value else {
+            return;
+        };
+        let text = String::from_utf8_lossy(value);
+        if text.contains("%s") || text.contains("%d") {
+            found.push(text.replace("%s", "*").replace("%d", "*"));
+        }
+    }
 }
 
 /// The values of every string literal in a file.

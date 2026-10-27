@@ -4,12 +4,13 @@
 use std::path::Path;
 
 use super::routes::{route_methods, takes_route};
+use super::services::in_tests;
 use super::{Drupal, is_a, plugins};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
 use crate::index::Index;
 use crate::infer;
-use crate::summary::{MemberKind, summarize};
+use crate::summary::summarize;
 
 /// Containers whose `get(id)` takes a service id. A plain PSR container may be any
 /// other container.
@@ -24,9 +25,12 @@ const SPECIAL_ROUTES: [&str; 5] = ["<front>", "<none>", "<nolink>", "<current>",
 /// Prefixes of routes that entity route providers and views build at run time.
 const GENERATED_ROUTES: [&str; 2] = ["entity.", "view."];
 
-const DEFAULT_MANAGER: &str = "Drupal\\Core\\Plugin\\DefaultPluginManager";
-
 pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+    // Test code mocks containers, routes and plugin managers; running the tests
+    // catches its mistakes.
+    if in_tests(index.filter().root(), path) {
+        return Vec::new();
+    }
     let summary = summarize(source);
     let mut names = vec![
         "service",
@@ -74,7 +78,7 @@ pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -
                 && !GENERATED_ROUTES
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
-                && !drupal.defines_route(index, name)
+                && !drupal.defines_route(name)
             {
                 found.push(diagnostic(
                     *range,
@@ -83,7 +87,8 @@ pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -
                 ));
             }
             if let Some(manager) = drupal.plugins.call_manager(index, &framework, position)
-                && let Some(message) = undefined_plugin(drupal, index, &manager, name, &guarded)
+                && let Some(message) =
+                    undefined_plugin(drupal, &manager, name, call_method(call), &guarded)
             {
                 found.push(diagnostic(*range, Severity::Error, message));
             }
@@ -107,8 +112,7 @@ pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -
         ) else {
             continue;
         };
-        if let Some(message) =
-            undefined_plugin(drupal, index, manager, &keyed.keyed.value, &guarded)
+        if let Some(message) = undefined_plugin(drupal, manager, &keyed.keyed.value, None, &guarded)
         {
             found.push(diagnostic(
                 (keyed.start, keyed.end),
@@ -136,36 +140,43 @@ fn service_id<'a>(index: &Index, call: &'a FoundCall) -> Option<(&'a str, (u32, 
 }
 
 /// The message for a plugin id `manager` does not define, unless the file checks it
-/// with `hasDefinition()` or the manager discovers plugins its own way.
+/// with `hasDefinition()`, the manager may find it its own way through `method` (the
+/// method called, if any), or, for a render element, another element manager
+/// defines it.
 fn undefined_plugin(
     drupal: &Drupal,
-    index: &Index,
     manager: &str,
     id: &str,
+    method: Option<&str>,
     guarded: &dyn Fn(&str, &str) -> bool,
 ) -> Option<String> {
-    if guarded("hasDefinition", id)
-        || own_discovery(index, manager)
-        || drupal.defines_plugin(index, manager, id)
-    {
+    let custom_lookup = drupal
+        .plugin_types()
+        .iter()
+        .any(|t| t.manager.eq_ignore_ascii_case(manager) && t.finds_its_own_way(method));
+    if guarded("hasDefinition", id) || custom_lookup || drupal.defines_plugin(manager, id) {
+        return None;
+    }
+    // Other element managers, such as webform's, define `#type` values too.
+    let other_element = manager.eq_ignore_ascii_case(plugins::ELEMENTS)
+        && drupal.plugin_types().iter().any(|t| {
+            t.manager.ends_with("ElementManager")
+                && !t.manager.eq_ignore_ascii_case(plugins::ELEMENTS)
+                && drupal.defines_plugin(&t.manager, id)
+        });
+    if other_element {
         return None;
     }
     let short = manager.rsplit('\\').next().unwrap_or(manager);
     Some(format!("Undefined plugin '{id}' of {short}"))
 }
 
-/// Whether the manager, or a parent below the default manager, declares its own
-/// `getDiscovery()`.
-fn own_discovery(index: &Index, manager: &str) -> bool {
-    index
-        .find_member(manager, MemberKind::Method, "getDiscovery")
-        .first()
-        .is_some_and(|(declaring, _)| {
-            !declaring
-                .declaration
-                .fqn
-                .eq_ignore_ascii_case(DEFAULT_MANAGER)
-        })
+/// The method name a call resolves to.
+fn call_method(call: &FoundCall) -> Option<&str> {
+    call.targets.iter().find_map(|target| match target {
+        CallTarget::Method { name, .. } => Some(name.as_str()),
+        CallTarget::Function(_) => None,
+    })
 }
 
 fn diagnostic((start, end): (u32, u32), severity: Severity, message: String) -> Diagnostic {

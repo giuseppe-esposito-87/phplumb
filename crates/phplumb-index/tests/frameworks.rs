@@ -823,7 +823,9 @@ fn plugin_types_come_from_manager_constructors() {
             )
         })
         .filter(|t| {
-            t.contains("BlockManager") || t.contains("ElementInfoManager") || t.contains("Gadget")
+            t.contains("BlockManager")
+                || t.contains("ElementInfoManager")
+                || t.contains("\\GadgetManager")
         })
         .collect();
 
@@ -1375,16 +1377,16 @@ fn drupal_ids_defined_anywhere_include_test_modules_and_php() {
         "mymodule_test.route",
         "mymodule.dynamic_route",
     ] {
-        assert!(drupal.defines_route(&index, name), "{name}");
+        assert!(drupal.defines_route(name), "{name}");
     }
-    assert!(!drupal.defines_route(&index, "nowhere.route"));
+    assert!(!drupal.defines_route("nowhere.route"));
     for id in ["my_block", "test_block", "menu_block:main"] {
-        assert!(drupal.defines_plugin(&index, BLOCKS, id), "{id}");
+        assert!(drupal.defines_plugin(BLOCKS, id), "{id}");
     }
-    assert!(!drupal.defines_plugin(&index, BLOCKS, "nowhere_block"));
-    assert!(drupal.defines_plugin(&index, constraints, "NotBlank"));
-    assert!(drupal.defines_plugin(&index, constraints, "UniqueField"));
-    assert!(!drupal.defines_plugin(&index, constraints, "Nowhere"));
+    assert!(!drupal.defines_plugin(BLOCKS, "nowhere_block"));
+    assert!(drupal.defines_plugin(constraints, "NotBlank"));
+    assert!(drupal.defines_plugin(constraints, "UniqueField"));
+    assert!(!drupal.defines_plugin(constraints, "Nowhere"));
 
     assert!(drupal.services("test.only").is_empty());
     assert!(drupal.routes("mymodule_test.route").is_empty());
@@ -1422,4 +1424,76 @@ fn broken_drupal_references_are_flagged() {
             "Warning Undefined plugin 'nowhere_element' of ElementInfoManager [nowhere_element]",
         ]
     );
+}
+
+#[test]
+fn route_attributes_define_routes() {
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/src/Broken.php",
+            "fromRoute('mymodule.attribute_ro"
+        ),
+        vec!["modules/custom/mymodule/src/Controller/AttributeController.php: page"]
+    );
+}
+
+#[test]
+fn api_files_get_no_drupal_diagnostics() {
+    let (root, index) = drupal_fixture();
+    let path = root.join("core/core.api.php");
+    let source = fs::read(&path).unwrap();
+
+    let found: Vec<String> = index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn test_code_gets_no_drupal_diagnostics() {
+    let (root, index) = drupal_fixture();
+    let path = root.join("modules/custom/mymodule/tests/src/Kernel/ServiceTest.php");
+    let source = fs::read(&path).unwrap();
+
+    let found: Vec<String> = index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn services_registered_in_php_follow_updates() {
+    let provider = |id: &str| {
+        format!(
+            "<?php\nnamespace Drupal\\m;\nuse Drupal\\Core\\DependencyInjection\\ServiceProviderInterface;\nclass MServiceProvider implements ServiceProviderInterface {{ public function register($container) {{ $container->register('{id}', 'X'); }} }}\n"
+        )
+    };
+    let (_dir, root, mut index) = temp_drupal(&[
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        (
+            "modules/custom/m/src/MServiceProvider.php",
+            &provider("m.first"),
+        ),
+    ]);
+    assert!(index.drupal().unwrap().defines_service(&index, "m.first"));
+
+    write(
+        &root,
+        "modules/custom/m/src/MServiceProvider.php",
+        &provider("m.second"),
+    );
+    index.update(
+        &[root.join("modules/custom/m/src/MServiceProvider.php")],
+        &[],
+    );
+
+    let drupal = index.drupal().unwrap();
+    assert!(!drupal.defines_service(&index, "m.first"));
+    assert!(drupal.defines_service(&index, "m.second"));
 }

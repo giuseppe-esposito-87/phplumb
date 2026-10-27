@@ -10,4 +10,8 @@ class ElementInfoManager extends DefaultPluginManager
     {
         parent::__construct('Element', $namespaces, $module_handler, ElementInterface::class, RenderElement::class, 'Drupal\Core\Render\Annotation\RenderElement');
     }
+
+    public function createInstance($plugin_id, array $configuration = [])
+    {
+    }
 }

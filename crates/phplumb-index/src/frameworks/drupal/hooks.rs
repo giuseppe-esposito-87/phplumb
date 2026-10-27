@@ -767,6 +767,17 @@ impl Hooks {
             .collect()
     }
 
+    /// Whether `class` is a hook class, in an extension's `src/Hook` directory, which
+    /// Drupal registers as a service named after the class.
+    pub(crate) fn is_hook_class(&self, index: &Index, class: &str) -> bool {
+        index.classes_named(class).iter().any(|found| {
+            self.extensions
+                .owner(found.path)
+                .and_then(|(dir, _, _)| found.path.strip_prefix(dir).ok())
+                .is_some_and(|relative| relative.starts_with("src/Hook"))
+        })
+    }
+
     /// The extensions the hooks were read with.
     pub(crate) fn extensions(&self) -> &Extensions {
         &self.extensions

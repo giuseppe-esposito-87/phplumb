@@ -10,4 +10,8 @@ class WidgetPluginManager extends DefaultPluginManager
     {
         parent::__construct('Plugin/Field/FieldWidget', $namespaces, $module_handler, WidgetInterface::class, FieldWidget::class, 'Drupal\Core\Field\Annotation\FieldWidget');
     }
+
+    public function createInstance($plugin_id, array $configuration = [])
+    {
+    }
 }

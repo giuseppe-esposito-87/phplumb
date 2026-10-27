@@ -30,6 +30,16 @@ class Broken
         \Drupal::service($variable);
         $variable->get('nowhere.key');
         $form['b'] = ['#type' => 'textfield'];
+        Url::fromRoute('mymodule.attribute_route');
+        Url::fromRoute('mymodule.dynamic.thing.view');
+        Url::fromRoute('mymodule.sprintf.thing');
+        \Drupal::service('installer.only');
+        \Drupal::service(GreeterFactory::class);
+        \Drupal::entityTypeManager()->getDefinition('nowhere_entity');
+        $container->get('plugin.manager.config_action')->createInstance('shorthand:action');
+        $form['c'] = ['#type' => 'gadget_element_type'];
+        \Drupal::service(\Drupal\mymodule\Hook\MymoduleHooks::class);
+        Url::fromRoute('mymodule.aliased_target');
         return $form;
     }
 }

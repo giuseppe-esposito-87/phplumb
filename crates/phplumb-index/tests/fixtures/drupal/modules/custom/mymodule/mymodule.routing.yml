@@ -21,6 +21,8 @@ mymodule.invokable:
   path: '/invokable'
   defaults:
     _controller: '\Drupal\mymodule\Controller\Invokable'
+mymodule.alias_name:
+  alias: mymodule.aliased_target
 route_callbacks:
   - '\Drupal\mymodule\Routing\Routes::routes'
 mymodule.missing:
