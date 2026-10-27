@@ -2,6 +2,21 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 4d Drupal plugins
+
+Same machine and project. The Drupal module reads plugin types from the constructors of plugin managers and plugins from each type's subdirectory of every module and core component namespace, by attribute or annotation.
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | at least 42,455 |
+| Cold index                              | 3.9 to 5.7 s                      | under 10 s      |
+| Peak resident memory                    | 421 to 453 MB                     | under 1024 MB   |
+| Slowest definition case                 | 29 to 101 ms                      | under 1 s       |
+| Slowest implementation case             | 79 to 98 ms                       |                 |
+| All cases                               | 76 passed, 0 failed               | all pass        |
+
+New cases cover `#type` values in custom forms, field types in `BaseFieldDefinition::create()`, a widget and a formatter in display options, a custom constraint added to a narrowed field config, `createInstance()` on a contrib plugin manager, and the plugins of a core plugin manager. An entity type constraint added through `$entity_types['node']->addConstraint()` stays unresolved, because the type of an array element is not inferred.
+
 ## 2026-10-27, step 4c Drupal hooks
 
 Same machine and project. The Drupal module reads extensions from `*.info.yml` files and hook implementations the way Drupal 11 discovers them, procedural and `#[Hook]` attributes. Invocations are found when a definition is asked, among the calls of the module handler and theme manager.
