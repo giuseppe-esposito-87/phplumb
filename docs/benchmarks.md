@@ -2,6 +2,20 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 2e Linux binary
+
+Static musl builds in Docker Desktop on the same Mac, with the project copied into the container's own filesystem. Bind-mounting the project from macOS instead raises the cold index to 18 to 19 seconds on both architectures, so that number measures Docker Desktop's file sharing, not the engine.
+
+| Metric                  | `x86_64` (emulated) | `aarch64` (native)  | Target        |
+| ----------------------- | ------------------- | ------------------- | ------------- |
+| Cold index              | 2.5 s               | 1.7 s               | under 10 s    |
+| Peak resident memory    | 475 MB              | 447 MB              | under 1024 MB |
+| Slowest references case | 273 ms              | 134 ms              | under 1 s     |
+| Slowest symbol query    | 32 ms               | 33 ms               | under 100 ms  |
+| All cases               | 48 passed, 0 failed | 48 passed, 0 failed | all pass      |
+
+The `x86_64` binary also runs on Debian 11 (glibc 2.31), and the Rust test suite passes on `linux/amd64`. No native Linux x64 machine was used.
+
 ## 2026-10-26, step 2e symbols and outline
 
 Same machine and project. Every run now times five workspace symbol queries (`node`, `EntityStorage`, `gEnt`, `load` and `zzqqxx`) over all declarations and members in the index.
