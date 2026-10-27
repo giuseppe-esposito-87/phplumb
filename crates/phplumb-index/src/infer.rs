@@ -32,9 +32,10 @@ use mago_syntax::cst::{
     Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
     AssignmentOperator, BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector,
     Closure, CompositeString, DoWhile, Expression, For, Foreach, ForeachTarget, Function,
-    FunctionLikeParameterList, Global, Hint, If, IfBody, Literal, Method, MethodCall,
-    NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem,
-    StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable, While,
+    FunctionLikeParameterList, Global, Hint, If, IfBody, KeyValueArrayElement, Literal, Method,
+    MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static,
+    StaticItem, StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable,
+    While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -138,6 +139,91 @@ pub(crate) fn string_argument_at(
         .iter()
         .rev()
         .find_map(|call| ctx.string_argument(call, offset))
+}
+
+/// A string literal that is the value of an array key, and the call whose
+/// positional argument is that array, if any.
+pub(crate) struct KeyedString {
+    pub key: String,
+    pub value: String,
+    pub call: Option<StringArgument>,
+}
+
+/// The innermost `'key' => 'value'` array element whose key and value are string
+/// literals and whose value covers `offset`.
+pub(crate) fn keyed_string_at(
+    index: &Index,
+    summary: &FileSummary,
+    source: &[u8],
+    offset: u32,
+) -> Option<KeyedString> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut calls: Vec<CallRef<'_, '_>> = Vec::new();
+    CallsWithArguments.walk_program(program, &mut calls);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    let ctx = Ctx::new(index, summary, program, source, &facts);
+    if let Some(((key, value), mut call)) = calls
+        .iter()
+        .rev()
+        .find_map(|call| ctx.argument_with(call, |argument| keyed_element_at(argument, offset)))
+    {
+        call.value = value.clone();
+        return Some(KeyedString {
+            key,
+            value,
+            call: Some(call),
+        });
+    }
+    let mut elements: Vec<&KeyValueArrayElement<'_>> = Vec::new();
+    KeyValues.walk_program(program, &mut elements);
+    elements
+        .iter()
+        .rev()
+        .find_map(|element| keyed_pair(element, offset))
+        .map(|(key, value)| KeyedString {
+            key,
+            value,
+            call: None,
+        })
+}
+
+/// The key and value of an element of the array `expression` whose value covers
+/// `offset`, when both are string literals.
+fn keyed_element_at(expression: &Expression<'_>, offset: u32) -> Option<(String, String)> {
+    let elements = match expression {
+        Expression::Array(array) => &array.elements,
+        Expression::LegacyArray(array) => &array.elements,
+        _ => return None,
+    };
+    elements.iter().find_map(|element| match element {
+        ArrayElement::KeyValue(element) => keyed_pair(element, offset),
+        _ => None,
+    })
+}
+
+fn keyed_pair(element: &KeyValueArrayElement<'_>, offset: u32) -> Option<(String, String)> {
+    let Expression::Literal(Literal::String(key)) = element.key else {
+        return None;
+    };
+    let Expression::Literal(Literal::String(_)) = element.value else {
+        return None;
+    };
+    let value = string_literal_at(element.value, offset)?;
+    Some((String::from_utf8_lossy(key.value?).into_owned(), value))
+}
+
+struct KeyValues;
+
+impl<'ast, 'arena> Walker<'ast, 'arena, Vec<&'ast KeyValueArrayElement<'arena>>> for KeyValues {
+    fn walk_in_key_value_array_element(
+        &self,
+        element: &'ast KeyValueArrayElement<'arena>,
+        found: &mut Vec<&'ast KeyValueArrayElement<'arena>>,
+    ) {
+        found.push(element);
+    }
 }
 
 /// The method calls in a file named one of `names`, case-insensitively, in source
@@ -1221,12 +1307,23 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
 
     /// `call`'s string literal argument covering `offset`, with what the call targets.
     fn string_argument(&self, call: &CallRef<'_, '_>, offset: u32) -> Option<StringArgument> {
+        self.argument_with(call, |value| string_literal_at(value, offset))
+            .map(|(value, argument)| StringArgument { value, ..argument })
+    }
+
+    /// The first positional argument of `call` for which `find` gives something,
+    /// with what the call targets; the argument's `value` is left empty.
+    fn argument_with<T>(
+        &self,
+        call: &CallRef<'_, '_>,
+        find: impl Fn(&Expression<'_>) -> Option<T>,
+    ) -> Option<(T, StringArgument)> {
         let (arguments, start) = match call {
             CallRef::Method(c) => (&c.argument_list, c.span().start.offset),
             CallRef::NullSafe(c) => (&c.argument_list, c.span().start.offset),
             CallRef::Static(c) => (&c.argument_list, c.span().start.offset),
         };
-        let (position, value) =
+        let (position, found) =
             arguments
                 .arguments
                 .iter()
@@ -1235,7 +1332,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     let Argument::Positional(argument) = argument else {
                         return None;
                     };
-                    string_literal_at(argument.value, offset).map(|value| (i, value))
+                    find(argument.value).map(|found| (i, found))
                 })?;
         let (receiver, selector) = match call {
             CallRef::Method(c) => (self.expr(c.object, start, 0), &c.method),
@@ -1249,13 +1346,14 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         let ClassLikeMemberSelector::Identifier(name) = selector else {
             return None;
         };
-        Some(StringArgument {
+        let argument = StringArgument {
             targets: self.call_targets(&receiver, &String::from_utf8_lossy(name.value)),
             strings: self.string_arguments(arguments, start),
             receiver,
             position,
-            value,
-        })
+            value: String::new(),
+        };
+        Some((found, argument))
     }
 
     /// Positional arguments that are string literals or `X::class`, by position.

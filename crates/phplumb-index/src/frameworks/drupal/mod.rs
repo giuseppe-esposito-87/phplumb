@@ -208,6 +208,18 @@ impl Framework for Drupal {
         )
     }
 
+    /// A render element type or a widget or formatter type in display options leads
+    /// to its plugin class.
+    fn keyed_string_targets(
+        &self,
+        index: &Index,
+        key: &str,
+        value: &str,
+        call: Option<(&FrameworkCall<'_>, usize)>,
+    ) -> Vec<(Location, String)> {
+        self.plugins.keyed_targets(index, key, value, call)
+    }
+
     /// A hook implementation leads to the invocations of its hook and to the hook's
     /// documentation.
     fn declaration_targets(

@@ -1143,6 +1143,40 @@ impl Index {
         (!found.is_empty()).then_some(found)
     }
 
+    /// What the frameworks give for a string literal that is the value of an array key.
+    fn framework_keyed_strings(
+        &self,
+        summary: &FileSummary,
+        source: &[u8],
+        offset: u32,
+    ) -> Option<Vec<(Location, String)>> {
+        if self.frameworks.is_empty() {
+            return None;
+        }
+        let keyed = infer::keyed_string_at(self, summary, source, offset)?;
+        let call = keyed.call.as_ref().map(|argument| {
+            let call = FrameworkCall {
+                targets: &argument.targets,
+                strings: &argument.strings,
+                receiver: Some(&argument.receiver),
+            };
+            (call, argument.position)
+        });
+        let found: Vec<(Location, String)> = self
+            .frameworks
+            .iter()
+            .flat_map(|f| {
+                f.keyed_string_targets(
+                    self,
+                    &keyed.key,
+                    &keyed.value,
+                    call.as_ref().map(|(call, position)| (call, *position)),
+                )
+            })
+            .collect();
+        (!found.is_empty()).then_some(found)
+    }
+
     /// What the frameworks give for a cursor on a function or method declaration's
     /// name, or inside an attribute of a function, method or class but not on a
     /// class-like name.
@@ -1279,6 +1313,9 @@ impl Index {
         }
 
         if let Some(found) = self.framework_strings(&summary, source, offset) {
+            return found;
+        }
+        if let Some(found) = self.framework_keyed_strings(&summary, source, offset) {
             return found;
         }
 

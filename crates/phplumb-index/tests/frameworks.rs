@@ -934,3 +934,41 @@ fn field_types_and_constraints_lead_to_their_plugins() {
         ]
     );
 }
+
+const PLUGIN_ARRAYS: &str = "modules/custom/mymodule/src/PluginArrays.php";
+
+#[test]
+fn render_element_types_lead_to_their_element_class() {
+    assert_eq!(
+        definitions_in(PLUGIN_ARRAYS, "'#type' => 'textf"),
+        vec!["core/lib/Drupal/Core/Render/Element/Textfield.php: Textfield"]
+    );
+}
+
+#[test]
+fn display_option_types_lead_to_widgets_and_formatters() {
+    assert_eq!(
+        definitions_in(
+            PLUGIN_ARRAYS,
+            "setDisplayOptions('form', ['type' => 'string_te"
+        ),
+        vec![
+            "core/lib/Drupal/Core/Field/Plugin/Field/FieldWidget/StringTextfieldWidget.php: StringTextfieldWidget"
+        ]
+    );
+    assert_eq!(
+        definitions_in(PLUGIN_ARRAYS, "setDisplayOptions('view', ['type' => 'str"),
+        vec![
+            "core/lib/Drupal/Core/Field/Plugin/Field/FieldFormatter/StringFormatter.php: StringFormatter"
+        ]
+    );
+    assert_eq!(
+        definitions_in(PLUGIN_ARRAYS, "create('str"),
+        vec!["core/lib/Drupal/Core/Field/Plugin/Field/FieldType/StringItem.php: StringItem"]
+    );
+}
+
+#[test]
+fn type_keys_outside_display_options_lead_nowhere() {
+    assert!(definitions_in(PLUGIN_ARRAYS, "$plain = ['type' => 'str").is_empty());
+}

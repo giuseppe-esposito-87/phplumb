@@ -36,6 +36,9 @@ pub struct Plugin {
 const DEFAULT_MANAGER: &str = "Drupal\\Core\\Plugin\\DefaultPluginManager";
 const FIELD_TYPES: &str = "Drupal\\Core\\Field\\FieldTypePluginManager";
 const CONSTRAINTS: &str = "Drupal\\Core\\Validation\\ConstraintManager";
+const ELEMENTS: &str = "Drupal\\Core\\Render\\ElementInfoManager";
+const WIDGETS: &str = "Drupal\\Core\\Field\\WidgetPluginManager";
+const FORMATTERS: &str = "Drupal\\Core\\Field\\FormatterPluginManager";
 const BASE_FIELD: &str = "Drupal\\Core\\Field\\BaseFieldDefinition";
 /// Classes whose `addConstraint` takes a constraint plugin id.
 const CONSTRAINED: [&str; 2] = [
@@ -151,6 +154,36 @@ impl Plugins {
             None
         };
         manager.map_or_else(Vec::new, |manager| self.targets(&manager, value))
+    }
+
+    /// The plugin classes a string literal names as the value of the array key `key`:
+    /// a render element for `#type`; a widget or formatter for `type` in the options
+    /// of `setDisplayOptions('form' or 'view', ...)` on a base field definition.
+    pub(crate) fn keyed_targets(
+        &self,
+        index: &Index,
+        key: &str,
+        value: &str,
+        call: Option<(&FrameworkCall<'_>, usize)>,
+    ) -> Vec<(Location, String)> {
+        if key == "#type" {
+            return self.targets(ELEMENTS, value);
+        }
+        let Some((call, 1)) = call.filter(|_| key == "type") else {
+            return Vec::new();
+        };
+        let displays = call.targets.iter().any(|target| {
+            matches!(target, CallTarget::Method { class, name }
+                if name.eq_ignore_ascii_case("setDisplayOptions") && is_a(index, class, &[BASE_FIELD]))
+        });
+        if !displays {
+            return Vec::new();
+        }
+        match call.strings.first().cloned().flatten().as_deref() {
+            Some("form") => self.targets(WIDGETS, value),
+            Some("view") => self.targets(FORMATTERS, value),
+            _ => Vec::new(),
+        }
     }
 
     /// The plugin manager that a receiver of these classes is: a manager class, or an

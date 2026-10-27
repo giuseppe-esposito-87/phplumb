@@ -208,4 +208,15 @@ suite("definition", () => {
     assert.strictEqual(targets.length, 1, JSON.stringify(targets));
     assert.ok(uriOf(targets[0]).path.endsWith("src/HookCalls.php"), uriOf(targets[0]).toString());
   });
+
+  test("Cmd+click on a #type value opens the element class", async () => {
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+    const document = await open("src/plugins/Form.php");
+    const position = document.positionAt(document.getText().indexOf("'textfield'") + 3);
+
+    const targets = await vscode.commands.executeCommand<Target[]>("vscode.executeDefinitionProvider", document.uri, position);
+
+    assert.strictEqual(targets.length, 1, JSON.stringify(targets));
+    assert.ok(uriOf(targets[0]).path.endsWith("src/plugins/Textfield.php"), uriOf(targets[0]).toString());
+  });
 });
