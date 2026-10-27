@@ -1,8 +1,10 @@
-# PHPlumb
+<p align="center">
+  <img src="docs/images/logo.svg" width="128" height="128" alt="PHPlumb logo, a letter P made of pipes">
+</p>
 
-<!-- Logo goes here. -->
+<h1 align="center">PHPlumb</h1>
 
-**Fast code navigation in VS Code for reviewing PHP that AI agents write.**
+<p align="center"><strong>Fast code navigation in VS Code for reviewing PHP that AI agents write.</strong></p>
 
 Jump from a call to its definition, from an interface to its implementations, and from a method to every place that calls it, in a project of 40,000 PHP files, without waiting.
 

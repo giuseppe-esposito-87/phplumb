@@ -4,6 +4,7 @@
   "description": "Fast code navigation for large PHP and Drupal codebases.",
   "publisher": "sparkfabrik",
   "version": "0.1.0",
+  "icon": "icon.png",
   "private": true,
   "engines": {
     "vscode": "^1.140.0"
