@@ -71,6 +71,10 @@ pub(crate) fn find(index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic>
             .as_deref()
             .is_some_and(|fqn| is_trait(index, fqn));
         let keyword = !matches!(reference.class, ClassSel::Named(_));
+        // A closure's scope can be rebound to another class.
+        if keyword && within(&summary.closures, reference.start) {
+            continue;
+        }
         let Some(class) = class else {
             continue;
         };
@@ -106,7 +110,8 @@ pub(crate) fn find(index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic>
         // type may come from a wrong docblock or hide a mock, so its method must also
         // be declared nowhere, by no indexed or built-in class.
         let declared_somewhere = index.has_method_named(&name) || builtins::is_method(&name);
-        if !on_this(source, start) && declared_somewhere {
+        let certain = on_this(source, start) && !within(&summary.closures, start);
+        if !certain && declared_somewhere {
             continue;
         }
         if classes
@@ -180,6 +185,15 @@ fn broken_name(
         candidates.push(short);
     }
     if candidates.iter().any(|fqn| exists(fqn) || is_guarded(fqn)) {
+        return None;
+    }
+    // With paths excluded from the index, a name in a namespace the index knows
+    // nothing about may be declared in them.
+    let hidden = |fqn: &&str| {
+        let namespace = fqn.rsplit_once('\\').map_or("", |(ns, _)| ns);
+        !index.knows_namespace(namespace)
+    };
+    if index.has_exclusions() && candidates.iter().any(hidden) {
         return None;
     }
     Some(Diagnostic {
@@ -270,8 +284,9 @@ fn fully_known(index: &Index, class: &str, check_magic: bool) -> bool {
             return false;
         }
         for declaration in declarations {
+            // A `class_alias` has no shape: its members are unknown.
             let Some(shape) = &declaration.declaration.class else {
-                continue;
+                return false;
             };
             if check_magic && shape.magic {
                 return false;
@@ -284,8 +299,8 @@ fn fully_known(index: &Index, class: &str, check_magic: bool) -> bool {
     true
 }
 
-/// Whether `class` or one of its parents gets a method named `name` from a trait
-/// `as` alias.
+/// Whether `class`, one of its parents or one of their traits gets a method named
+/// `name` from a trait `as` alias.
 fn aliased(index: &Index, class: &str, name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     let mut seen: HashSet<String> = HashSet::new();
@@ -302,6 +317,7 @@ fn aliased(index: &Index, class: &str, name: &str) -> bool {
                 return true;
             }
             pending.extend(shape.parent.iter().cloned());
+            pending.extend(shape.traits.iter().cloned());
         }
     }
     false

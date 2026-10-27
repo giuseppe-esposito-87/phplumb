@@ -9,14 +9,14 @@ use mago_names::resolver::NameResolver;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Access, AnonymousClass, Argument, Attribute, Class, ClassConstantAccess,
-    ClassLikeConstantSelector, ClassLikeMember, ClassLikeMemberSelector, Constant, ConstantAccess,
-    Enum, EnumCaseItem, Expression, Function, FunctionCall, FunctionLikeParameterList,
-    FunctionLikeReturnTypeHint, FunctionPartialApplication, Hint, Instantiation, Interface,
-    Literal, Method, MethodCall, Modifier, Namespace, NullSafeMethodCall, NullSafePropertyAccess,
-    Program, Property, PropertyAccess, PropertyItem, Sequence, StaticMethodCall,
-    StaticMethodPartialApplication, StaticPropertyAccess, Trait, TraitUseAdaptation,
-    TraitUseSpecification, Use, UseItems, UseType, Variable,
+    Access, AnonymousClass, Argument, ArrayElement, ArrowFunction, Attribute, Class,
+    ClassConstantAccess, ClassLikeConstantSelector, ClassLikeMember, ClassLikeMemberSelector,
+    Closure, Constant, ConstantAccess, Enum, EnumCaseItem, Expression, Function, FunctionCall,
+    FunctionLikeParameterList, FunctionLikeReturnTypeHint, FunctionPartialApplication, Hint,
+    Instantiation, Interface, Literal, Method, MethodCall, Modifier, Namespace, NullSafeMethodCall,
+    NullSafePropertyAccess, Program, Property, PropertyAccess, PropertyItem, Sequence,
+    StaticMethodCall, StaticMethodPartialApplication, StaticPropertyAccess, Trait,
+    TraitUseAdaptation, TraitUseSpecification, Use, UseItems, UseType, Variable,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -306,6 +306,8 @@ pub struct FileSummary {
     pub unchecked: Vec<(u32, u32)>,
     /// Spans of type declarations: parameter, return, property and catch types.
     pub hints: Vec<(u32, u32)>,
+    /// Spans of closures and arrow functions, whose `$this` and scope can be rebound.
+    pub closures: Vec<(u32, u32)>,
 }
 
 impl FileSummary {
@@ -351,6 +353,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         guard_classes: Vec::new(),
         unchecked: Vec::new(),
         hints: Vec::new(),
+        closures: Vec::new(),
     };
     SyntaxVisitor.walk_program(program, &mut collector);
 
@@ -511,6 +514,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         guarded,
         unchecked: std::mem::take(&mut collector.unchecked),
         hints: std::mem::take(&mut collector.hints),
+        closures: std::mem::take(&mut collector.closures),
     }
 }
 
@@ -617,6 +621,7 @@ struct Collector<'a> {
     guard_classes: Vec<u32>,
     unchecked: Vec<(u32, u32)>,
     hints: Vec<(u32, u32)>,
+    closures: Vec<(u32, u32)>,
     constants: HashSet<u32>,
     /// Namespace names, which the resolver records but which name no symbol.
     not_refs: HashSet<u32>,
@@ -636,23 +641,41 @@ struct PendingAnonymous {
 }
 
 impl Collector<'_> {
-    /// Records the name a guard call checks: the first argument of the `*_exists`
-    /// functions for classes and functions and of `defined`, the second of
-    /// `method_exists`.
+    /// Records the name a guard call checks: the class, function or constant of the
+    /// `*_exists` functions and `defined`, the method of `method_exists`, and the
+    /// function or method of `is_callable`, given by position or by name.
     fn guard(&mut self, function: &[u8], call: &FunctionCall<'_>) {
         let function = function.strip_prefix(b"\\").unwrap_or(function);
-        let position = match function.to_ascii_lowercase().as_slice() {
-            b"class_exists" | b"interface_exists" | b"trait_exists" | b"enum_exists"
-            | b"function_exists" | b"defined" => 0,
-            b"method_exists" => 1,
+        let (position, parameter): (usize, &[u8]) = match function.to_ascii_lowercase().as_slice() {
+            b"class_exists" => (0, b"class"),
+            b"interface_exists" => (0, b"interface"),
+            b"trait_exists" => (0, b"trait"),
+            b"enum_exists" => (0, b"enum"),
+            b"function_exists" => (0, b"function"),
+            b"defined" => (0, b"constant_name"),
+            b"method_exists" => (1, b"method"),
+            b"is_callable" => (0, b"value"),
             _ => return,
         };
-        let Some(Argument::Positional(argument)) =
-            call.argument_list.arguments.iter().nth(position)
-        else {
-            return;
-        };
-        match argument.value {
+        let value =
+            call.argument_list.arguments.iter().enumerate().find_map(
+                |(i, argument)| match argument {
+                    Argument::Positional(argument) if i == position => Some(argument.value),
+                    Argument::Named(argument)
+                        if argument.name.value.eq_ignore_ascii_case(parameter) =>
+                    {
+                        Some(argument.value)
+                    }
+                    _ => None,
+                },
+            );
+        if let Some(value) = value {
+            self.guard_value(value);
+        }
+    }
+
+    fn guard_value(&mut self, value: &Expression<'_>) {
+        match value {
             Expression::Literal(Literal::String(literal)) => {
                 if let Some(value) = literal.value {
                     let name = String::from_utf8_lossy(value);
@@ -667,7 +690,58 @@ impl Collector<'_> {
                     self.guard_classes.push(class.span().start.offset);
                 }
             }
+            // `[$object, 'method']` callables name the method last.
+            Expression::Array(array) => self.guard_callable(array.elements.iter()),
+            Expression::LegacyArray(array) => self.guard_callable(array.elements.iter()),
             _ => {}
+        }
+    }
+
+    /// Records `class_alias(X::class, 'Alias')` as a class-like named `Alias`, with no
+    /// shape: its members are unknown.
+    fn class_alias(&mut self, function: &[u8], call: &FunctionCall<'_>) {
+        let function = function.strip_prefix(b"\\").unwrap_or(function);
+        if !function.eq_ignore_ascii_case(b"class_alias") {
+            return;
+        }
+        let alias = call
+            .argument_list
+            .arguments
+            .iter()
+            .enumerate()
+            .find_map(|(i, argument)| match argument {
+                Argument::Positional(argument) if i == 1 => Some(argument.value),
+                Argument::Named(argument) if argument.name.value.eq_ignore_ascii_case(b"alias") => {
+                    Some(argument.value)
+                }
+                _ => None,
+            });
+        let Some(Expression::Literal(Literal::String(literal))) = alias else {
+            return;
+        };
+        let Some(value) = literal.value else {
+            return;
+        };
+        let name = String::from_utf8_lossy(value)
+            .trim_start_matches('\\')
+            .to_string();
+        self.pending.push(Pending {
+            kind: SymbolKind::Class,
+            range: None,
+            span: (call.span().start.offset, call.span().end.offset),
+            start: literal.span.start.offset + 1,
+            end: literal.span.end.offset.saturating_sub(1),
+            signature: format!("class_alias('{name}')"),
+            fqn: Some(name),
+            doc: None,
+            returns: None,
+            shape: None,
+        });
+    }
+
+    fn guard_callable<'e>(&mut self, elements: impl Iterator<Item = &'e ArrayElement<'e>>) {
+        if let Some(ArrayElement::Value(method)) = elements.last() {
+            self.guard_value(method.value);
         }
     }
 
@@ -1041,6 +1115,20 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         });
     }
 
+    fn walk_in_closure(&self, closure: &'ast Closure<'arena>, c: &mut Collector<'arena>) {
+        let span = closure.span();
+        c.closures.push((span.start.offset, span.end.offset));
+    }
+
+    fn walk_in_arrow_function(
+        &self,
+        arrow: &'ast ArrowFunction<'arena>,
+        c: &mut Collector<'arena>,
+    ) {
+        let span = arrow.span();
+        c.closures.push((span.start.offset, span.end.offset));
+    }
+
     fn walk_in_attribute(&self, attribute: &'ast Attribute<'arena>, c: &mut Collector<'arena>) {
         let span = attribute.span();
         c.unchecked.push((span.start.offset, span.end.offset));
@@ -1289,6 +1377,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         };
         c.functions.insert(identifier.span().start.offset);
         c.guard(identifier.value(), call);
+        c.class_alias(identifier.value(), call);
         if !identifier.value().eq_ignore_ascii_case(b"define") {
             return;
         }

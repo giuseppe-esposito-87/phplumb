@@ -275,3 +275,37 @@ fn diagnostic_messages_and_severities() {
         );
     }
 }
+
+#[test]
+fn diagnostics_stay_silent_in_namespaces_hidden_by_exclusions() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let write = |path: &str, text: &str| {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write(
+        "tools/big/Heavy.php",
+        "<?php\nnamespace Tools\\Big;\nclass Heavy {}\nfunction heavy_fn() {}\n",
+    );
+    write(
+        "src/Use.php",
+        "<?php\nnamespace App;\nuse Tools\\Big\\Heavy;\nclass Known {}\nnew Heavy();\n\\Tools\\Big\\heavy_fn();\nnew \\App\\Ghost();\n",
+    );
+    let opts = DiscoverOptions {
+        exclude: vec!["tools/big/**".to_string()],
+        ..DiscoverOptions::default()
+    };
+    let (index, _) = Index::build(&root, &opts).unwrap();
+    let path = root.join("src/Use.php");
+    let source = fs::read(&path).unwrap();
+
+    let messages: Vec<String> = index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+
+    assert_eq!(messages, vec!["Undefined class 'App\\Ghost'"]);
+}

@@ -41,6 +41,11 @@ impl PathFilter {
     }
 
     /// The canonicalized root.
+    /// Whether the user excluded any paths from the index.
+    pub fn has_exclusions(&self) -> bool {
+        !self.exclude_patterns.is_empty()
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }

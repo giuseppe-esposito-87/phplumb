@@ -84,6 +84,8 @@ pub struct Index {
     /// How many declarations, trait aliases included, declare each lowercased
     /// method name.
     method_names: HashMap<String, u32>,
+    /// How many declarations live in each lowercased namespace or one below it.
+    namespaces: HashMap<String, u32>,
 }
 
 impl Index {
@@ -146,6 +148,7 @@ impl Index {
             subtype_table: HashMap::new(),
             candidates: HashMap::new(),
             method_names: HashMap::new(),
+            namespaces: HashMap::new(),
         };
         for file in files.into_iter().flatten() {
             stats.files_with_parse_errors += usize::from(file.has_errors);
@@ -262,6 +265,21 @@ impl Index {
     /// as a trait alias.
     pub(crate) fn has_method_named(&self, name: &str) -> bool {
         self.method_names.contains_key(&name.to_ascii_lowercase())
+    }
+
+    /// Whether the user excluded any paths from the index, so a name missing from it
+    /// may still exist on disk.
+    pub(crate) fn has_exclusions(&self) -> bool {
+        self.filter.has_exclusions()
+    }
+
+    /// Whether any indexed declaration lives in `namespace` or below it. The global
+    /// namespace is always known.
+    pub(crate) fn knows_namespace(&self, namespace: &str) -> bool {
+        namespace.is_empty()
+            || self
+                .namespaces
+                .contains_key(&namespace.to_ascii_lowercase())
     }
 
     /// Whether a constant named `fqn` is indexed.
@@ -1080,6 +1098,9 @@ impl Index {
         for name in declared_methods(&file) {
             *self.method_names.entry(name).or_default() += 1;
         }
+        for namespace in declared_namespaces(&file) {
+            *self.namespaces.entry(namespace).or_default() += 1;
+        }
         self.ids.insert(file.path.clone(), id);
         self.files.push(Some(file));
     }
@@ -1094,6 +1115,14 @@ impl Index {
                 *count -= 1;
                 if *count == 0 {
                     self.method_names.remove(&name);
+                }
+            }
+        }
+        for namespace in declared_namespaces(&file) {
+            if let Some(count) = self.namespaces.get_mut(&namespace) {
+                *count -= 1;
+                if *count == 0 {
+                    self.namespaces.remove(&namespace);
                 }
             }
         }
@@ -1152,6 +1181,24 @@ fn supertype_names(declaration: &Declaration) -> impl Iterator<Item = &str> {
             .iter()
             .chain(shape.interfaces.iter())
             .map(String::as_str)
+    })
+}
+
+/// Every lowercased namespace a file's declarations live in, with its parents.
+fn declared_namespaces(file: &CachedFile) -> impl Iterator<Item = String> + '_ {
+    file.declarations.iter().flat_map(|declaration| {
+        let lower = declaration.fqn.to_ascii_lowercase();
+        let namespace = lower.rsplit_once('\\').map_or("", |(ns, _)| ns).to_string();
+        let mut prefixes = Vec::new();
+        let mut end = 0;
+        while let Some(found) = namespace[end..].find('\\') {
+            prefixes.push(namespace[..end + found].to_string());
+            end += found + 1;
+        }
+        if !namespace.is_empty() {
+            prefixes.push(namespace);
+        }
+        prefixes
     })
 }
 

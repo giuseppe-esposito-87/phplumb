@@ -8,11 +8,11 @@ Same machine and project. `phplumb bench --diagnostics <dir>` checks every file 
 
 | Area                  | Files  | Diagnostics | In `tests` | Slowest file |
 | --------------------- | ------ | ----------- | ---------- | ------------ |
-| `web/modules/custom`  | 1,228  | 88          | 0          | 1 ms         |
-| `web/core`            | 11,473 | 127         | 111        | 47 ms        |
-| `web/modules/contrib` | 6,596  | 266         | 95         | 26 ms        |
+| `web/modules/custom`  | 1,228  | 88          | 0          | 2 ms         |
+| `web/core`            | 11,473 | 65          | 64         | 32 ms        |
+| `web/modules/contrib` | 6,596  | 253         | 89         | 28 ms        |
 
-Cold index 3.9 s, peak memory 400 MB, 48 of 48 cases, member coverage 90.7%.
+Cold index 4.3 s, peak memory 429 MB, 48 of 48 cases, member coverage 90.7%.
 
 **Custom code: no false alarms.** All 88 diagnostics come from one module that uses three Composer packages (a SOAP client, its encoding library and a type library) that the project does not install; those classes and functions exist nowhere on disk.
 
@@ -22,6 +22,8 @@ Cold index 3.9 s, peak memory 400 MB, 48 of 48 cases, member coverage 90.7%.
 - A receiver typed only by a wrong docblock, or holding a test mock: a method on any receiver other than `$this` is flagged only when no indexed or built-in class declares a method with that name.
 - Methods added by trait `as` aliases.
 - Example code in `*.api.php` hook documentation.
+
+The final review found five more classes, now also fixed and covered: trait aliases declared inside another trait, `$this` and `self::` inside closures (whose scope can be rebound), classes created with `class_alias()`, `is_callable()` and named-argument guards, and names in namespaces that `phplumb.exclude` hides from the index.
 
 What remains are references to modules and libraries the project does not install (optional integrations), Drupal 7 and Drush 8 functions in legacy files, and methods no class declares at all, such as `ModuleHandlerInterface::getImplementations()`, which Drupal 11 removed. One known false alarm class remains: classes that a vendor package loads with `include` instead of through Composer's autoloader (geoPHP's `Geometry`), because the vendor filter does not index those files. It does not occur in this project's custom code.
 
