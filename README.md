@@ -66,7 +66,7 @@ PHPlumb runs on macOS (Apple silicon) and Linux (x64), in VS Code 1.140 or later
 2. Install it:
 
    ```sh
-   code --install-extension phplumb-darwin-arm64-0.1.0.vsix
+   code --install-extension phplumb-darwin-arm64-0.2.0.vsix
    ```
 
 3. Open a PHP project. Indexing progress appears in the status bar.
@@ -91,7 +91,7 @@ PHPlumb is for reading code. It has no autocomplete, signature help, rename or o
 
 ## Status
 
-PHPlumb is young (0.1.0). Core PHP navigation, diagnostics and the Drupal features above are complete.
+PHPlumb is young (0.2.0). Core PHP navigation, diagnostics and the Drupal features above are complete.
 
 ## Development
 
