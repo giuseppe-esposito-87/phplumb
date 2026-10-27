@@ -59,7 +59,7 @@
             "off"
           ],
           "default": "auto",
-          "description": "Drupal support: services, entities, hooks, plugins and routes. auto turns it on when composer.lock requires drupal/core."
+          "description": "Drupal support, such as types for services. auto turns it on when composer.lock requires drupal/core."
         },
         "phplumb.trace.server": {
           "type": "string",

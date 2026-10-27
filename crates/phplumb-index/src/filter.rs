@@ -40,7 +40,6 @@ impl PathFilter {
         })
     }
 
-    /// The canonicalized root.
     /// Whether `relative`, a path relative to the root, matches an exclusion.
     pub(crate) fn excludes(&self, relative: &Path) -> bool {
         self.exclude.is_match(relative)
@@ -51,6 +50,7 @@ impl PathFilter {
         !self.exclude_patterns.is_empty()
     }
 
+    /// The canonicalized root.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -116,7 +116,7 @@ impl PathFilter {
 }
 
 /// Whether a component of `relative` is hidden or a directory never indexed.
-fn has_skipped_component(relative: &Path) -> bool {
+pub(crate) fn has_skipped_component(relative: &Path) -> bool {
     relative.components().any(|component| match component {
         Component::Normal(name) => {
             name.to_string_lossy().starts_with('.')

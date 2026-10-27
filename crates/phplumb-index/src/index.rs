@@ -931,7 +931,6 @@ impl Index {
         found
     }
 
-    /// Each target with the lowercased short name the index expects at its range.
     /// What the active frameworks resolve a string argument at `offset` to.
     fn framework_strings(
         &self,
@@ -956,6 +955,7 @@ impl Index {
         (!found.is_empty()).then_some(found)
     }
 
+    /// Each target with the lowercased short name the index expects at its range.
     fn resolve(&self, path: &Path, source: &[u8], offset: u32) -> Vec<(Location, String)> {
         let summary = summarize(source);
 

@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
-use yaml_rust2::scanner::{Marker, TScalarStyle};
+use yaml_rust2::scanner::Marker;
 
-use crate::filter::{PathFilter, SKIPPED_DIR_NAMES};
+use crate::discover::chosen_path;
+use crate::filter::{PathFilter, SKIPPED_DIR_NAMES, has_skipped_component};
 use crate::index::Index;
 
 /// One definition of a service id: where its key is and what it declares.
@@ -54,10 +55,12 @@ impl Services {
         for path in changed {
             let files = if path.is_dir() {
                 services_files(filter, path)
-            } else if is_services_file(filter, path) && path.is_file() {
-                vec![path.clone()]
             } else {
-                Vec::new()
+                chosen_path(filter.root(), path)
+                    .map(|(_, chosen)| chosen)
+                    .filter(|chosen| is_services_file(filter, chosen) && chosen.is_file())
+                    .into_iter()
+                    .collect()
             };
             for file in files {
                 self.by_file.insert(file.clone(), parse_file(&file));
@@ -157,14 +160,19 @@ fn is_services_file(filter: &PathFilter, path: &Path) -> bool {
     };
     name_matches
         && !filter.excludes(relative)
+        && !has_skipped_component(relative)
         && !relative.components().any(|c| {
             let name = c.as_os_str();
             name == "vendor" || name == "tests" || SKIPPED_DIR_NAMES.iter().any(|s| name == *s)
         })
 }
 
-/// Services files below `start`, a directory under the filter's root.
+/// Services files below `start`, a directory under the filter's root, each once
+/// under the path PHP discovery would choose for it.
 fn services_files(filter: &PathFilter, start: &Path) -> Vec<PathBuf> {
+    if !filter.accepts_dir(start) {
+        return Vec::new();
+    }
     let walker = WalkBuilder::new(start)
         .hidden(true)
         .parents(false)
@@ -182,12 +190,19 @@ fn services_files(filter: &PathFilter, start: &Path) -> Vec<PathBuf> {
                     || SKIPPED_DIR_NAMES.iter().any(|s| name == *s)))
         })
         .build();
-    let mut files: Vec<PathBuf> = walker
-        .flatten()
-        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
-        .map(|entry| entry.into_path())
-        .filter(|path| is_services_file(filter, path))
-        .collect();
+    let mut by_canonical: HashMap<PathBuf, PathBuf> = HashMap::new();
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let Some((canonical, chosen)) = chosen_path(filter.root(), entry.path()) else {
+            continue;
+        };
+        if is_services_file(filter, &chosen) {
+            by_canonical.entry(canonical).or_insert(chosen);
+        }
+    }
+    let mut files: Vec<PathBuf> = by_canonical.into_values().collect();
     files.sort();
     files
 }
@@ -214,12 +229,15 @@ fn parse_file(path: &Path) -> Vec<(String, ServiceDefinition)> {
     else {
         return Vec::new();
     };
+    let lines: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
     let mut found = Vec::new();
     for (key, value) in services {
         let Node::Scalar {
             value: id,
-            start,
-            quoted,
+            line,
+            column,
         } = key
         else {
             continue;
@@ -227,11 +245,11 @@ fn parse_file(path: &Path) -> Vec<(String, ServiceDefinition)> {
         if id.starts_with('_') {
             continue;
         }
-        let start = start + usize::from(quoted);
+        let (start, end) = key_span(&text, &lines, line, column, &id);
         let mut definition = ServiceDefinition {
             path: path.to_path_buf(),
-            start: start as u32,
-            end: (start + id.len()) as u32,
+            start,
+            end,
             class: None,
             alias: None,
             parent: None,
@@ -263,12 +281,34 @@ fn parse_file(path: &Path) -> Vec<(String, ServiceDefinition)> {
     found
 }
 
-/// A YAML node, keeping where scalars start.
+/// The byte range of the key `id` written on 1-based `line` from character
+/// `column`: the id itself, or, when the written key differs from its value (escapes),
+/// an empty range where the key starts.
+fn key_span(text: &str, lines: &[usize], line: usize, column: usize, id: &str) -> (u32, u32) {
+    let Some(&line_start) = lines.get(line.saturating_sub(1)) else {
+        return (0, 0);
+    };
+    let line_text = &text[line_start..];
+    let line_text = &line_text[..line_text.find('\n').unwrap_or(line_text.len())];
+    let key_start = line_start
+        + line_text
+            .char_indices()
+            .nth(column)
+            .map_or(line_text.len(), |(i, _)| i);
+    for start in [key_start, key_start + 1] {
+        if text.get(start..start + id.len()) == Some(id) {
+            return (start as u32, (start + id.len()) as u32);
+        }
+    }
+    (key_start as u32, key_start as u32)
+}
+
+/// A YAML node, keeping where scalars start: a 1-based line and a character column.
 enum Node {
     Scalar {
         value: String,
-        start: usize,
-        quoted: bool,
+        line: usize,
+        column: usize,
     },
     Map(Vec<(Node, Node)>),
     Other,
@@ -310,13 +350,10 @@ impl Builder {
 impl MarkedEventReceiver for Builder {
     fn on_event(&mut self, event: Event, mark: Marker) {
         match event {
-            Event::Scalar(value, style, ..) => self.push(Node::Scalar {
+            Event::Scalar(value, ..) => self.push(Node::Scalar {
                 value,
-                start: mark.index(),
-                quoted: matches!(
-                    style,
-                    TScalarStyle::SingleQuoted | TScalarStyle::DoubleQuoted
-                ),
+                line: mark.line(),
+                column: mark.col(),
             }),
             Event::MappingStart(..) => self.stack.push(Frame::Map(Vec::new(), None)),
             Event::MappingEnd => {

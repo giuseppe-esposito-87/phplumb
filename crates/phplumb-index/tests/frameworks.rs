@@ -200,3 +200,131 @@ fn service_ids_defined_twice_lead_to_both_keys() {
 fn other_strings_lead_nowhere() {
     assert_eq!(definitions_after("getStorage('no"), Vec::<String>::new());
 }
+
+/// A Drupal project in a temporary directory, built with the Drupal module on.
+fn temp_drupal(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for (path, content) in files {
+        write(&root, path, content);
+    }
+    let opts = DiscoverOptions {
+        frameworks: FrameworkSettings {
+            drupal: Activation::On,
+        },
+        ..DiscoverOptions::default()
+    };
+    let index = Index::build(&root, &opts).unwrap().0;
+    (dir, root, index)
+}
+
+fn write(root: &Path, path: &str, content: &str) {
+    let path = root.join(path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, content).unwrap();
+}
+
+const FOO: &str = "<?php\nnamespace App;\nclass Foo { public function foo() {} }\nclass Bar { public function bar() {} }\n";
+
+#[test]
+fn services_in_hidden_directories_stay_out_after_updates() {
+    let (_dir, root, mut index) = temp_drupal(&[
+        ("src/Foo.php", FOO),
+        (
+            "modules/custom/m/m.services.yml",
+            "services:\n  m.svc:\n    class: App\\Foo\n",
+        ),
+        (
+            ".worktrees/feature/modules/custom/m/m.services.yml",
+            "services:\n  m.svc:\n    class: App\\Bar\n",
+        ),
+    ]);
+    assert_eq!(index.drupal().unwrap().services("m.svc").len(), 1);
+
+    index.update(
+        &[
+            root.join(".worktrees/feature/modules/custom/m/m.services.yml"),
+            root.join(".worktrees/feature"),
+        ],
+        &[],
+    );
+
+    assert_eq!(classes(&index, "m.svc"), vec!["App\\Foo"]);
+}
+
+#[test]
+fn service_keys_after_non_ascii_text_point_at_the_id() {
+    let (_dir, _root, index) = temp_drupal(&[
+        ("src/Foo.php", FOO),
+        (
+            "modules/custom/m/m.services.yml",
+            "# Servizi per l'università — caffè\nservices:\n  a.one:\n    class: App\\Foo\n    arguments: ['caffè']\n  h.à:\n    class: App\\Foo\n  b.two:\n    class: App\\Bar\n",
+        ),
+    ]);
+    let drupal = index.drupal().unwrap();
+
+    for id in ["a.one", "h.à", "b.two"] {
+        let definition = &drupal.services(id)[0];
+        let text = fs::read_to_string(&definition.path).unwrap();
+        assert_eq!(
+            &text[definition.start as usize..definition.end as usize],
+            id
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_modules_are_read_once_and_follow_edits() {
+    let (_dir, root, _) = temp_drupal(&[
+        ("src/Foo.php", FOO),
+        (
+            "packages/foo/foo.services.yml",
+            "services:\n  foo.svc:\n    class: App\\Foo\n",
+        ),
+    ]);
+    fs::create_dir_all(root.join("modules/custom")).unwrap();
+    std::os::unix::fs::symlink(root.join("packages/foo"), root.join("modules/custom/foo")).unwrap();
+    let opts = DiscoverOptions {
+        frameworks: FrameworkSettings {
+            drupal: Activation::On,
+        },
+        ..DiscoverOptions::default()
+    };
+    let mut index = Index::build(&root, &opts).unwrap().0;
+    assert_eq!(index.drupal().unwrap().services("foo.svc").len(), 1);
+
+    write(
+        &root,
+        "packages/foo/foo.services.yml",
+        "services:\n  foo.svc:\n    class: App\\Bar\n",
+    );
+    index.update(&[root.join("packages/foo/foo.services.yml")], &[]);
+
+    assert_eq!(classes(&index, "foo.svc"), vec!["App\\Bar"]);
+}
+
+#[test]
+fn services_files_appear_and_disappear() {
+    let (_dir, root, mut index) = temp_drupal(&[("src/Foo.php", FOO)]);
+
+    write(
+        &root,
+        "modules/custom/n/n.services.yml",
+        "services:\n  n.svc:\n    class: App\\Foo\n",
+    );
+    index.update(&[root.join("modules/custom/n/n.services.yml")], &[]);
+    assert_eq!(classes(&index, "n.svc"), vec!["App\\Foo"]);
+
+    fs::remove_dir_all(root.join("modules/custom/n")).unwrap();
+    index.update(&[], &[root.join("modules/custom/n")]);
+    assert_eq!(classes(&index, "n.svc"), Vec::<String>::new());
+
+    write(
+        &root,
+        "modules/custom/o/o.services.yml",
+        "services:\n  o.svc:\n    class: App\\Bar\n",
+    );
+    index.update(&[root.join("modules/custom/o")], &[]);
+    assert_eq!(classes(&index, "o.svc"), vec!["App\\Bar"]);
+}
