@@ -104,6 +104,9 @@ pub struct Declaration {
     /// The whole declaration, body included.
     #[serde(default)]
     pub range: (u32, u32),
+    /// Functions: their attributes. Class-likes keep theirs in `ClassShape`.
+    #[serde(default)]
+    pub metadata: Vec<Metadata>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -159,6 +162,9 @@ pub struct Member {
     /// The whole member, body included.
     #[serde(default)]
     pub range: (u32, u32),
+    /// Methods: their attributes.
+    #[serde(default)]
+    pub metadata: Vec<Metadata>,
 }
 
 /// A use of a name, resolved against the file's namespace and imports.
@@ -401,20 +407,34 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 });
             }
             let documented_magic = pending.doc.as_deref().is_some_and(has_magic_tags);
-            let class = pending.shape.map(|shape| ClassShape {
-                parent: shape.parent.and_then(fqn_at),
-                interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
-                traits: shape.traits.into_iter().filter_map(fqn_at).collect(),
-                magic: documented_magic || shape.members.iter().any(handles_calls),
-                aliases: shape.aliases,
-                members: shape.members,
-                is_abstract: shape.is_abstract,
-                metadata: shape
-                    .attributes
-                    .into_iter()
-                    .filter_map(|meta| meta.resolve(&fqn_at))
-                    .chain(shape.annotations)
-                    .collect(),
+            let class = pending.shape.map(|shape| {
+                let mut members = shape.members;
+                for (start, attributes) in shape.member_attributes {
+                    if let Some(member) = members
+                        .iter_mut()
+                        .find(|m| m.kind == MemberKind::Method && m.name_start == start)
+                    {
+                        member.metadata = attributes
+                            .into_iter()
+                            .filter_map(|meta| meta.resolve(&fqn_at))
+                            .collect();
+                    }
+                }
+                ClassShape {
+                    parent: shape.parent.and_then(fqn_at),
+                    interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
+                    traits: shape.traits.into_iter().filter_map(fqn_at).collect(),
+                    magic: documented_magic || members.iter().any(handles_calls),
+                    aliases: shape.aliases,
+                    members,
+                    is_abstract: shape.is_abstract,
+                    metadata: shape
+                        .attributes
+                        .into_iter()
+                        .filter_map(|meta| meta.resolve(&fqn_at))
+                        .chain(shape.annotations)
+                        .collect(),
+                }
             });
             Some(Declaration {
                 kind: pending.kind,
@@ -426,6 +446,11 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 returns: pending.returns,
                 class,
                 range: pending.span,
+                metadata: pending
+                    .attributes
+                    .into_iter()
+                    .filter_map(|meta| meta.resolve(&fqn_at))
+                    .collect(),
             })
         })
         .collect();
@@ -589,7 +614,18 @@ struct Pending {
     doc: Option<String>,
     returns: Option<TypeExpr>,
     shape: Option<PendingShape>,
+    /// Functions: their attributes.
+    attributes: Vec<PendingMeta>,
 }
+
+/// A class-like's members, the offsets of its trait names, its trait aliases, and
+/// its method attributes by the offset of the method name.
+type MembersFound = (
+    Vec<Member>,
+    Vec<u32>,
+    Vec<String>,
+    Vec<(u32, Vec<PendingMeta>)>,
+);
 
 /// Parent, interfaces and traits as offsets of names the resolver resolved.
 struct PendingShape {
@@ -601,6 +637,8 @@ struct PendingShape {
     is_abstract: bool,
     attributes: Vec<PendingMeta>,
     annotations: Vec<Metadata>,
+    /// Method attributes, by the offset of the method name.
+    member_attributes: Vec<(u32, Vec<PendingMeta>)>,
 }
 
 /// An attribute before names are resolved: offsets of the names the resolver knows.
@@ -765,7 +803,7 @@ impl Collector<'_> {
         }
     }
 
-    /// The attributes of a class-like, with the names left to resolve.
+    /// The attributes of a declaration, with the names left to resolve.
     fn attributes(&self, lists: &Sequence<'_, AttributeList<'_>>) -> Vec<PendingMeta> {
         lists
             .iter()
@@ -905,6 +943,7 @@ impl Collector<'_> {
             .trim_start_matches('\\')
             .to_string();
         self.pending.push(Pending {
+            attributes: Vec::new(),
             kind: SymbolKind::Class,
             range: None,
             span: (call.span().start.offset, call.span().end.offset),
@@ -1010,7 +1049,8 @@ impl Collector<'_> {
     }
 
     fn class_like(&mut self, head: ClassHead, members: &Sequence<'_, ClassLikeMember<'_>>) {
-        let (members, traits, aliases) = self.members(members, head.kind == SymbolKind::Interface);
+        let (members, traits, aliases, member_attributes) =
+            self.members(members, head.kind == SymbolKind::Interface);
         let annotations =
             get_docblock_before_position(self.program.trivia.as_slice(), head.node_start)
                 .map(|trivia| {
@@ -1020,6 +1060,7 @@ impl Collector<'_> {
                 })
                 .unwrap_or_default();
         self.pending.push(Pending {
+            attributes: Vec::new(),
             kind: head.kind,
             start: head.name.0,
             end: head.name.1,
@@ -1038,6 +1079,7 @@ impl Collector<'_> {
                 is_abstract: head.is_abstract || head.kind == SymbolKind::Interface,
                 attributes: head.attributes,
                 annotations,
+                member_attributes,
             }),
         });
     }
@@ -1046,10 +1088,11 @@ impl Collector<'_> {
         &self,
         members: &Sequence<'_, ClassLikeMember<'_>>,
         in_interface: bool,
-    ) -> (Vec<Member>, Vec<u32>, Vec<String>) {
+    ) -> MembersFound {
         let mut out = Vec::new();
         let mut traits = Vec::new();
         let mut aliases = Vec::new();
+        let mut attributes = Vec::new();
         for member in members.iter() {
             match member {
                 ClassLikeMember::TraitUse(trait_use) => {
@@ -1072,6 +1115,7 @@ impl Collector<'_> {
                     for item in constant.items.iter() {
                         let name = String::from_utf8_lossy(item.name.value).into_owned();
                         out.push(Member {
+                            metadata: Vec::new(),
                             kind: MemberKind::Constant,
                             signature: format!("const {name}"),
                             name,
@@ -1095,6 +1139,7 @@ impl Collector<'_> {
                     };
                     let text = String::from_utf8_lossy(name.value).into_owned();
                     out.push(Member {
+                        metadata: Vec::new(),
                         kind: MemberKind::EnumCase,
                         signature: format!("case {text}"),
                         name: text,
@@ -1109,10 +1154,18 @@ impl Collector<'_> {
                         range: (case.span().start.offset, case.span().end.offset),
                     });
                 }
-                ClassLikeMember::Method(method) => self.method(method, in_interface, &mut out),
+                ClassLikeMember::Method(method) => {
+                    if !method.attribute_lists.is_empty() {
+                        attributes.push((
+                            method.name.span.start.offset,
+                            self.attributes(&method.attribute_lists),
+                        ));
+                    }
+                    self.method(method, in_interface, &mut out);
+                }
             }
         }
-        (out, traits, aliases)
+        (out, traits, aliases, attributes)
     }
 
     fn property(&self, property: &Property<'_>, out: &mut Vec<Member>) {
@@ -1151,6 +1204,7 @@ impl Collector<'_> {
                 .find(|(var, _)| var.as_deref().is_none_or(|v| v == name))
                 .map(|(_, ty)| ty.clone());
             out.push(Member {
+                metadata: Vec::new(),
                 kind: MemberKind::Property,
                 signature: format!("{prefix} ${name}").trim().to_string(),
                 is_static: has_static(modifiers),
@@ -1187,6 +1241,7 @@ impl Collector<'_> {
                 }
                 let head = param.span().start.offset;
                 out.push(Member {
+                    metadata: Vec::new(),
                     kind: MemberKind::Property,
                     name: param_name.clone(),
                     is_static: false,
@@ -1204,6 +1259,7 @@ impl Collector<'_> {
         }
 
         out.push(Member {
+            metadata: Vec::new(),
             kind: MemberKind::Method,
             is_static: has_static(&method.modifiers),
             name_start: method.name.span.start.offset,
@@ -1439,7 +1495,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c: &mut Collector<'arena>,
     ) {
         let span = class.span();
-        let (members, _, _) = c.members(&class.members, false);
+        let (members, _, _, _) = c.members(&class.members, false);
         c.anonymous.push(PendingAnonymous {
             start: span.start.offset,
             end: span.end.offset,
@@ -1532,6 +1588,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 .map(|r| c.hint_type(&r.hint)),
         );
         c.pending.push(Pending {
+            attributes: c.attributes(&function.attribute_lists),
             kind: SymbolKind::Function,
             start: function.name.span.start.offset,
             end: function.name.span.end.offset,
@@ -1550,6 +1607,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         for item in constant.items.iter() {
             c.constants.insert(item.name.span.start.offset);
             c.pending.push(Pending {
+                attributes: Vec::new(),
                 kind: SymbolKind::Constant,
                 start: item.name.span.start.offset,
                 end: item.name.span.end.offset,
@@ -1586,6 +1644,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         };
         let name = String::from_utf8_lossy(value).into_owned();
         c.pending.push(Pending {
+            attributes: Vec::new(),
             kind: SymbolKind::Constant,
             range: None,
             span: (call.span().start.offset, call.span().end.offset),

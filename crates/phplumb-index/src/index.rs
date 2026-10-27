@@ -276,7 +276,7 @@ impl Index {
     }
 
     /// Every indexed declaration with the path of its file.
-    pub(crate) fn declarations(&self) -> impl Iterator<Item = (&Path, &Declaration)> {
+    pub fn declarations(&self) -> impl Iterator<Item = (&Path, &Declaration)> {
         self.files
             .iter()
             .flatten()

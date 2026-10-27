@@ -177,3 +177,37 @@ fn metadata_survives_the_cache() {
     assert_eq!(before.len(), 1);
     assert_eq!(metadata(&warm), before);
 }
+
+#[test]
+fn function_and_method_attributes_survive_the_cache() {
+    let ws = Workspace::new();
+    ws.write(
+        "src/hooks.php",
+        "<?php\n#[Marker]\nfunction f() {}\nclass H {\n  #[Marker(hook: 'cron')]\n  public function run() {}\n}\n",
+    );
+    let (cold, _) = ws.build(&DiscoverOptions::default());
+    cold.save_cache(&ws.cache).unwrap();
+    let metadata = |index: &Index| {
+        let function = index
+            .declarations()
+            .find(|(_, d)| d.fqn == "f")
+            .map(|(_, d)| d.metadata.clone())
+            .unwrap();
+        let method = index.classes_named("H")[0]
+            .declaration
+            .class
+            .as_ref()
+            .unwrap()
+            .members[0]
+            .metadata
+            .clone();
+        (function, method)
+    };
+    let before = metadata(&cold);
+
+    let (warm, stats) = ws.build(&DiscoverOptions::default());
+
+    assert!(stats.reused > 0);
+    assert_eq!((before.0.len(), before.1.len()), (1, 1));
+    assert_eq!(metadata(&warm), before);
+}

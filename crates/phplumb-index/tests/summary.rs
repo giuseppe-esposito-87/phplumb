@@ -512,3 +512,49 @@ fn deeply_nested_annotations_give_nothing() {
 
     assert_eq!(metadata_of(&summary, "Deep"), &[]);
 }
+
+#[test]
+fn function_and_method_attributes_are_recorded() {
+    use phplumb_index::metadata::MetaValue;
+    let summary = summarize(&php("use Drupal\\Core\\Hook\\Attribute\\Hook;
+use Drupal\\Core\\Hook\\Attribute\\LegacyHook;
+#[LegacyHook]
+function mymodule_cron() {}
+class H {
+  #[Hook('form_alter', module: 'other')]
+  public function formAlter() {}
+}"));
+
+    let function = summary
+        .declarations
+        .iter()
+        .find(|d| d.fqn == "mymodule_cron")
+        .unwrap();
+    let names: Vec<&str> = function.metadata.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, vec!["Drupal\\Core\\Hook\\Attribute\\LegacyHook"]);
+
+    let class = summary.declarations.iter().find(|d| d.fqn == "H").unwrap();
+    let method = class
+        .class
+        .as_ref()
+        .unwrap()
+        .members
+        .iter()
+        .find(|m| m.name == "formAlter")
+        .unwrap();
+    assert_eq!(method.metadata.len(), 1);
+    assert_eq!(
+        method.metadata[0].name,
+        "Drupal\\Core\\Hook\\Attribute\\Hook"
+    );
+    assert_eq!(
+        method.metadata[0].arguments,
+        vec![
+            (None, MetaValue::String("form_alter".to_string())),
+            (
+                Some("module".to_string()),
+                MetaValue::String("other".to_string())
+            ),
+        ]
+    );
+}
