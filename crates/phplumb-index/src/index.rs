@@ -160,9 +160,11 @@ impl Index {
             stats.declarations += file.declarations.len();
             index.insert(file);
         }
-        for framework in &mut index.frameworks {
-            framework.rebuild(&index.filter);
+        let mut frameworks = std::mem::take(&mut index.frameworks);
+        for framework in &mut frameworks {
+            framework.rebuild(&index);
         }
+        index.frameworks = frameworks;
         stats.elapsed_ms = started.elapsed().as_millis();
         Ok((index, stats))
     }
@@ -212,9 +214,11 @@ impl Index {
             self.insert(file);
         }
         let changed: Vec<PathBuf> = changed.iter().map(|p| self.filter.under_root(p)).collect();
-        for framework in &mut self.frameworks {
-            framework.update(&self.filter, &changed, &deleted);
+        let mut frameworks = std::mem::take(&mut self.frameworks);
+        for framework in &mut frameworks {
+            framework.update(self, &changed, &deleted);
         }
+        self.frameworks = frameworks;
         stats.elapsed_ms = started.elapsed().as_millis();
         stats
     }
@@ -255,6 +259,19 @@ impl Index {
         });
         found.dedup();
         found
+    }
+
+    /// The rules deciding which files belong to the index.
+    pub(crate) fn filter(&self) -> &PathFilter {
+        &self.filter
+    }
+
+    /// Every indexed declaration with the path of its file.
+    pub(crate) fn declarations(&self) -> impl Iterator<Item = (&Path, &Declaration)> {
+        self.files
+            .iter()
+            .flatten()
+            .flat_map(|file| file.declarations.iter().map(|d| (file.path.as_path(), d)))
     }
 
     /// The Drupal module, when it is active.

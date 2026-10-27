@@ -30,6 +30,9 @@ pub struct Metadata {
     pub end: u32,
     /// The whole attribute or annotation, arguments included.
     pub span: (u32, u32),
+    /// A docblock annotation rather than an attribute.
+    #[serde(default)]
+    pub annotation: bool,
 }
 
 impl Metadata {
@@ -161,6 +164,7 @@ impl Annotations<'_> {
             start: self.offset + name_start as u32,
             end: self.offset + name_end as u32,
             span: (self.offset + start as u32, self.offset + self.pos as u32),
+            annotation: true,
         })
     }
 

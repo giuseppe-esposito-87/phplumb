@@ -328,3 +328,75 @@ fn services_files_appear_and_disappear() {
     index.update(&[root.join("modules/custom/o")], &[]);
     assert_eq!(classes(&index, "o.svc"), vec!["App\\Bar"]);
 }
+
+fn entity(index: &Index, id: &str) -> Vec<(String, String)> {
+    index
+        .drupal()
+        .unwrap()
+        .entity_types(id)
+        .iter()
+        .map(|e| (e.class.clone(), e.storage.clone()))
+        .collect()
+}
+
+#[test]
+fn entity_types_are_read_from_attributes_and_annotations() {
+    let (_root, index) = drupal_fixture();
+
+    assert_eq!(
+        entity(&index, "thing"),
+        vec![(
+            "Drupal\\mymodule\\Entity\\Thing".into(),
+            "Drupal\\mymodule\\ThingStorage".into()
+        )]
+    );
+    assert_eq!(
+        entity(&index, "gadget"),
+        vec![(
+            "Drupal\\gadget\\Entity\\Gadget".into(),
+            "Drupal\\Core\\Entity\\Sql\\SqlContentEntityStorage".into()
+        )]
+    );
+    assert_eq!(
+        entity(&index, "setting"),
+        vec![(
+            "Drupal\\mymodule\\Entity\\Setting".into(),
+            "Drupal\\Core\\Config\\Entity\\ConfigEntityStorage".into()
+        )]
+    );
+}
+
+#[test]
+fn entity_types_defined_twice_are_all_kept() {
+    let (_root, index) = drupal_fixture();
+
+    let mut dual = entity(&index, "dual");
+    dual.sort();
+    assert_eq!(
+        dual,
+        vec![
+            (
+                "Drupal\\mymodule\\Entity\\DualCustom".into(),
+                "Drupal\\Core\\Entity\\Sql\\SqlContentEntityStorage".into()
+            ),
+            (
+                "Drupal\\override\\Entity\\DualOverride".into(),
+                "Drupal\\override\\OverrideStorage".into()
+            ),
+        ],
+        "an attribute without an import (Dual) does not name ContentEntityType"
+    );
+}
+
+#[test]
+fn entity_types_in_test_modules_are_ignored() {
+    let (_root, index) = drupal_fixture();
+
+    assert!(
+        index
+            .drupal()
+            .unwrap()
+            .entity_types("test_thing")
+            .is_empty()
+    );
+}

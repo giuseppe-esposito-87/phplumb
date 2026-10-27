@@ -1,25 +1,33 @@
 //! Drupal: services from `*.services.yml`.
 
+mod entities;
 mod services;
 
 use std::any::Any;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::filter::PathFilter;
 use crate::frameworks::{CallTarget, Framework, FrameworkCall};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 
+pub use entities::EntityType;
+use entities::EntityTypes;
 pub use services::ServiceDefinition;
 use services::Services;
 
 #[derive(Default)]
 pub struct Drupal {
     services: Services,
+    entities: EntityTypes,
 }
 
 impl Drupal {
+    /// Every declaration of the entity type `id`, outside test modules.
+    pub fn entity_types(&self, id: &str) -> &[EntityType] {
+        self.entities.get(id)
+    }
+
     /// Every definition of `id` on disk.
     pub fn services(&self, id: &str) -> &[ServiceDefinition] {
         self.services.definitions(id)
@@ -53,12 +61,14 @@ impl Framework for Drupal {
         })
     }
 
-    fn rebuild(&mut self, filter: &PathFilter) {
-        self.services = Services::read(filter);
+    fn rebuild(&mut self, index: &Index) {
+        self.services = Services::read(index.filter());
+        self.entities = EntityTypes::read(index);
     }
 
-    fn update(&mut self, filter: &PathFilter, changed: &[PathBuf], removed: &[PathBuf]) {
-        self.services.update(filter, changed, removed);
+    fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
+        self.services.update(index.filter(), changed, removed);
+        self.entities = EntityTypes::read(index);
     }
 
     /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes.

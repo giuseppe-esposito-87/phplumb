@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::filter::PathFilter;
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 
@@ -49,10 +48,12 @@ pub trait Framework: Send + Sync {
     fn name(&self) -> &'static str;
     /// Whether the framework applies to the project at `root`.
     fn detect(&self, root: &Path) -> bool;
-    /// Reads the framework's own files below the filter's root.
-    fn rebuild(&mut self, filter: &PathFilter);
-    /// Applies changed and removed paths: files or directories, any extension.
-    fn update(&mut self, filter: &PathFilter, changed: &[PathBuf], removed: &[PathBuf]);
+    /// Reads what the framework needs from the index and its own files, after the
+    /// index is built.
+    fn rebuild(&mut self, index: &Index);
+    /// Applies changed and removed paths (files or directories, any extension),
+    /// after the index applied them.
+    fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]);
     /// The type `call` returns when the framework knows better than its declaration.
     fn call_type(&self, index: &Index, call: &FrameworkCall<'_>) -> Option<TypeExpr>;
     /// Targets of the string literal at position `argument` of `call`.

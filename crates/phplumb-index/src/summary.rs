@@ -629,6 +629,7 @@ impl PendingMeta {
             start: self.name,
             end: self.end,
             span: self.span,
+            annotation: false,
         })
     }
 }
