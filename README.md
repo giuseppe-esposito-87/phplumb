@@ -35,10 +35,10 @@ PHPlumb starts with Drupal, because its code calls almost everything through int
 - `.module`, `.inc`, `.install`, `.theme`, `.profile` and `.engine` files are indexed as PHP.
 - Inside `vendor`, only the code that Composer's autoloader reaches is indexed, so package tests and leftover copies never show up as targets.
 - Broken reference diagnostics are tested against Drupal core and contrib for false alarms.
+- **Services.** `\Drupal::service('id')` and `$container->get('id')` are typed from every `*.services.yml`, so navigation continues on the next call. Cmd+click on a service id opens its definition.
 
 Planned, in this order:
 
-- [ ] **Services.** Type `\Drupal::service('id')` and `$container->get('id')` from every `*.services.yml`, so navigation continues on the next call. Cmd+click on a service id opens its definition.
 - [ ] **Entities.** Type `getStorage('node')` as the storage class of that entity type, and `->load()` as the entity class.
 - [ ] **Hooks.** Navigate from a hook implementation to the places that invoke it, and back, including computed names such as `hook_form_FORM_ID_alter`.
 - [ ] **Plugins.** Navigate from a plugin id to its class, and from a plugin manager to all its plugins.
@@ -75,12 +75,13 @@ PHPlumb runs on macOS (Apple silicon) and Linux (x64), in VS Code 1.140 or later
 
 ## Settings
 
-| Setting                       | Default | Description                                                                                 |
-| ----------------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| `phplumb.exclude`             | `[]`    | Glob patterns, relative to the workspace folder, of paths not to index.                     |
-| `phplumb.diagnostics.enabled` | `true`  | Reports names that do not exist, in project code outside `vendor`, Drupal core and contrib. |
-| `phplumb.server.path`         | `""`    | Path of the `phplumb` binary. Empty uses the bundled binary.                                |
-| `phplumb.trace.server`        | `"off"` | Traces the communication between VS Code and the engine: `off`, `messages` or `verbose`.    |
+| Setting                       | Default  | Description                                                                                              |
+| ----------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
+| `phplumb.exclude`             | `[]`     | Glob patterns, relative to the workspace folder, of paths not to index.                                  |
+| `phplumb.diagnostics.enabled` | `true`   | Reports names that do not exist, in project code outside `vendor`, Drupal core and contrib.              |
+| `phplumb.frameworks.drupal`   | `"auto"` | Drupal support: `auto` turns it on when `composer.lock` requires `drupal/core`; `on` or `off` forces it. |
+| `phplumb.server.path`         | `""`     | Path of the `phplumb` binary. Empty uses the bundled binary.                                             |
+| `phplumb.trace.server`        | `"off"`  | Traces the communication between VS Code and the engine: `off`, `messages` or `verbose`.                 |
 
 The **PHPlumb: Restart Server** command restarts the engine. The **PHPlumb** output channel shows its log.
 
