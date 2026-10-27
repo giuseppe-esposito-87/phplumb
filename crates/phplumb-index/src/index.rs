@@ -81,6 +81,9 @@ pub struct Index {
     subtype_table: HashMap<String, Vec<Entry>>,
     /// Reference key hash to the files that mention the key.
     candidates: HashMap<u64, Vec<u32>>,
+    /// How many declarations, trait aliases included, declare each lowercased
+    /// method name.
+    method_names: HashMap<String, u32>,
 }
 
 impl Index {
@@ -142,6 +145,7 @@ impl Index {
             constants: HashMap::new(),
             subtype_table: HashMap::new(),
             candidates: HashMap::new(),
+            method_names: HashMap::new(),
         };
         for file in files.into_iter().flatten() {
             stats.files_with_parse_errors += usize::from(file.has_errors);
@@ -252,6 +256,12 @@ impl Index {
     /// Whether a function named `fqn` is indexed.
     pub(crate) fn has_function(&self, fqn: &str) -> bool {
         !lookup(&self.functions, &fqn.to_ascii_lowercase()).is_empty()
+    }
+
+    /// Whether any indexed class-like declares a method named `name`, directly or
+    /// as a trait alias.
+    pub(crate) fn has_method_named(&self, name: &str) -> bool {
+        self.method_names.contains_key(&name.to_ascii_lowercase())
     }
 
     /// Whether a constant named `fqn` is indexed.
@@ -1067,6 +1077,9 @@ impl Index {
         for key in &file.ref_keys {
             self.candidates.entry(*key).or_default().push(id);
         }
+        for name in declared_methods(&file) {
+            *self.method_names.entry(name).or_default() += 1;
+        }
         self.ids.insert(file.path.clone(), id);
         self.files.push(Some(file));
     }
@@ -1076,6 +1089,14 @@ impl Index {
             return;
         };
         self.ids.remove(&file.path);
+        for name in declared_methods(&file) {
+            if let Some(count) = self.method_names.get_mut(&name) {
+                *count -= 1;
+                if *count == 0 {
+                    self.method_names.remove(&name);
+                }
+            }
+        }
         for key in &file.ref_keys {
             if let Some(files) = self.candidates.get_mut(key) {
                 files.retain(|f| *f != id);
@@ -1132,6 +1153,21 @@ fn supertype_names(declaration: &Declaration) -> impl Iterator<Item = &str> {
             .chain(shape.interfaces.iter())
             .map(String::as_str)
     })
+}
+
+/// The lowercased method names a file declares, trait aliases included.
+fn declared_methods(file: &CachedFile) -> impl Iterator<Item = String> + '_ {
+    file.declarations
+        .iter()
+        .filter_map(|d| d.class.as_ref())
+        .flat_map(|shape| {
+            shape
+                .members
+                .iter()
+                .filter(|m| m.kind == MemberKind::Method)
+                .map(|m| m.name.to_ascii_lowercase())
+                .chain(shape.aliases.iter().cloned())
+        })
 }
 
 fn lookup<'a>(table: &'a HashMap<String, Vec<Entry>>, key: &str) -> &'a [Entry] {

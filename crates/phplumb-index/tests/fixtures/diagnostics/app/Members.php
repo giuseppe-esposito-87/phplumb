@@ -36,7 +36,7 @@ class Members extends NoConstructor
         $union->get('x');
         $date->format('Y');
         $date->whatever();
-        (new Content())->/*@broken*/missing();
+        (new Content())->/*@broken*/notThere();
         StaticMagic::anything();
         Content::create();
         Content::/*@broken*/destroy();

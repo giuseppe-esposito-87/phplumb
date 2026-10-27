@@ -88,13 +88,15 @@ fn search<'a>(
     kind: MemberKind,
     name: &str,
 ) -> Option<(ClassRef<'a>, &'a Member)> {
-    let mut visited: HashSet<String> = HashSet::new();
+    // Declarations, not names, are visited: a name may be declared more than once
+    // (a stub and the real class), and each declaration has its own members.
+    let mut visited: HashSet<usize> = HashSet::new();
     let mut interfaces: VecDeque<String> = VecDeque::new();
 
-    let mut current = Some(root);
-    while let Some(class) = current {
-        if !visited.insert(class.declaration.fqn.to_ascii_lowercase()) {
-            break;
+    let mut chain: VecDeque<ClassRef<'a>> = VecDeque::from([root]);
+    while let Some(class) = chain.pop_front() {
+        if !visited.insert(identity(&class)) {
+            continue;
         }
         if let Some(member) = own(&class, kind, name) {
             return Some((class, member));
@@ -102,26 +104,26 @@ fn search<'a>(
         if let Some(hit) = in_traits(index, &class, kind, name, &mut visited) {
             return Some(hit);
         }
-        let shape = class.declaration.class.as_ref()?;
+        let Some(shape) = class.declaration.class.as_ref() else {
+            continue;
+        };
         interfaces.extend(shape.interfaces.iter().cloned());
-        current = shape
-            .parent
-            .as_deref()
-            .and_then(|parent| index.classes_named(parent).into_iter().next());
+        if let Some(parent) = shape.parent.as_deref() {
+            chain.extend(index.classes_named(parent));
+        }
     }
 
     while let Some(interface) = interfaces.pop_front() {
-        let Some(declaration) = index.classes_named(&interface).into_iter().next() else {
-            continue;
-        };
-        if !visited.insert(declaration.declaration.fqn.to_ascii_lowercase()) {
-            continue;
-        }
-        if let Some(member) = own(&declaration, kind, name) {
-            return Some((declaration, member));
-        }
-        if let Some(shape) = &declaration.declaration.class {
-            interfaces.extend(shape.interfaces.iter().cloned());
+        for declaration in index.classes_named(&interface) {
+            if !visited.insert(identity(&declaration)) {
+                continue;
+            }
+            if let Some(member) = own(&declaration, kind, name) {
+                return Some((declaration, member));
+            }
+            if let Some(shape) = &declaration.declaration.class {
+                interfaces.extend(shape.interfaces.iter().cloned());
+            }
         }
     }
     None
@@ -132,24 +134,28 @@ fn in_traits<'a>(
     class: &ClassRef<'a>,
     kind: MemberKind,
     name: &str,
-    visited: &mut HashSet<String>,
+    visited: &mut HashSet<usize>,
 ) -> Option<(ClassRef<'a>, &'a Member)> {
     let shape = class.declaration.class.as_ref()?;
     for name_of_trait in &shape.traits {
-        let Some(declaration) = index.classes_named(name_of_trait).into_iter().next() else {
-            continue;
-        };
-        if !visited.insert(declaration.declaration.fqn.to_ascii_lowercase()) {
-            continue;
-        }
-        if let Some(member) = own(&declaration, kind, name) {
-            return Some((declaration, member));
-        }
-        if let Some(hit) = in_traits(index, &declaration, kind, name, visited) {
-            return Some(hit);
+        for declaration in index.classes_named(name_of_trait) {
+            if !visited.insert(identity(&declaration)) {
+                continue;
+            }
+            if let Some(member) = own(&declaration, kind, name) {
+                return Some((declaration, member));
+            }
+            if let Some(hit) = in_traits(index, &declaration, kind, name, visited) {
+                return Some(hit);
+            }
         }
     }
     None
+}
+
+/// One declaration's identity within the index.
+fn identity(class: &ClassRef<'_>) -> usize {
+    std::ptr::from_ref(class.declaration) as usize
 }
 
 /// A member declared directly on `class`.

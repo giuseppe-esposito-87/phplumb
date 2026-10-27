@@ -7,16 +7,17 @@ use std::sync::OnceLock;
 
 use anyhow::Context;
 
-use crate::summary::{SymbolKind, summarize};
+use crate::summary::{MemberKind, SymbolKind, summarize};
 
-/// `#` comment lines, then one `c`, `f` or `k` line per class-like, function or
-/// constant, keyed like `class_key`, `function_key` and `constant_key`.
+/// `#` comment lines, then one `c`, `f`, `k` or `m` line per class-like, function,
+/// constant or method name; methods by their lowercased bare name.
 const LIST: &str = include_str!("../data/builtins.txt");
 
 struct Names {
     classes: HashSet<&'static str>,
     functions: HashSet<&'static str>,
     constants: HashSet<&'static str>,
+    methods: HashSet<&'static str>,
 }
 
 fn names() -> &'static Names {
@@ -26,12 +27,14 @@ fn names() -> &'static Names {
             classes: HashSet::new(),
             functions: HashSet::new(),
             constants: HashSet::new(),
+            methods: HashSet::new(),
         };
         for line in LIST.lines().filter(|l| !l.starts_with('#')) {
             match line.split_once(' ') {
                 Some(("c", name)) => names.classes.insert(name),
                 Some(("f", name)) => names.functions.insert(name),
                 Some(("k", name)) => names.constants.insert(name),
+                Some(("m", name)) => names.methods.insert(name),
                 _ => false,
             };
         }
@@ -52,6 +55,11 @@ pub fn is_function(fqn: &str) -> bool {
 /// Whether a built-in constant is named `fqn`.
 pub fn is_constant(fqn: &str) -> bool {
     names().constants.contains(constant_key(fqn).as_str())
+}
+
+/// Whether a built-in class-like declares a method named `name`.
+pub fn is_method(name: &str) -> bool {
+    names().methods.contains(name.to_ascii_lowercase().as_str())
 }
 
 /// Class and function names ignore ASCII case.
@@ -90,6 +98,11 @@ pub fn generate(stubs: &Path) -> anyhow::Result<String> {
             let source =
                 std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
             for declaration in summarize(&source).declarations {
+                for member in declaration.class.iter().flat_map(|c| c.members.iter()) {
+                    if member.kind == MemberKind::Method {
+                        lines.insert(format!("m {}", member.name.to_ascii_lowercase()));
+                    }
+                }
                 let line = match declaration.kind {
                     SymbolKind::Function => format!("f {}", class_key(&declaration.fqn)),
                     SymbolKind::Constant => format!("k {}", constant_key(&declaration.fqn)),

@@ -15,7 +15,8 @@ use mago_syntax::cst::{
     FunctionLikeReturnTypeHint, FunctionPartialApplication, Hint, Instantiation, Interface,
     Literal, Method, MethodCall, Modifier, Namespace, NullSafeMethodCall, NullSafePropertyAccess,
     Program, Property, PropertyAccess, PropertyItem, Sequence, StaticMethodCall,
-    StaticMethodPartialApplication, StaticPropertyAccess, Trait, Use, UseItems, UseType, Variable,
+    StaticMethodPartialApplication, StaticPropertyAccess, Trait, TraitUseAdaptation,
+    TraitUseSpecification, Use, UseItems, UseType, Variable,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -118,6 +119,9 @@ pub struct ClassShape {
     /// `@mixin` tag: it may answer methods it does not declare.
     #[serde(default)]
     pub magic: bool,
+    /// Lowercased method names that trait `as` adaptations add.
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -395,6 +399,7 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
                 traits: shape.traits.into_iter().filter_map(fqn_at).collect(),
                 magic: documented_magic || shape.members.iter().any(handles_calls),
+                aliases: shape.aliases,
                 members: shape.members,
                 is_abstract: shape.is_abstract,
             });
@@ -575,6 +580,7 @@ struct PendingShape {
     parent: Option<u32>,
     interfaces: Vec<u32>,
     traits: Vec<u32>,
+    aliases: Vec<String>,
     members: Vec<Member>,
     is_abstract: bool,
 }
@@ -751,7 +757,7 @@ impl Collector<'_> {
     }
 
     fn class_like(&mut self, head: ClassHead, members: &Sequence<'_, ClassLikeMember<'_>>) {
-        let (members, traits) = self.members(members, head.kind == SymbolKind::Interface);
+        let (members, traits, aliases) = self.members(members, head.kind == SymbolKind::Interface);
         self.pending.push(Pending {
             kind: head.kind,
             start: head.name.0,
@@ -766,6 +772,7 @@ impl Collector<'_> {
                 parent: head.parent,
                 interfaces: head.interfaces,
                 traits,
+                aliases,
                 members,
                 is_abstract: head.is_abstract || head.kind == SymbolKind::Interface,
             }),
@@ -776,13 +783,25 @@ impl Collector<'_> {
         &self,
         members: &Sequence<'_, ClassLikeMember<'_>>,
         in_interface: bool,
-    ) -> (Vec<Member>, Vec<u32>) {
+    ) -> (Vec<Member>, Vec<u32>, Vec<String>) {
         let mut out = Vec::new();
         let mut traits = Vec::new();
+        let mut aliases = Vec::new();
         for member in members.iter() {
             match member {
                 ClassLikeMember::TraitUse(trait_use) => {
                     traits.extend(trait_use.trait_names.iter().map(|n| n.span().start.offset));
+                    if let TraitUseSpecification::Concrete(specification) = &trait_use.specification
+                    {
+                        for adaptation in specification.adaptations.iter() {
+                            if let TraitUseAdaptation::Alias(alias) = adaptation
+                                && let Some(name) = &alias.alias
+                            {
+                                aliases
+                                    .push(String::from_utf8_lossy(name.value).to_ascii_lowercase());
+                            }
+                        }
+                    }
                 }
                 ClassLikeMember::Constant(constant) => {
                     let start = constant.span().start.offset;
@@ -830,7 +849,7 @@ impl Collector<'_> {
                 ClassLikeMember::Method(method) => self.method(method, in_interface, &mut out),
             }
         }
-        (out, traits)
+        (out, traits, aliases)
     }
 
     fn property(&self, property: &Property<'_>, out: &mut Vec<Member>) {
@@ -1142,7 +1161,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         c: &mut Collector<'arena>,
     ) {
         let span = class.span();
-        let (members, _) = c.members(&class.members, false);
+        let (members, _, _) = c.members(&class.members, false);
         c.anonymous.push(PendingAnonymous {
             start: span.start.offset,
             end: span.end.offset,

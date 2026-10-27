@@ -33,3 +33,10 @@ fn generate_lists_stub_declarations() {
     let lines: Vec<&str> = list.lines().collect();
     assert_eq!(lines, vec!["c ns\\a", "f ns\\f", "k D", "k ns\\K"]);
 }
+
+#[test]
+fn builtins_know_method_names() {
+    assert!(phplumb_index::builtins::is_method("format"));
+    assert!(phplumb_index::builtins::is_method("GETMESSAGE"));
+    assert!(!phplumb_index::builtins::is_method("fabricated"));
+}

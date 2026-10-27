@@ -28,7 +28,15 @@ pub struct Diagnostic {
 /// Methods every enum has without declaring them.
 const ENUM_METHODS: [&str; 3] = ["cases", "from", "tryfrom"];
 
-pub(crate) fn find(index: &Index, _path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+pub(crate) fn find(index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+    // `*.api.php` files document hooks with example code that never runs.
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".api.php"))
+    {
+        return Vec::new();
+    }
     let summary = summarize(source);
     let guarded: HashSet<&str> = summary.guarded.iter().map(String::as_str).collect();
     let is_guarded = |name: &str| guarded.contains(name.to_ascii_lowercase().as_str());
@@ -92,6 +100,13 @@ pub(crate) fn find(index: &Index, _path: &Path, source: &[u8]) -> Vec<Diagnostic
             continue;
         };
         if in_trait || classes.is_empty() {
+            continue;
+        }
+        // Only `$this` has a type the code itself guarantees. Any other receiver's
+        // type may come from a wrong docblock or hide a mock, so its method must also
+        // be declared nowhere, by no indexed or built-in class.
+        let declared_somewhere = index.has_method_named(&name) || builtins::is_method(&name);
+        if !on_this(source, start) && declared_somewhere {
             continue;
         }
         if classes
@@ -223,7 +238,9 @@ fn missing_member(
     let enum_method =
         kind == MemberKind::Method && ENUM_METHODS.iter().any(|m| name.eq_ignore_ascii_case(m));
     for candidate in &reachable {
-        if !index.find_member(candidate, kind, name).is_empty() {
+        if !index.find_member(candidate, kind, name).is_empty()
+            || (kind == MemberKind::Method && aliased(index, candidate, name))
+        {
             return false;
         }
         let is_enum = index
@@ -265,6 +282,47 @@ fn fully_known(index: &Index, class: &str, check_magic: bool) -> bool {
         }
     }
     true
+}
+
+/// Whether `class` or one of its parents gets a method named `name` from a trait
+/// `as` alias.
+fn aliased(index: &Index, class: &str, name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut pending = vec![class.to_string()];
+    while let Some(next) = pending.pop() {
+        if !seen.insert(next.to_ascii_lowercase()) {
+            continue;
+        }
+        for declaration in index.classes_named(&next) {
+            let Some(shape) = &declaration.declaration.class else {
+                continue;
+            };
+            if shape.aliases.contains(&name) {
+                return true;
+            }
+            pending.extend(shape.parent.iter().cloned());
+        }
+    }
+    false
+}
+
+/// Whether the member name at `start` is accessed on `$this`.
+fn on_this(source: &[u8], start: u32) -> bool {
+    let before = source
+        .get(..start as usize)
+        .unwrap_or_default()
+        .trim_ascii_end();
+    let Some(before) = before.strip_suffix(b"->") else {
+        return false;
+    };
+    let before = before.strip_suffix(b"?").unwrap_or(before).trim_ascii_end();
+    before.ends_with(b"$this")
+        && before
+            .len()
+            .checked_sub(6)
+            .and_then(|i| before.get(i))
+            .is_none_or(|b| !(b.is_ascii_alphanumeric() || *b == b'_' || *b == b'$'))
 }
 
 fn is_trait(index: &Index, fqn: &str) -> bool {
