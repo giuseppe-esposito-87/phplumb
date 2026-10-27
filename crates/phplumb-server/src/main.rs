@@ -36,6 +36,22 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("builtins") => {
+            let Some(stubs) = args.get(1) else {
+                eprintln!("usage: phplumb builtins <phpstorm-stubs dir>");
+                return ExitCode::FAILURE;
+            };
+            match phplumb_index::builtins::generate(std::path::Path::new(stubs)) {
+                Ok(list) => {
+                    print!("{list}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("phplumb builtins: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("--version") => {
             println!("phplumb {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

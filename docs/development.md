@@ -37,6 +37,15 @@ cargo run --release -p phplumb-server -- bench --root <drupal-root> --cases <cas
 
 The command prints a JSON report and exits with code 1 when a case fails. Case files that point into client code stay outside the repository. See `docs/benchmarks.md` for recorded results.
 
+## Built-in PHP names
+
+`crates/phplumb-index/data/builtins.txt` lists the classes, functions and constants that PHP and its extensions provide, so diagnostics never flag them. To regenerate it from a newer `phpstorm-stubs` tag, download that tag into an empty directory, then keep the four header lines and update their tag and commit:
+
+```sh
+{ sed -n '1,4p' crates/phplumb-index/data/builtins.txt; cargo run -q -p phplumb-server -- builtins <stubs-dir>; } > builtins.new
+mv builtins.new crates/phplumb-index/data/builtins.txt
+```
+
 ## Packaging
 
 Build one `.vsix` per platform:
