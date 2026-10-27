@@ -8,17 +8,17 @@ Same machine and project. `phplumb bench --diagnostics <dir>` lists every diagno
 
 | Area                  | Files  | Drupal diagnostics | What they are                                                                                                                     | Slowest file |
 | --------------------- | ------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| `web/modules/custom`  | 1,228  | 6                  | 4 `'#type' => 'markup'`, 2 uses of a formatter defined nowhere                                                                    | 9 ms         |
-| `web/modules/contrib` | 6,596  | 91                 | 34 `markup`, 16 wrong widget or formatter ids, 36 services and routes of modules not on disk or missing files, 5 other plugin ids | 26 ms        |
-| `web/core`            | 11,473 | 11                 | 5 services called only by deprecated fallbacks, 5 `markup`, 1 `'#type' => '#markup'`                                              | 35 ms        |
+| `web/modules/custom`  | 1,228  | 6                  | 4 `'#type' => 'markup'`, 2 uses of a formatter defined nowhere                                                                    | 4 ms         |
+| `web/modules/contrib` | 6,596  | 82                 | 34 `markup`, 16 wrong widget or formatter ids, 27 services and routes of modules not on disk or missing files, 5 other plugin ids | 32 ms        |
+| `web/core`            | 11,473 | 11                 | 5 services called only by deprecated fallbacks, 5 `markup`, 1 `'#type' => '#markup'`                                              | 29 ms        |
 
-The first sweep found 519 Drupal diagnostics. The false alarms came from routes declared by attributes, route aliases, routes and services defined by PHP code, hook classes as services, plugin managers that look ids up their own way, webform elements, test code and `*.api.php` files; each became a rule with a test.
+The first sweep found 519 Drupal diagnostics. The false alarms came from routes declared by attributes, route aliases, routes and services defined by PHP code, hook classes as services, plugin managers that look ids up their own way, webform elements, test code and `*.api.php` files; each became a rule with a test. Nine real contrib findings stay silent because the engine cannot rule them out: core and contrib route providers build names such as `"$prefix.view"` and `"$entity_type_id.settings"`, and a service provider mentions `hal.link_manager`.
 
 | Metric                                  | Value                             | Target          |
 | --------------------------------------- | --------------------------------- | --------------- |
 | Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | at least 42,455 |
-| Cold index                              | 5.9 s                             | under 10 s      |
-| Peak resident memory                    | 397 to 420 MB                     | under 1024 MB   |
+| Cold index                              | 5.9 to 6.3 s                      | under 10 s      |
+| Peak resident memory                    | 397 to 443 MB                     | under 1024 MB   |
 | All cases                               | 84 passed, 0 failed               | all pass        |
 
 ## 2026-10-27, step 4e Drupal routes and YAML
