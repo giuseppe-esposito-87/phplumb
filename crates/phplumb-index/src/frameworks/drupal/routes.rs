@@ -4,12 +4,34 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::is_a;
 use super::services::{drupal_files, is_drupal_file};
 use super::yaml::{self, Yaml};
 use crate::discover::chosen_path;
 use crate::filter::PathFilter;
+use crate::frameworks::{CallTarget, FrameworkCall};
+use crate::index::{Index, Location};
 
 const ROUTING: &str = ".routing.yml";
+
+/// Methods taking a route name, with the class declaring them and the position of
+/// the name.
+const ROUTE_CALLS: [(&str, &str, usize); 6] = [
+    ("Drupal\\Core\\Url", "fromRoute", 0),
+    ("Drupal\\Core\\Link", "createFromRoute", 1),
+    ("Drupal\\Core\\Form\\FormStateInterface", "setRedirect", 0),
+    ("Drupal\\Core\\Controller\\ControllerBase", "redirect", 0),
+    (
+        "Drupal\\Core\\Routing\\UrlGeneratorInterface",
+        "generateFromRoute",
+        0,
+    ),
+    (
+        "Drupal\\Core\\Access\\AccessManagerInterface",
+        "checkNamedRoute",
+        0,
+    ),
+];
 
 /// One definition of a route: where its key is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +96,46 @@ impl Routes {
 
     pub(crate) fn get(&self, name: &str) -> &[RouteDefinition] {
         self.by_name.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// The route keys a route name at position `argument` of `call` names, each with
+    /// the route name as the expected text.
+    pub(crate) fn call_targets(
+        &self,
+        index: &Index,
+        call: &FrameworkCall<'_>,
+        argument: usize,
+        value: &str,
+    ) -> Vec<(Location, String)> {
+        let takes_route = call.targets.iter().any(|target| {
+            let CallTarget::Method { class, name } = target else {
+                return false;
+            };
+            ROUTE_CALLS.iter().any(|(owner, method, position)| {
+                *position == argument
+                    && name.eq_ignore_ascii_case(method)
+                    && is_a(index, class, &[owner])
+            })
+        });
+        if !takes_route {
+            return Vec::new();
+        }
+        self.targets(value)
+    }
+
+    /// Every definition of the route `name`, with the name as the expected text.
+    pub(crate) fn targets(&self, name: &str) -> Vec<(Location, String)> {
+        self.get(name)
+            .iter()
+            .map(|route| {
+                let location = Location {
+                    path: route.path.clone(),
+                    start: route.start,
+                    end: route.end,
+                };
+                (location, route.name.clone())
+            })
+            .collect()
     }
 }
 

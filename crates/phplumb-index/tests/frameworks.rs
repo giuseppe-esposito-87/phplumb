@@ -1175,3 +1175,36 @@ fn service_keys_after_multibyte_text_keep_their_range() {
         assert_eq!(&text[found.start as usize..found.end as usize], id);
     }
 }
+
+const PAGE_CONTROLLER: &str = "modules/custom/mymodule/src/Controller/PageController.php";
+
+#[test]
+fn route_names_in_calls_lead_to_their_route() {
+    let page = vec!["modules/custom/mymodule/mymodule.routing.yml: mymodule.page".to_string()];
+
+    assert_eq!(
+        definitions_in(PAGE_CONTROLLER, "fromRoute('mymodule.pa"),
+        page
+    );
+    assert_eq!(
+        definitions_in(
+            PAGE_CONTROLLER,
+            "createFromRoute('mymodule.page', 'mymodule.pa"
+        ),
+        page
+    );
+    assert_eq!(
+        definitions_in(PAGE_CONTROLLER, "redirect('mymodule.pa"),
+        page
+    );
+    assert_eq!(
+        definitions_in(PAGE_CONTROLLER, "setRedirect('mymodule.pa"),
+        page
+    );
+}
+
+#[test]
+fn other_strings_in_route_calls_lead_nowhere() {
+    assert!(definitions_in(PAGE_CONTROLLER, "createFromRoute('mymodule.pa").is_empty());
+    assert!(definitions_in(PAGE_CONTROLLER, "fromRoute('mymodule.now").is_empty());
+}

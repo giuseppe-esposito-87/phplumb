@@ -205,6 +205,10 @@ impl Framework for Drupal {
                 .map(|location| (location, value.to_string()))
                 .collect();
         }
+        let routes = self.routes.call_targets(index, call, argument, value);
+        if !routes.is_empty() {
+            return routes;
+        }
         let plugins = self.plugins.call_targets(index, call, argument, value);
         if !plugins.is_empty() {
             return plugins;
