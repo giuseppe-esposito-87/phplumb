@@ -1,9 +1,12 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { LanguageClient, type LanguageClientOptions, type ServerOptions, type vsdiag } from "vscode-languageclient/node";
 import { resolveServerPath } from "./serverPath";
 
 let client: LanguageClient | undefined;
+/** Switches files the server reads as PHP to the PHP language while the server runs. */
+let phpFiles: vscode.Disposable | undefined;
 
 /** What `activate` returns; tests use it to find the index cache. */
 export interface PhplumbApi {
@@ -57,11 +60,8 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
       { scheme: "file", language: "php" },
-      {
-        scheme: "file",
-        language: "yaml",
-        pattern: "**/*.{services,routing,links.menu,links.task,links.action,links.contextual}.yml",
-      },
+      // Framework modules answer in YAML files, such as Drupal's services.
+      { scheme: "file", language: "yaml" },
     ],
     initializationOptions: {
       exclude: config.get<string[]>("exclude", []),
@@ -92,7 +92,36 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
     },
   };
   client = new LanguageClient("phplumb", "PHPlumb", serverOptions, clientOptions);
+  client.onNotification("phplumb/phpExtensions", (params: { extensions: string[] }) => {
+    phpFiles?.dispose();
+    phpFiles = openAsPhp(new Set(params.extensions));
+  });
   await client.start();
+}
+
+/**
+ * Switches workspace files with one of `extensions`, such as Drupal's `.module`, to
+ * the PHP language, now and whenever one opens. Each file switches once, so a
+ * language the user picks for it afterwards stays.
+ */
+function openAsPhp(extensions: Set<string>): vscode.Disposable {
+  const switched = new Set<string>();
+  const use = (document: vscode.TextDocument) => {
+    const uri = document.uri.toString();
+    if (
+      document.uri.scheme !== "file" ||
+      document.languageId === "php" ||
+      switched.has(uri) ||
+      !extensions.has(path.posix.extname(document.uri.path).slice(1)) ||
+      vscode.workspace.getWorkspaceFolder(document.uri) === undefined
+    ) {
+      return;
+    }
+    switched.add(uri);
+    void vscode.languages.setTextDocumentLanguage(document, "php");
+  };
+  vscode.workspace.textDocuments.forEach(use);
+  return vscode.workspace.onDidOpenTextDocument(use);
 }
 
 /** The report for a document whose unsaved edits the server cannot see. */
@@ -106,6 +135,8 @@ function isDirty(document: vscode.TextDocument | vscode.Uri): boolean {
 }
 
 async function stop(): Promise<void> {
+  phpFiles?.dispose();
+  phpFiles = undefined;
   const running = client;
   client = undefined;
   await running?.stop();

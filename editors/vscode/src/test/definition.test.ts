@@ -247,6 +247,23 @@ suite("definition", () => {
     assert.ok(uriOf(targets[0]).path.endsWith("src/plugins/Textfield.php"), uriOf(targets[0]).toString());
   });
 
+  test("a Drupal .module file opens as PHP and navigates", async () => {
+    const document = await open("modules/basic_hooks/basic_hooks.module");
+    const deadline = Date.now() + 10_000;
+    let opened = document;
+    while (opened.languageId !== "php" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      opened = vscode.workspace.textDocuments.find((d) => d.uri.toString() === document.uri.toString()) ?? opened;
+    }
+    assert.strictEqual(opened.languageId, "php");
+
+    const position = opened.positionAt(opened.getText().indexOf("): Target") + 4);
+    const targets = await waitForDefinitions(opened, position);
+
+    assert.strictEqual(targets.length, 1, JSON.stringify(targets));
+    assert.ok(uriOf(targets[0]).path.endsWith("src/Target.php"), uriOf(targets[0]).toString());
+  });
+
   test("Cmd+click on a _controller value opens the controller method", async () => {
     await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
     const document = await open("basic.routing.yml");

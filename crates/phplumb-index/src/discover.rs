@@ -8,7 +8,7 @@ use ignore::WalkBuilder;
 use crate::filter::{PathFilter, SKIPPED_DIR_NAMES};
 use crate::frameworks::FrameworkSettings;
 
-pub use crate::filter::PHP_EXTENSIONS;
+pub use crate::filter::PHP_EXTENSION;
 
 pub struct DiscoverOptions {
     /// Globs relative to the root, such as `vendor/rector/rector/**`.
@@ -32,8 +32,8 @@ impl Default for DiscoverOptions {
 /// Returns the PHP files under `root` as absolute paths under the canonicalized root,
 /// sorted, each file once.
 ///
-/// Ignore files such as `.gitignore` are not honored, because Drupal projects ignore
-/// `vendor` and core in git while their code is still part of the project. Hidden
+/// Ignore files such as `.gitignore` are not honored, because projects ignore
+/// `vendor` in git while the code there is still what their own code calls. Hidden
 /// directories and `node_modules` are skipped. Inside a Composer `vendor` directory only
 /// the autoload paths of installed packages are kept. Symlinks are followed; a file
 /// reachable through several paths is reported once, under its canonical path when

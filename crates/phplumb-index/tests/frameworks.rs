@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use phplumb_index::Index;
 use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::frameworks::drupal::Drupal;
 use phplumb_index::frameworks::{Activation, FrameworkSettings};
 use tempfile::TempDir;
 
@@ -62,14 +63,20 @@ fn drupal_fixture() -> (PathBuf, Index) {
 }
 
 fn classes(index: &Index, id: &str) -> Vec<String> {
-    index.drupal().unwrap().service_classes(index, id)
+    index
+        .framework::<Drupal>()
+        .unwrap()
+        .service_classes(index, id)
 }
 
 #[test]
 fn services_are_read_with_their_key_positions() {
     let (root, index) = drupal_fixture();
 
-    let definitions = index.drupal().unwrap().services("mymodule.greeter");
+    let definitions = index
+        .framework::<Drupal>()
+        .unwrap()
+        .services("mymodule.greeter");
 
     assert_eq!(definitions.len(), 1);
     let definition = &definitions[0];
@@ -135,7 +142,14 @@ fn decorated_services_resolve_to_both_classes() {
 fn services_defined_twice_give_both_classes() {
     let (_root, index) = drupal_fixture();
 
-    assert_eq!(index.drupal().unwrap().services("shared.id").len(), 2);
+    assert_eq!(
+        index
+            .framework::<Drupal>()
+            .unwrap()
+            .services("shared.id")
+            .len(),
+        2
+    );
     assert_eq!(
         classes(&index, "shared.id"),
         vec!["Drupal\\Core\\SharedCore", "Drupal\\mymodule\\SharedCustom"]
@@ -145,7 +159,7 @@ fn services_defined_twice_give_both_classes() {
 #[test]
 fn services_in_tests_and_vendor_are_ignored() {
     let (_root, index) = drupal_fixture();
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
 
     for id in ["test.only", "vendor.only", "_defaults", "some.parameter"] {
         assert!(drupal.services(id).is_empty(), "{id}");
@@ -244,7 +258,10 @@ fn services_in_hidden_directories_stay_out_after_updates() {
             "services:\n  m.svc:\n    class: App\\Bar\n",
         ),
     ]);
-    assert_eq!(index.drupal().unwrap().services("m.svc").len(), 1);
+    assert_eq!(
+        index.framework::<Drupal>().unwrap().services("m.svc").len(),
+        1
+    );
 
     index.update(
         &[
@@ -266,7 +283,7 @@ fn service_keys_after_non_ascii_text_point_at_the_id() {
             "# Servizi per l'università — caffè\nservices:\n  a.one:\n    class: App\\Foo\n    arguments: ['caffè']\n  h.à:\n    class: App\\Foo\n  b.two:\n    class: App\\Bar\n",
         ),
     ]);
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
 
     for id in ["a.one", "h.à", "b.two"] {
         let definition = &drupal.services(id)[0];
@@ -297,7 +314,14 @@ fn symlinked_modules_are_read_once_and_follow_edits() {
         ..DiscoverOptions::default()
     };
     let mut index = Index::build(&root, &opts).unwrap().0;
-    assert_eq!(index.drupal().unwrap().services("foo.svc").len(), 1);
+    assert_eq!(
+        index
+            .framework::<Drupal>()
+            .unwrap()
+            .services("foo.svc")
+            .len(),
+        1
+    );
 
     write(
         &root,
@@ -336,7 +360,7 @@ fn services_files_appear_and_disappear() {
 
 fn entity(index: &Index, id: &str) -> Vec<(String, String)> {
     index
-        .drupal()
+        .framework::<Drupal>()
         .unwrap()
         .entity_types(id)
         .iter()
@@ -399,7 +423,7 @@ fn entity_types_in_test_modules_are_ignored() {
 
     assert!(
         index
-            .drupal()
+            .framework::<Drupal>()
             .unwrap()
             .entity_types("test_thing")
             .is_empty()
@@ -449,11 +473,24 @@ fn entity_types_follow_updates() {
         "<?php\nnamespace M;\nuse Drupal\\Core\\Entity\\Attribute\\ContentEntityType;\n#[ContentEntityType(id: 'new_thing')]\nclass Thing extends \\Drupal\\Core\\Entity\\ContentEntityBase {}\n",
     );
     index.update(&[root.join(thing)], &[]);
-    assert_eq!(index.drupal().unwrap().entity_types("new_thing").len(), 1);
+    assert_eq!(
+        index
+            .framework::<Drupal>()
+            .unwrap()
+            .entity_types("new_thing")
+            .len(),
+        1
+    );
 
     fs::remove_file(root.join(thing)).unwrap();
     index.update(&[], &[root.join(thing)]);
-    assert!(index.drupal().unwrap().entity_types("new_thing").is_empty());
+    assert!(
+        index
+            .framework::<Drupal>()
+            .unwrap()
+            .entity_types("new_thing")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -465,7 +502,7 @@ fn entity_type_ids_point_at_the_id_key() {
             "<?php\nnamespace W;\n/**\n * @ContentEntityType(\n *   base_table = \"widget\",\n *   id = \"widget\",\n * )\n */\nclass Widget extends \\Drupal\\Core\\Entity\\ContentEntityBase {}\n",
         ),
     ]);
-    let widget = &index.drupal().unwrap().entity_types("widget")[0];
+    let widget = &index.framework::<Drupal>().unwrap().entity_types("widget")[0];
 
     let location = widget.id_location().unwrap();
 
@@ -479,7 +516,7 @@ fn entity_type_ids_point_at_the_id_key() {
 
 fn implementations(index: &Index, root: &Path, hook: &str) -> Vec<String> {
     index
-        .drupal()
+        .framework::<Drupal>()
         .unwrap()
         .hook_implementations(hook)
         .iter()
@@ -524,7 +561,7 @@ fn theme_hooks_belong_to_the_theme() {
     let (_root, index) = drupal_fixture();
 
     let found = index
-        .drupal()
+        .framework::<Drupal>()
         .unwrap()
         .hook_implementations("preprocess_node");
 
@@ -544,7 +581,7 @@ fn hook_docs_are_read_from_api_files() {
     let (root, index) = drupal_fixture();
 
     let docs: Vec<String> = index
-        .drupal()
+        .framework::<Drupal>()
         .unwrap()
         .hook_docs("cron")
         .iter()
@@ -809,7 +846,7 @@ fn plugin_types_come_from_manager_constructors() {
     let (_root, index) = drupal_fixture();
 
     let types: Vec<String> = index
-        .drupal()
+        .framework::<Drupal>()
         .unwrap()
         .plugin_types()
         .iter()
@@ -843,7 +880,7 @@ fn plugins_are_read_from_attributes_and_annotations() {
     let (_root, index) = drupal_fixture();
 
     assert_eq!(
-        plugin_list(index.drupal().unwrap().plugins_of(BLOCKS)),
+        plugin_list(index.framework::<Drupal>().unwrap().plugins_of(BLOCKS)),
         vec![
             "gadget_block Drupal\\gadget\\Plugin\\Block\\GadgetBlock",
             "unimported_block Drupal\\gadget\\Plugin\\Block\\UnimportedBlock",
@@ -857,7 +894,7 @@ fn plugins_are_read_from_attributes_and_annotations() {
 #[test]
 fn plugins_follow_attribute_subclasses_annotations_and_derivatives() {
     let (_root, index) = drupal_fixture();
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
 
     assert_eq!(
         plugin_list(drupal.plugins(ELEMENTS, "textfield")),
@@ -892,7 +929,14 @@ fn plugins_follow_updates() {
         ),
     ]);
     let manager = "Drupal\\Core\\Thing\\ThingManager";
-    assert_eq!(index.drupal().unwrap().plugins(manager, "one").len(), 1);
+    assert_eq!(
+        index
+            .framework::<Drupal>()
+            .unwrap()
+            .plugins(manager, "one")
+            .len(),
+        1
+    );
 
     write(
         &root,
@@ -904,7 +948,7 @@ fn plugins_follow_updates() {
         &[],
     );
 
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
     assert!(drupal.plugins(manager, "one").is_empty());
     assert_eq!(drupal.plugins(manager, "uno").len(), 1);
 }
@@ -1050,7 +1094,7 @@ fn implementations_of_a_generic_manager_interface_have_no_plugins() {
 #[test]
 fn old_signature_managers_read_annotations_only() {
     let (_root, index) = drupal_fixture();
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
     let foo = "Drupal\\gadget\\FooManager";
 
     let found = drupal
@@ -1111,7 +1155,7 @@ fn render_element_types_set_by_offset_lead_to_their_element_class() {
 
 fn route_keys(index: &Index, root: &Path, name: &str) -> Vec<String> {
     index
-        .drupal()
+        .framework::<Drupal>()
         .unwrap()
         .routes(name)
         .iter()
@@ -1172,7 +1216,7 @@ fn service_keys_after_multibyte_text_keep_their_range() {
         "# café crème\nservices:\n  m.svc:\n    class: App\\Foo\n  'm.quoted':\n    class: App\\Foo\n",
     )]);
     let text = fs::read_to_string(root.join("modules/custom/m/m.services.yml")).unwrap();
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
 
     for id in ["m.svc", "m.quoted"] {
         let found = &drupal.services(id)[0];
@@ -1362,7 +1406,7 @@ fn route_callbacks_invokable_controllers_and_derivers_lead_to_their_code() {
 #[test]
 fn drupal_ids_defined_anywhere_include_test_modules_and_php() {
     let (_root, index) = drupal_fixture();
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
     let constraints = "Drupal\\Core\\Validation\\ConstraintManager";
 
     for id in [
@@ -1483,7 +1527,12 @@ fn services_registered_in_php_follow_updates() {
             &provider("m.first"),
         ),
     ]);
-    assert!(index.drupal().unwrap().defines_service(&index, "m.first"));
+    assert!(
+        index
+            .framework::<Drupal>()
+            .unwrap()
+            .defines_service(&index, "m.first")
+    );
 
     write(
         &root,
@@ -1495,7 +1544,7 @@ fn services_registered_in_php_follow_updates() {
         &[],
     );
 
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
     assert!(!drupal.defines_service(&index, "m.first"));
     assert!(drupal.defines_service(&index, "m.second"));
 }
@@ -1598,7 +1647,7 @@ fn route_names_the_registry_cannot_read_silence_routes() {
 #[test]
 fn derivatives_of_bases_with_colons_are_defined() {
     let (_root, index) = drupal_fixture();
-    let drupal = index.drupal().unwrap();
+    let drupal = index.framework::<Drupal>().unwrap();
 
     assert!(drupal.defines_plugin(BLOCKS, "entity:thing:node"));
     assert_eq!(
@@ -1629,7 +1678,12 @@ fn class_route_attributes_prefix_method_routes_and_give_aliases() {
         vec!["modules/custom/mymodule/src/Controller/PrefixController.php: list"]
     );
     let (_root, index) = drupal_fixture();
-    assert!(!index.drupal().unwrap().defines_route("mymodule.prefix."));
+    assert!(
+        !index
+            .framework::<Drupal>()
+            .unwrap()
+            .defines_route("mymodule.prefix.")
+    );
 }
 
 #[test]
@@ -1678,7 +1732,12 @@ fn services_registered_in_php_follow_updates_through_symlinks() {
         ..DiscoverOptions::default()
     };
     let mut index = Index::build(&root, &opts).unwrap().0;
-    assert!(index.drupal().unwrap().defines_service(&index, "m.first"));
+    assert!(
+        index
+            .framework::<Drupal>()
+            .unwrap()
+            .defines_service(&index, "m.first")
+    );
 
     for (spelling, id) in [("modules/custom/m", "m.second"), ("packages/m", "m.third")] {
         let file = format!("{spelling}/src/MServiceProvider.php");
@@ -1686,7 +1745,10 @@ fn services_registered_in_php_follow_updates_through_symlinks() {
         index.update(&[root.join(&file)], &[]);
 
         assert!(
-            index.drupal().unwrap().defines_service(&index, id),
+            index
+                .framework::<Drupal>()
+                .unwrap()
+                .defines_service(&index, id),
             "{spelling}"
         );
     }

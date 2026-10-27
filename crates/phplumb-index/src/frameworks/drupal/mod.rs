@@ -161,6 +161,12 @@ impl Framework for Drupal {
         &["contrib", "core"]
     }
 
+    /// Extension files, include files, install files and the files of themes,
+    /// profiles and theme engines.
+    fn php_extensions(&self) -> &'static [&'static str] {
+        &["module", "inc", "install", "theme", "profile", "engine"]
+    }
+
     fn rebuild(&mut self, index: &Index) {
         self.services = Services::read(index.filter());
         self.entities = EntityTypes::read(index);

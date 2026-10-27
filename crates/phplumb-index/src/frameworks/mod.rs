@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::diagnostics::Diagnostic;
+use crate::filter::PHP_EXTENSION;
 use crate::index::{Index, Location};
 use crate::metadata::Metadata;
 use crate::phpdoc::TypeExpr;
@@ -102,6 +103,8 @@ pub trait Framework: Send + Sync {
     /// Names of the directories holding code the framework installs rather than the
     /// project's own, nearest to project code first.
     fn dependency_directories(&self) -> &'static [&'static str];
+    /// Extensions besides `php` of the PHP files the framework uses.
+    fn php_extensions(&self) -> &'static [&'static str];
     /// Reads what the framework needs from the index and its own files, after the
     /// index is built. While `rebuild` and `update` run, `index.frameworks()` is
     /// empty, so a framework cannot query the others.
@@ -165,6 +168,23 @@ pub trait Framework: Send + Sync {
 /// Every framework the engine knows, each with its setting.
 pub fn registered(settings: &FrameworkSettings) -> Vec<(Activation, Box<dyn Framework>)> {
     vec![(settings.drupal, Box::new(drupal::Drupal::default()))]
+}
+
+/// Extensions of the files read as PHP in the project at `root`: `php`, then those
+/// the active frameworks add.
+pub fn php_extensions(root: &Path, settings: &FrameworkSettings) -> Vec<&'static str> {
+    extensions(&active(root, settings))
+}
+
+/// `php`, then the extensions `frameworks` add.
+pub(crate) fn extensions(frameworks: &[Box<dyn Framework>]) -> Vec<&'static str> {
+    std::iter::once(PHP_EXTENSION)
+        .chain(
+            frameworks
+                .iter()
+                .flat_map(|framework| framework.php_extensions().iter().copied()),
+        )
+        .collect()
 }
 
 /// The frameworks to run for the project at `root`.

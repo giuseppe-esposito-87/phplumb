@@ -34,8 +34,8 @@ use lsp_types::{
     RelatedFullDocumentDiagnosticReport,
 };
 use phplumb_index::diagnostics::Severity;
-use phplumb_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
-use phplumb_index::frameworks::FrameworkSettings;
+use phplumb_index::discover::{DiscoverOptions, PHP_EXTENSION};
+use phplumb_index::frameworks::{self, FrameworkSettings};
 use phplumb_index::line_index::LineIndex;
 use phplumb_index::summary::{MemberKind, SymbolKind as IndexSymbolKind};
 use phplumb_index::symbols::{self, Kind, OutlineSymbol};
@@ -47,6 +47,8 @@ use crate::convert::{path_to_uri, uri_to_path};
 
 const PROGRESS_TOKEN: &str = "phplumb/indexing";
 const WATCH_REGISTRATION: &str = "phplumb/watch";
+/// Sent once at startup: `{ "extensions": ["php", "module"] }`.
+const PHP_EXTENSIONS_NOTIFICATION: &str = "phplumb/phpExtensions";
 const CACHE_FILE: &str = "index-v1.bin";
 /// How long to wait for more file events before applying a batch. Branch switches
 /// and agents report changes in many small notifications.
@@ -153,9 +155,11 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         refreshes_diagnostics,
         refreshes_sent: 0,
     };
+    let php_extensions = server.php_extensions();
     if watches_files {
-        server.register_watchers()?;
+        server.register_watchers(&php_extensions)?;
     }
+    server.announce_php_extensions(&php_extensions)?;
     // Requests that arrive while indexing wait in the connection's queue.
     server.rebuild(reports_progress)?;
     server.save_cache()?;
@@ -422,14 +426,40 @@ impl Server<'_> {
         Ok(())
     }
 
-    fn register_watchers(&self) -> anyhow::Result<()> {
+    /// Extensions of the files read as PHP: `php`, then those the active frameworks
+    /// add.
+    fn php_extensions(&self) -> Vec<&'static str> {
+        match &self.root {
+            Some(root) => frameworks::php_extensions(root, &self.opts.frameworks),
+            None => vec![PHP_EXTENSION],
+        }
+    }
+
+    /// Tells the client which extensions PHP files have, so it can open them as PHP.
+    fn announce_php_extensions(&self, extensions: &[&str]) -> anyhow::Result<()> {
+        self.connection
+            .sender
+            .send(Message::Notification(Notification::new(
+                PHP_EXTENSIONS_NOTIFICATION.to_string(),
+                json!({"extensions": extensions}),
+            )))?;
+        Ok(())
+    }
+
+    /// Watches files with `php_extensions`, Composer's installed packages, YAML files
+    /// and directories.
+    fn register_watchers(&self, php_extensions: &[&str]) -> anyhow::Result<()> {
         let watcher = |pattern: String, kind: Option<WatchKind>| FileSystemWatcher {
             glob_pattern: GlobPattern::String(pattern),
             kind,
         };
+        let php = match php_extensions {
+            [extension] => format!("**/*.{extension}"),
+            extensions => format!("**/*.{{{}}}", extensions.join(",")),
+        };
         let options = DidChangeWatchedFilesRegistrationOptions {
             watchers: vec![
-                watcher(format!("**/*.{{{}}}", PHP_EXTENSIONS.join(",")), None),
+                watcher(php, None),
                 watcher("**/vendor/composer/installed.json".to_string(), None),
                 // Framework modules read YAML files, such as Drupal's services.
                 watcher("**/*.yml".to_string(), None),

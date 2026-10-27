@@ -1,0 +1,7 @@
+<?php
+
+use App\Target;
+
+function basic_hooks_target(): Target {
+  return new Target();
+}

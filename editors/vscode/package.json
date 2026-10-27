@@ -19,19 +19,6 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
-    "languages": [
-      {
-        "id": "php",
-        "extensions": [
-          ".module",
-          ".inc",
-          ".install",
-          ".theme",
-          ".profile",
-          ".engine"
-        ]
-      }
-    ],
     "configuration": {
       "title": "PHPlumb",
       "properties": {

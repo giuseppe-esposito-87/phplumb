@@ -107,9 +107,58 @@ fn registers_file_watchers() {
             .len(),
         4
     );
+    assert_eq!(
+        registration["registerOptions"]["watchers"][0]["globPattern"],
+        "**/*.php"
+    );
     // The catch-all watcher reports created and deleted directories: Create | Delete.
     assert_eq!(registration["registerOptions"]["watchers"][3]["kind"], 5);
     client.reply_null(&request);
+    client.shutdown();
+}
+
+#[test]
+fn watches_drupal_php_extensions_when_drupal_is_active() {
+    let ws = Workspace::new(&[("src/A.php", "<?php\nclass A {}\n")]);
+
+    let mut client = ws.start(json!({
+        "capabilities": {"workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true}}},
+        "initializationOptions": {"frameworks": {"drupal": "on"}},
+    }));
+    let request = client.wait_for_request("client/registerCapability");
+
+    assert_eq!(
+        request["params"]["registrations"][0]["registerOptions"]["watchers"][0]["globPattern"],
+        "**/*.{php,module,inc,install,theme,profile,engine}"
+    );
+    client.reply_null(&request);
+    client.shutdown();
+}
+
+#[test]
+fn announces_php_extensions() {
+    let ws = Workspace::new(&[("src/A.php", "<?php\nclass A {}\n")]);
+
+    let mut client = ws.start(json!({}));
+    let notification = client.wait_for_notification("phplumb/phpExtensions");
+
+    assert_eq!(notification["params"], json!({"extensions": ["php"]}));
+    client.shutdown();
+}
+
+#[test]
+fn announces_drupal_php_extensions_when_drupal_is_active() {
+    let ws = Workspace::new(&[("src/A.php", "<?php\nclass A {}\n")]);
+
+    let mut client = ws.start(json!({
+        "initializationOptions": {"frameworks": {"drupal": "on"}},
+    }));
+    let notification = client.wait_for_notification("phplumb/phpExtensions");
+
+    assert_eq!(
+        notification["params"],
+        json!({"extensions": ["php", "module", "inc", "install", "theme", "profile", "engine"]})
+    );
     client.shutdown();
 }
 

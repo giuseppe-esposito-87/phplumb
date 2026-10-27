@@ -7,11 +7,10 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 
 use crate::composer::VendorFilter;
 use crate::discover::DiscoverOptions;
+use crate::frameworks::{self, Framework};
 
-/// File extensions treated as PHP source, including the Drupal ones.
-pub const PHP_EXTENSIONS: &[&str] = &[
-    "php", "module", "inc", "install", "theme", "profile", "engine",
-];
+/// The extension of PHP source files in every project.
+pub const PHP_EXTENSION: &str = "php";
 
 /// Whether `path` is a YAML file, which the engine does not read as PHP: only the
 /// frameworks answer definitions in it.
@@ -34,10 +33,21 @@ pub struct PathFilter {
     exclude_patterns: Vec<String>,
     max_file_bytes: u64,
     vendor_filters: HashMap<PathBuf, Option<VendorFilter>>,
+    /// Extensions of the files read as PHP.
+    extensions: Vec<&'static str>,
 }
 
 impl PathFilter {
     pub fn new(root: &Path, opts: &DiscoverOptions) -> anyhow::Result<PathFilter> {
+        Self::for_frameworks(root, opts, &frameworks::active(root, &opts.frameworks))
+    }
+
+    /// The filter for a project whose active frameworks are `active`.
+    pub(crate) fn for_frameworks(
+        root: &Path,
+        opts: &DiscoverOptions,
+        active: &[Box<dyn Framework>],
+    ) -> anyhow::Result<PathFilter> {
         Ok(PathFilter {
             root: root.canonicalize()?,
             given_root: root.to_path_buf(),
@@ -45,6 +55,7 @@ impl PathFilter {
             exclude_patterns: opts.exclude.clone(),
             max_file_bytes: opts.max_file_bytes,
             vendor_filters: HashMap::new(),
+            extensions: frameworks::extensions(active),
         })
     }
 
@@ -56,6 +67,12 @@ impl PathFilter {
     /// Whether the user excluded any paths from the index.
     pub fn has_exclusions(&self) -> bool {
         !self.exclude_patterns.is_empty()
+    }
+
+    fn has_php_extension(&self, path: &Path) -> bool {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| self.extensions.contains(&ext))
     }
 
     /// The canonicalized root.
@@ -93,7 +110,7 @@ impl PathFilter {
         let Ok(relative) = path.strip_prefix(&self.root) else {
             return false;
         };
-        if !has_php_extension(path)
+        if !self.has_php_extension(path)
             || self.exclude.is_match(relative)
             || has_skipped_component(relative)
         {
@@ -132,12 +149,6 @@ pub(crate) fn has_skipped_component(relative: &Path) -> bool {
         }
         _ => false,
     })
-}
-
-fn has_php_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| PHP_EXTENSIONS.contains(&ext))
 }
 
 /// Invalid patterns are reported on stderr and skipped, so a typo in the settings

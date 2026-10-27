@@ -34,7 +34,7 @@ Agents edit files outside the editor, often many at once. PHPlumb follows change
 
 PHPlumb starts with Drupal, because its code calls almost everything through interfaces and services. What works today:
 
-- `.module`, `.inc`, `.install`, `.theme`, `.profile` and `.engine` files are indexed as PHP.
+- `.module`, `.inc`, `.install`, `.theme`, `.profile` and `.engine` files are indexed as PHP, and VS Code opens them as PHP.
 - Inside `vendor`, only the code that Composer's autoloader reaches is indexed, so package tests and leftover copies never show up as targets.
 - Broken reference diagnostics skip core and contrib, like `vendor`, and are tested against them for false alarms.
 - **Annotations.** `@Block(...)`, `@Translation(...)` and other plugin annotations lead to their annotation class, imported or not, as plugin discovery resolves them.

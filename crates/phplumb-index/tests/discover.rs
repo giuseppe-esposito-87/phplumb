@@ -3,6 +3,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use phplumb_index::discover::{DiscoverOptions, discover};
+use phplumb_index::frameworks::{Activation, FrameworkSettings};
 use tempfile::TempDir;
 
 fn write(root: &Path, rel: &str, content: &str) {
@@ -22,25 +23,46 @@ fn relative(root: &Path, paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+const DRUPAL_EXTENSION_FILES: [&str; 9] = [
+    "a.php",
+    "b.module",
+    "c.inc",
+    "d.install",
+    "e.theme",
+    "f.profile",
+    "g.engine",
+    "h.txt",
+    "i.js",
+];
+
 #[test]
-fn finds_all_php_extensions() {
+fn finds_only_php_files_without_frameworks() {
     let dir = TempDir::new().unwrap();
     let root = canonical_root(&dir);
-    for name in [
-        "a.php",
-        "b.module",
-        "c.inc",
-        "d.install",
-        "e.theme",
-        "f.profile",
-        "g.engine",
-        "h.txt",
-        "i.js",
-    ] {
+    for name in DRUPAL_EXTENSION_FILES {
         write(&root, name, "<?php\n");
     }
 
     let found = discover(&root, &DiscoverOptions::default()).unwrap();
+
+    assert_eq!(relative(&root, &found), vec!["a.php"]);
+}
+
+#[test]
+fn finds_drupal_php_extensions_when_drupal_is_active() {
+    let dir = TempDir::new().unwrap();
+    let root = canonical_root(&dir);
+    for name in DRUPAL_EXTENSION_FILES {
+        write(&root, name, "<?php\n");
+    }
+    let opts = DiscoverOptions {
+        frameworks: FrameworkSettings {
+            drupal: Activation::On,
+        },
+        ..DiscoverOptions::default()
+    };
+
+    let found = discover(&root, &opts).unwrap();
 
     assert_eq!(
         relative(&root, &found),

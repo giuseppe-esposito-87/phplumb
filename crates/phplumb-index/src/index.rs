@@ -12,7 +12,6 @@ use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::{PathFilter, is_yaml};
-use crate::frameworks::drupal::Drupal;
 use crate::frameworks::{self, FoundCall, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Assigning, PropertyTypes, Receiver};
@@ -121,7 +120,8 @@ impl Index {
         mut cached: HashMap<PathBuf, CachedFile>,
     ) -> anyhow::Result<(Index, IndexStats)> {
         let started = Instant::now();
-        let mut filter = PathFilter::new(root, opts)?;
+        let active = frameworks::active(root, &opts.frameworks);
+        let mut filter = PathFilter::for_frameworks(root, opts, &active)?;
         let paths = discover_with(&mut filter);
 
         let stamps: Vec<Option<(u64, u64)>> = paths.par_iter().map(|p| stamp(p)).collect();
@@ -149,7 +149,7 @@ impl Index {
 
         let mut index = Index {
             filter,
-            frameworks: frameworks::active(root, &opts.frameworks),
+            frameworks: active,
             files: Vec::new(),
             ids: HashMap::new(),
             classes: HashMap::new(),
@@ -355,11 +355,11 @@ impl Index {
             .flat_map(|file| file.declarations.iter().map(|d| (file.path.as_path(), d)))
     }
 
-    /// The Drupal module, when it is active.
-    pub fn drupal(&self) -> Option<&Drupal> {
+    /// The framework module of type `F`, when it is active.
+    pub fn framework<F: Framework + 'static>(&self) -> Option<&F> {
         self.frameworks
             .iter()
-            .find_map(|f| f.as_any().downcast_ref::<Drupal>())
+            .find_map(|f| f.as_any().downcast_ref::<F>())
     }
 
     /// The framework modules active for this project.
