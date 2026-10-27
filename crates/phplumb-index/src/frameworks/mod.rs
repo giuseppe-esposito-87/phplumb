@@ -39,6 +39,22 @@ pub struct FrameworkCall<'a> {
     pub receiver: Option<&'a TypeExpr>,
 }
 
+/// A method call found in the index, with its literal arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoundCall {
+    /// The method name at the call.
+    pub location: Location,
+    /// `Class::method` for every declaration the call resolves to.
+    pub targets: Vec<CallTarget>,
+    /// Positional arguments that are string literals or `X::class`, by position.
+    pub strings: Vec<Option<String>>,
+    /// The string literal elements of positional array arguments, by position.
+    pub lists: Vec<Vec<String>>,
+    /// The method or function holding the call: `Class::method` with the declaring
+    /// class's fully qualified name, or the function's fully qualified name.
+    pub caller: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CallTarget {
     Method { class: String, name: String },

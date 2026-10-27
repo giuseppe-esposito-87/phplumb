@@ -13,7 +13,7 @@ use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
 use crate::frameworks::drupal::Drupal;
-use crate::frameworks::{self, Framework, FrameworkCall};
+use crate::frameworks::{self, FoundCall, Framework, FrameworkCall};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Assigning, PropertyTypes, Receiver};
 use crate::members;
@@ -273,6 +273,32 @@ impl Index {
     /// The rules deciding which files belong to the index.
     pub(crate) fn filter(&self) -> &PathFilter {
         &self.filter
+    }
+
+    /// Instance, null-safe and static calls to methods named one of `names`, in
+    /// every candidate file, sorted by path and offset.
+    pub fn calls_named(&self, names: &[&str]) -> Vec<FoundCall> {
+        let mut files: Vec<PathBuf> = names
+            .iter()
+            .flat_map(|name| self.candidate_files(&RefKey::Member(name.to_string())))
+            .map(Path::to_path_buf)
+            .collect();
+        files.sort();
+        files.dedup();
+        let mut found: Vec<FoundCall> = files
+            .par_iter()
+            .flat_map_iter(|path| {
+                let Ok(source) = std::fs::read(path) else {
+                    return Vec::new();
+                };
+                let summary = summarize(&source);
+                infer::calls_named(self, path, &summary, &source, names)
+            })
+            .collect();
+        found.sort_by(|a, b| {
+            (&a.location.path, a.location.start).cmp(&(&b.location.path, b.location.start))
+        });
+        found
     }
 
     /// Every indexed declaration with the path of its file.

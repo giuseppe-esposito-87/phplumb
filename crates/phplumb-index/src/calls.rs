@@ -181,7 +181,7 @@ pub(crate) fn after_new(source: &[u8], start: u32) -> bool {
 }
 
 /// The innermost function or method of the file containing `offset`, or the file.
-fn caller_at(path: &Path, summary: &FileSummary, offset: u32, length: u32) -> CallItem {
+pub(crate) fn caller_at(path: &Path, summary: &FileSummary, offset: u32, length: u32) -> CallItem {
     let contains = |range: (u32, u32)| range.0 <= offset && offset <= range.1;
     let mut best: Option<CallItem> = None;
     let mut consider = |candidate: CallItem| {

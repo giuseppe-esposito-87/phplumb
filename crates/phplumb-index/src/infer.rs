@@ -39,8 +39,9 @@ use mago_syntax::cst::{
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
 
-use crate::frameworks::{CallTarget, FrameworkCall};
-use crate::index::Index;
+use crate::calls::{self, CallKind};
+use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
+use crate::index::{Index, Location};
 use crate::phpdoc::{TypeExpr, parse_docblock, parse_type};
 use crate::summary::{
     FileSummary, MemberKind, NameKind, NameRef, SymbolKind, pick_type, summarize,
@@ -137,6 +138,98 @@ pub(crate) fn string_argument_at(
         .iter()
         .rev()
         .find_map(|call| ctx.string_argument(call, offset))
+}
+
+/// The method calls in a file named one of `names`, case-insensitively, in source
+/// order, with what they target and their literal arguments.
+pub(crate) fn calls_named(
+    index: &Index,
+    path: &Path,
+    summary: &FileSummary,
+    source: &[u8],
+    names: &[&str],
+) -> Vec<FoundCall> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut calls: Vec<CallRef<'_, '_>> = Vec::new();
+    CallsWithArguments.walk_program(program, &mut calls);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let mut found: Vec<FoundCall> = calls
+        .iter()
+        .filter_map(|call| {
+            let (selector, arguments, start) = match call {
+                CallRef::Method(c) => (&c.method, &c.argument_list, c.span().start.offset),
+                CallRef::NullSafe(c) => (&c.method, &c.argument_list, c.span().start.offset),
+                CallRef::Static(c) => (&c.method, &c.argument_list, c.span().start.offset),
+            };
+            let ClassLikeMemberSelector::Identifier(name) = selector else {
+                return None;
+            };
+            let method = String::from_utf8_lossy(name.value).into_owned();
+            if !names.iter().any(|n| n.eq_ignore_ascii_case(&method)) {
+                return None;
+            }
+            let receiver = match call {
+                CallRef::Method(c) => ctx.expr(c.object, start, 0),
+                CallRef::NullSafe(c) => ctx.expr(c.object, start, 0),
+                CallRef::Static(c) => ctx
+                    .class_of(c.class, start)
+                    .map_or(TypeExpr::Other, TypeExpr::Named),
+            };
+            let caller =
+                calls::caller_at(path, summary, name.span.start.offset, source.len() as u32);
+            Some(FoundCall {
+                location: Location {
+                    path: path.to_path_buf(),
+                    start: name.span.start.offset,
+                    end: name.span.end.offset,
+                },
+                targets: ctx.call_targets(&receiver, &method),
+                strings: ctx.string_arguments(arguments, start),
+                lists: list_arguments(arguments),
+                caller: match caller.kind {
+                    CallKind::Method => Some(format!("{}::{}", caller.detail, caller.name)),
+                    CallKind::Function if caller.detail.is_empty() => Some(caller.name),
+                    CallKind::Function => Some(format!("{}\\{}", caller.detail, caller.name)),
+                    CallKind::File => None,
+                },
+            })
+        })
+        .collect();
+    found.sort_by_key(|call| call.location.start);
+    found
+}
+
+/// The string literal elements of each positional array argument, by position.
+fn list_arguments(arguments: &ArgumentList<'_>) -> Vec<Vec<String>> {
+    arguments
+        .arguments
+        .iter()
+        .map(|argument| {
+            let Argument::Positional(argument) = argument else {
+                return Vec::new();
+            };
+            let elements = match argument.value {
+                Expression::Array(array) => &array.elements,
+                Expression::LegacyArray(array) => &array.elements,
+                _ => return Vec::new(),
+            };
+            elements
+                .iter()
+                .filter_map(|element| match element {
+                    ArrayElement::Value(element) => match element.value {
+                        Expression::Literal(Literal::String(literal)) => literal
+                            .value
+                            .map(|v| String::from_utf8_lossy(v).into_owned()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// A call that can carry framework string arguments.

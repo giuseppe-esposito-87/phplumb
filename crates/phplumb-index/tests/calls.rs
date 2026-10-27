@@ -153,3 +153,81 @@ fn outgoing_calls_include_new_static() {
 
     assert_eq!(callees.get("__construct"), Some(&(CallKind::Method, 1)));
 }
+
+fn found_calls(
+    content: &str,
+    names: &[&str],
+) -> (TempDir, Vec<phplumb_index::frameworks::FoundCall>) {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("Calls.php"), format!("<?php\n{content}")).unwrap();
+    let index = Index::build(&root, &DiscoverOptions::default()).unwrap().0;
+    let found = index.calls_named(names);
+    (dir, found)
+}
+
+#[test]
+fn calls_named_lists_resolved_calls_with_literal_arguments() {
+    use phplumb_index::frameworks::CallTarget;
+    let (_dir, found) = found_calls(
+        "interface H { function invokeAll($hook); function alter($type, &$data); function other(); }
+class S {
+    public function __construct(private H $h) {}
+    public function run($x) {
+        $this->h->invokeAll('cron');
+        $this->h->alter(['a', 'b' . $x], $data);
+        $this->h->other();
+    }
+}
+",
+        &["invokeAll", "alter"],
+    );
+
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(
+        found[0].targets,
+        vec![CallTarget::Method {
+            class: "H".to_string(),
+            name: "invokeAll".to_string()
+        }]
+    );
+    assert_eq!(found[0].strings, vec![Some("cron".to_string())]);
+    assert_eq!(found[0].lists, vec![Vec::<String>::new()]);
+    assert_eq!(found[0].caller.as_deref(), Some("S::run"));
+    assert_eq!(
+        found[1].targets,
+        vec![CallTarget::Method {
+            class: "H".to_string(),
+            name: "alter".to_string()
+        }]
+    );
+    assert_eq!(found[1].strings, vec![None, None]);
+    assert_eq!(found[1].lists, vec![vec!["a".to_string()], Vec::new()]);
+    let text = fs::read_to_string(&found[1].location.path).unwrap();
+    assert_eq!(
+        &text[found[1].location.start as usize..found[1].location.end as usize],
+        "alter"
+    );
+}
+
+#[test]
+fn calls_on_receivers_of_unknown_type_have_no_targets() {
+    let (_dir, found) = found_calls(
+        "function f($x) { $x->invokeAll('cron'); }\n",
+        &["invokeAll"],
+    );
+
+    assert_eq!(found.len(), 1);
+    assert!(found[0].targets.is_empty());
+}
+
+#[test]
+fn calls_in_functions_name_the_function() {
+    let (_dir, found) = found_calls(
+        "namespace App;\ninterface H { function invokeAll($hook); }\nfunction f(H $h) { $h->invokeAll('x'); }\n",
+        &["invokeAll"],
+    );
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].caller.as_deref(), Some("App\\f"));
+}
