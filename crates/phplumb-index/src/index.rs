@@ -1085,6 +1085,13 @@ impl Index {
                             push(sub.path, d.name_start, d.name_end, &short_name(&d.fqn));
                         }
                     }
+                    for framework in &self.frameworks {
+                        for (location, name) in
+                            framework.class_implementations(self, &declaration.fqn)
+                        {
+                            push(&location.path, location.start, location.end, &name);
+                        }
+                    }
                     continue;
                 }
                 let Some(method) = shape

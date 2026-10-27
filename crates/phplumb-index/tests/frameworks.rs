@@ -972,3 +972,68 @@ fn display_option_types_lead_to_widgets_and_formatters() {
 fn type_keys_outside_display_options_lead_nowhere() {
     assert!(definitions_in(PLUGIN_ARRAYS, "$plain = ['type' => 'str").is_empty());
 }
+
+/// Implementations at the cursor right after `needle` in `file`, as `relative path:
+/// text at the location`.
+fn implementations_in(file: &str, needle: &str) -> Vec<String> {
+    let (root, mut index) = drupal_fixture();
+    let path = root.join(file);
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+    let offset = text.find(needle).unwrap() + needle.len();
+    let mut found: Vec<String> = index
+        .implementations(&path, &source, offset as u32)
+        .into_iter()
+        .map(|l| {
+            let content = fs::read_to_string(&l.path).unwrap();
+            let name = l.path.strip_prefix(&root).unwrap().display().to_string();
+            format!("{name}: {}", &content[l.start as usize..l.end as usize])
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+const BLOCK_PLUGINS: [&str; 3] = [
+    "modules/contrib/gadget/src/Plugin/Block/GadgetBlock.php: GadgetBlock",
+    "modules/custom/mymodule/src/Plugin/Block/MenuBlock.php: MenuBlock",
+    "modules/custom/mymodule/src/Plugin/Block/MyBlock.php: MyBlock",
+];
+
+#[test]
+fn implementations_of_a_plugin_manager_are_its_plugins() {
+    let block_manager = "core/lib/Drupal/Core/Block/BlockManager.php";
+
+    assert_eq!(
+        implementations_in(block_manager, "class BlockMan"),
+        BLOCK_PLUGINS
+    );
+    assert_eq!(
+        implementations_in(PLUGIN_CALLS, "run(BlockMan"),
+        BLOCK_PLUGINS
+    );
+    let mut with_manager = vec![format!("{block_manager}: BlockManager")];
+    with_manager.extend(BLOCK_PLUGINS.iter().map(|s| s.to_string()));
+    with_manager.sort();
+    assert_eq!(
+        implementations_in(block_manager, "interface BlockManagerInt"),
+        with_manager
+    );
+}
+
+#[test]
+fn implementations_of_a_generic_manager_interface_have_no_plugins() {
+    let found = implementations_in(
+        PLUGIN_CALLS,
+        "use Drupal\\Component\\Plugin\\PluginManagerInt",
+    );
+
+    assert!(
+        found.iter().any(|f| f.ends_with(": BlockManager")),
+        "{found:?}"
+    );
+    assert!(
+        !found.iter().any(|f| f.contains("/Plugin/Block/")),
+        "{found:?}"
+    );
+}

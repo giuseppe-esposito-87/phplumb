@@ -122,6 +122,9 @@ pub trait Framework: Send + Sync {
         value: &str,
         call: Option<(&FrameworkCall<'_>, usize)>,
     ) -> Vec<(Location, String)>;
+    /// Implementations the framework adds to the class-like `class`, each with the
+    /// text expected at its range.
+    fn class_implementations(&self, index: &Index, class: &str) -> Vec<(Location, String)>;
     /// Targets of a definition request on a declaration, each with the text expected
     /// at its range, when the framework knows what the declaration stands for.
     fn declaration_targets(

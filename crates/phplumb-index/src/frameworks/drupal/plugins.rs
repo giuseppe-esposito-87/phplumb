@@ -218,18 +218,12 @@ impl Plugins {
     /// The plugin classes of `manager` an id names, each with its class name as the
     /// expected text.
     pub(crate) fn targets(&self, manager: &str, id: &str) -> Vec<(Location, String)> {
-        self.named(manager, id)
-            .into_iter()
-            .map(|plugin| {
-                let location = Location {
-                    path: plugin.path.clone(),
-                    start: plugin.start,
-                    end: plugin.end,
-                };
-                let name = plugin.class.rsplit('\\').next().unwrap_or(&plugin.class);
-                (location, name.to_string())
-            })
-            .collect()
+        to_targets(self.named(manager, id))
+    }
+
+    /// Every plugin class of `manager`, each with its class name as the expected text.
+    pub(crate) fn all_targets(&self, manager: &str) -> Vec<(Location, String)> {
+        to_targets(self.of(manager))
     }
 
     /// Every subclass of the default plugin manager whose own constructor calls the
@@ -379,6 +373,22 @@ impl Plugins {
         }
         self.by_manager = found;
     }
+}
+
+/// Plugin classes as targets, each with its class name as the expected text.
+fn to_targets<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) -> Vec<(Location, String)> {
+    plugins
+        .into_iter()
+        .map(|plugin| {
+            let location = Location {
+                path: plugin.path.clone(),
+                start: plugin.start,
+                end: plugin.end,
+            };
+            let name = plugin.class.rsplit('\\').next().unwrap_or(&plugin.class);
+            (location, name.to_string())
+        })
+        .collect()
 }
 
 /// The `id` argument of a plugin attribute or annotation: named, or the first

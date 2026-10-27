@@ -220,6 +220,15 @@ impl Framework for Drupal {
         self.plugins.keyed_targets(index, key, value, call)
     }
 
+    /// A plugin manager, or an interface only one plugin manager implements, has its
+    /// plugins as implementations.
+    fn class_implementations(&self, index: &Index, class: &str) -> Vec<(Location, String)> {
+        self.plugins
+            .manager_of(index, &[class.to_string()])
+            .map(|manager| self.plugins.all_targets(&manager))
+            .unwrap_or_default()
+    }
+
     /// A hook implementation leads to the invocations of its hook and to the hook's
     /// documentation.
     fn declaration_targets(
