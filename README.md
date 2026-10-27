@@ -8,7 +8,7 @@
 
 Jump from a call to its definition, from an interface to its implementations, and from a method to every place that calls it, in a project of 40,000 PHP files, without waiting.
 
-<!-- Demo GIF goes here. -->
+![PHPlumb on Drupal core: Cmd+click an entity type id, find all references of load(), follow a service call and open a service definition](docs/images/demo.gif)
 
 ## Why
 
