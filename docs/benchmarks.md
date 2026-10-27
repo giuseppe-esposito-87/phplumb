@@ -2,6 +2,20 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 4e Drupal routes and YAML
+
+Same machine and project. The Drupal module reads routes from `*.routing.yml`, and the server answers definitions inside services, routing and links YAML files.
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | at least 42,455 |
+| Cold index                              | 5.0 to 5.1 s                      | under 10 s      |
+| Peak resident memory                    | 448 to 474 MB                     | under 1024 MB   |
+| Slowest definition case                 | 36 to 45 ms                       | under 1 s       |
+| All cases                               | 84 passed, 0 failed               | all pass        |
+
+New cases cover a route name in `Url::fromRoute()`, a `_controller` and a `_form` in custom routing files, a `route_name` in a custom links file, and a class, an `@` argument and a factory method in custom services files.
+
 ## 2026-10-27, step 4d Drupal plugins
 
 Same machine and project. The Drupal module reads plugin types from the constructors of plugin managers and plugins from each type's subdirectory of every module and core component namespace, by attribute or annotation, imported or not, and managers with the older constructor that reads annotations only.
