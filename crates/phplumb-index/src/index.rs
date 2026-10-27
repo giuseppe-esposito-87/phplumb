@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Instant, UNIX_EPOCH};
 
 use rayon::prelude::*;
@@ -14,7 +15,7 @@ use crate::filter::PathFilter;
 use crate::frameworks::drupal::Drupal;
 use crate::frameworks::{self, Framework, FrameworkCall};
 use crate::hover::{self, Hover};
-use crate::infer::{self, Receiver};
+use crate::infer::{self, Assigning, PropertyTypes, Receiver};
 use crate::members;
 use crate::phpdoc::TypeExpr;
 use crate::references::{self, Symbol};
@@ -90,6 +91,9 @@ pub struct Index {
     method_names: HashMap<String, u32>,
     /// How many declarations live in each lowercased namespace or one below it.
     namespaces: HashMap<String, u32>,
+    /// What each class's code assigns to its properties, by lowercased class name,
+    /// computed on first use and emptied on every update.
+    property_types: RwLock<HashMap<String, Arc<PropertyTypes>>>,
 }
 
 impl Index {
@@ -154,6 +158,7 @@ impl Index {
             candidates: HashMap::new(),
             method_names: HashMap::new(),
             namespaces: HashMap::new(),
+            property_types: RwLock::new(HashMap::new()),
         };
         for file in files.into_iter().flatten() {
             stats.files_with_parse_errors += usize::from(file.has_errors);
@@ -219,6 +224,10 @@ impl Index {
             framework.update(self, &changed, &deleted);
         }
         self.frameworks = frameworks;
+        self.property_types
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         stats.elapsed_ms = started.elapsed().as_millis();
         stats
     }
@@ -729,6 +738,51 @@ impl Index {
                 file.declarations.get(entry.decl as usize)?.returns.clone()
             })
             .collect()
+    }
+
+    /// `class` and its ancestors through `extends`, lowercased, each once.
+    pub(crate) fn parent_chain(&self, class: &str) -> Vec<String> {
+        let mut chain = vec![class.to_ascii_lowercase()];
+        let mut next = 0;
+        while next < chain.len() {
+            let parents: Vec<String> = self
+                .classes_named(&chain[next])
+                .iter()
+                .filter_map(|c| c.declaration.class.as_ref()?.parent.as_deref())
+                .map(str::to_ascii_lowercase)
+                .collect();
+            for parent in parents {
+                if !chain.contains(&parent) {
+                    chain.push(parent);
+                }
+            }
+            next += 1;
+        }
+        chain
+    }
+
+    /// What the code of `class`, a lowercased class name, assigns to its
+    /// properties. `outer` is the computation that asks, if any.
+    pub(crate) fn property_types(
+        &self,
+        class: &str,
+        outer: Option<&Assigning<'_>>,
+    ) -> Arc<PropertyTypes> {
+        if let Some(found) = self
+            .property_types
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(class)
+        {
+            return found.clone();
+        }
+        let computed = Arc::new(infer::property_assignments(self, class, outer));
+        self.property_types
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(class.to_string())
+            .or_insert(computed)
+            .clone()
     }
 
     /// The nearest typed declaration of a member above `class`, for members with no

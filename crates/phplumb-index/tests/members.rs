@@ -80,3 +80,165 @@ fn property_names_are_case_sensitive() {
     );
     assert_eq!(index.find_member("c", MemberKind::Property, "foo").len(), 1);
 }
+
+fn definition_targets(
+    index: &mut Index,
+    root: &std::path::Path,
+    file: &str,
+    needle: &str,
+) -> Vec<String> {
+    let path = root.join(file);
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+    let offset = text.find(needle).unwrap() + needle.len();
+    let mut found: Vec<String> = index
+        .definition(&path, &source, offset as u32)
+        .into_iter()
+        .map(|l| {
+            let content = fs::read_to_string(&l.path).unwrap();
+            let line = content[..l.start as usize].matches('\n').count() + 1;
+            format!("{}:{line}", l.path.strip_prefix(root).unwrap().display())
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+const HOLDER: &str = "class A { public function a() {} }
+class B { public function b() {} }
+class Holder {
+    protected $held;
+    public function __construct() { $this->held = new A(); }
+    public function run() { $this->held->a(); $this->held->b(); }
+}
+";
+
+#[test]
+fn property_types_follow_edited_assignments() {
+    let (_dir, root, mut index) = index(&[("Holder.php", HOLDER)]);
+    assert_eq!(
+        definition_targets(&mut index, &root, "Holder.php", "$this->held->"),
+        vec!["Holder.php:2"]
+    );
+
+    fs::write(
+        root.join("Holder.php"),
+        format!("<?php\n{}", HOLDER.replace("new A()", "new B()")),
+    )
+    .unwrap();
+    index.update(&[root.join("Holder.php")], &[]);
+
+    assert_eq!(
+        definition_targets(
+            &mut index,
+            &root,
+            "Holder.php",
+            "$this->held->a(); $this->held->"
+        ),
+        vec!["Holder.php:3"]
+    );
+}
+
+#[test]
+fn properties_assigned_from_each_other_terminate() {
+    let (_dir, root, mut index) = index(&[(
+        "Loop.php",
+        "class A { public function a() {} }
+class Loop {
+    protected $x;
+    protected $y;
+    public function __construct() { $this->x = $this->y; $this->y = $this->x; $this->x = new A(); }
+    public function run() { $this->y->a(); $this->x->a(); }
+}
+",
+    )]);
+
+    assert_eq!(
+        definition_targets(&mut index, &root, "Loop.php", "$this->x->"),
+        vec!["Loop.php:2"]
+    );
+}
+
+#[test]
+fn references_through_assigned_properties_are_stable() {
+    let mut files: Vec<(String, String)> = vec![(
+        "A.php".to_string(),
+        "class A { public function target() {} }\n".to_string(),
+    )];
+    for i in 0..40 {
+        files.push((
+            format!("H{i}.php"),
+            format!(
+                "class H{i} {{ protected $a; public function __construct() {{ $this->a = new A(); }} public function run() {{ $this->a->target(); }} }}\n"
+            ),
+        ));
+    }
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
+    let (_dir, root, mut index) = index(&borrowed);
+    let path = root.join("A.php");
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8(source.clone())
+        .unwrap()
+        .find("target")
+        .unwrap() as u32;
+
+    let counts: Vec<usize> = (0..5)
+        .map(|_| index.references(&path, &source, offset, false).len())
+        .collect();
+
+    assert_eq!(counts, vec![40; 5]);
+}
+
+#[test]
+fn properties_initialized_lazily_get_their_type() {
+    let (_dir, root, mut index) = index(&[(
+        "Lazy.php",
+        "class A { public function a() {} }
+class Lazy {
+    protected $held;
+    public function held() { return $this->held ??= new A(); }
+    public function run() { $this->held->a(); }
+}
+",
+    )]);
+
+    assert_eq!(
+        definition_targets(&mut index, &root, "Lazy.php", "$this->held->"),
+        vec!["Lazy.php:2"]
+    );
+}
+
+const CROSSED: &str = "class X { public function hit() {} }
+class C {
+    protected D $d;
+    protected $p;
+    public function __construct() { $this->p = $this->d->q; }
+    public function run() { $this->p->hit(); }
+}
+class D {
+    protected C $c;
+    protected $q;
+    public function __construct() { $this->q = $this->c->p; $this->q = new X(); }
+    public function run() { $this->q->hit(); }
+}
+";
+
+#[test]
+fn assignments_read_across_classes_do_not_depend_on_query_order() {
+    let in_c = "$this->p->";
+    let in_d = "$this->q->hit(); }\n}\n";
+    let (_a, root_a, mut first) = index(&[("Crossed.php", CROSSED)]);
+    let c_first = definition_targets(&mut first, &root_a, "Crossed.php", in_c);
+    let d_after = definition_targets(&mut first, &root_a, "Crossed.php", "$this->q->");
+    let (_b, root_b, mut second) = index(&[("Crossed.php", CROSSED)]);
+    let d_first = definition_targets(&mut second, &root_b, "Crossed.php", "$this->q->");
+    let c_after = definition_targets(&mut second, &root_b, "Crossed.php", in_c);
+
+    assert!(CROSSED.contains(in_d));
+    assert_eq!(d_first, vec!["Crossed.php:2"]);
+    assert_eq!(c_first, c_after);
+    assert_eq!(d_after, d_first);
+}

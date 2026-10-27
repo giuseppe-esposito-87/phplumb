@@ -12,9 +12,15 @@
 //! merges with what came before (code after the branch statement). A binding whose
 //! type is unknown makes the merged type unknown: the result is then nothing rather
 //! than a guess.
+//!
+//! A property's type is its declared type plus the types its class and the class's
+//! parents assign to it. Those are computed per class, from the class's own code;
+//! while one is computed, only the class itself and its ancestors are read, so a
+//! result never depends on which class happened to be computed first.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::Path;
 
 use mago_allocator::LocalArena;
 use mago_database::file::FileId;
@@ -22,11 +28,11 @@ use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
     Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
-    BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector, Closure, DoWhile,
-    Expression, For, Foreach, ForeachTarget, Function, FunctionLikeParameterList, Global, Hint, If,
-    IfBody, Literal, Method, MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program,
-    PropertyAccess, Static, StaticItem, StaticMethodCall, Switch, TriviaKind, Try, TryCatchClause,
-    Variable, While,
+    AssignmentOperator, BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector,
+    Closure, DoWhile, Expression, For, Foreach, ForeachTarget, Function, FunctionLikeParameterList,
+    Global, Hint, If, IfBody, Literal, Method, MethodCall, NullSafeMethodCall,
+    NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem, StaticMethodCall, Switch,
+    TriviaKind, Try, TryCatchClause, Variable, While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -34,9 +40,35 @@ use mago_syntax::walker::Walker;
 use crate::frameworks::{CallTarget, FrameworkCall};
 use crate::index::Index;
 use crate::phpdoc::{TypeExpr, parse_docblock, parse_type};
-use crate::summary::{FileSummary, MemberKind, NameKind, NameRef, SymbolKind, pick_type};
+use crate::summary::{
+    FileSummary, MemberKind, NameKind, NameRef, SymbolKind, pick_type, summarize,
+};
 
 const MAX_DEPTH: u32 = 16;
+
+/// How many times a class's assignments are evaluated when properties are assigned
+/// from the class's own properties.
+const MAX_PASSES: usize = 3;
+
+/// The types a class's code assigns to each of its properties, by property name.
+pub(crate) type PropertyTypes = HashMap<String, TypeExpr>;
+
+/// A class whose property assignments are being computed, with the types found by
+/// the previous pass, inside the computations it is nested in.
+pub(crate) struct Assigning<'s> {
+    /// Lowercased.
+    class: String,
+    current: &'s PropertyTypes,
+    outer: Option<&'s Assigning<'s>>,
+    /// Whether this pass read the class's own assigned types.
+    read_self: Cell<bool>,
+}
+
+impl Assigning<'_> {
+    fn holds(&self, class: &str) -> bool {
+        self.class == class || self.outer.is_some_and(|outer| outer.holds(class))
+    }
+}
 
 /// What a member access's receiver is.
 pub(crate) enum Receiver {
@@ -266,6 +298,14 @@ struct AssignFact<'arena> {
     rhs: Option<&'arena Expression<'arena>>,
 }
 
+/// `$object->name = rhs` or `$object->name ??= rhs`.
+struct PropertyAssignFact<'arena> {
+    start: u32,
+    name: String,
+    object: &'arena Expression<'arena>,
+    rhs: &'arena Expression<'arena>,
+}
+
 /// A `foreach`: its value variable takes the iterable's element type; its key and
 /// destructured variables become unknown.
 struct ForeachFact<'arena> {
@@ -305,6 +345,7 @@ struct Facts<'ast, 'arena> {
     accesses: Vec<AccessFact<'arena>>,
     scopes: Vec<ScopeFact<'ast, 'arena>>,
     assignments: Vec<AssignFact<'arena>>,
+    properties: Vec<PropertyAssignFact<'arena>>,
     foreaches: Vec<ForeachFact<'arena>>,
     catches: Vec<CatchFact<'ast, 'arena>>,
     narrowings: Vec<NarrowFact>,
@@ -446,10 +487,25 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
         assignment: &'ast Assignment<'arena>,
         f: &mut Facts<'ast, 'arena>,
     ) {
+        let span = assignment.span();
+        if let Expression::Access(Access::Property(access)) = assignment.lhs
+            && let ClassLikeMemberSelector::Identifier(name) = &access.property
+            && matches!(
+                assignment.operator,
+                AssignmentOperator::Assign(_) | AssignmentOperator::Coalesce(_)
+            )
+        {
+            f.properties.push(PropertyAssignFact {
+                start: span.start.offset,
+                name: String::from_utf8_lossy(name.value).into_owned(),
+                object: access.object,
+                rhs: assignment.rhs,
+            });
+            return;
+        }
         if !assignment.operator.is_assign() {
             return;
         }
-        let span = assignment.span();
         let (start, end) = (span.start.offset, span.end.offset);
         match assignment.lhs {
             Expression::Variable(Variable::Direct(variable)) => {
@@ -727,6 +783,8 @@ struct Ctx<'a, 'ast, 'arena> {
     var_docs: Vec<(u32, String, TypeExpr)>,
     /// Variable types already inferred, by name and position.
     memo: RefCell<HashMap<(String, u32), TypeExpr>>,
+    /// The property assignment computation this context serves.
+    assigning: Option<&'a Assigning<'a>>,
 }
 
 impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
@@ -762,6 +820,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             names,
             var_docs,
             memo: RefCell::new(HashMap::new()),
+            assigning: None,
         }
     }
 
@@ -1103,8 +1162,39 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                 let parent = declaration.class.as_ref().and_then(|s| s.parent.as_deref());
                 types.push(bind(ty, static_class, self_class, parent));
             }
+            if kind == MemberKind::Property {
+                types.extend(self.assigned_types(&class, name));
+            }
         }
         union(types)
+    }
+
+    /// The types the classes of `class`'s parent chain assign to property `name`.
+    /// While assignments are being computed, only the class being computed and its
+    /// ancestors are read, as their assignments do not depend on the computation in
+    /// progress.
+    fn assigned_types(&self, class: &str, name: &str) -> Vec<TypeExpr> {
+        self.index
+            .parent_chain(class)
+            .iter()
+            .filter_map(|key| match self.assigning {
+                None => self.index.property_types(key, None).get(name).cloned(),
+                Some(assigning) if assigning.class == *key => {
+                    assigning.read_self.set(true);
+                    assigning.current.get(name).cloned()
+                }
+                Some(assigning)
+                    if !assigning.holds(key)
+                        && self.index.parent_chain(&assigning.class).contains(key) =>
+                {
+                    self.index
+                        .property_types(key, Some(assigning))
+                        .get(name)
+                        .cloned()
+                }
+                Some(_) => None,
+            })
+            .collect()
     }
 
     fn function_returns(&self, function: &Expression<'_>) -> TypeExpr {
@@ -1340,6 +1430,77 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         .find(|(var, _)| var.as_deref().is_none_or(|v| v == assignment.var))
         .map(|(_, ty)| ty)
         .and_then(|ty| pick_type(Some(ty), None))
+    }
+}
+
+/// The types the code of `class`, a lowercased class name, assigns to its
+/// properties: `$this->p = ...`, and `$x->p = ...` where `$x` is an instance of the
+/// class, as in `create()`. `outer` is the computation this one is nested in.
+pub(crate) fn property_assignments(
+    index: &Index,
+    class: &str,
+    outer: Option<&Assigning<'_>>,
+) -> PropertyTypes {
+    let mut paths: Vec<&Path> = index.classes_named(class).iter().map(|c| c.path).collect();
+    paths.sort();
+    paths.dedup();
+    let sources: Vec<Vec<u8>> = paths.iter().filter_map(|p| std::fs::read(p).ok()).collect();
+    let summaries: Vec<FileSummary> = sources.iter().map(|s| summarize(s)).collect();
+    let mut current = PropertyTypes::new();
+    for _ in 0..MAX_PASSES {
+        let assigning = Assigning {
+            class: class.to_string(),
+            current: &current,
+            outer,
+            read_self: Cell::new(false),
+        };
+        let mut next = PropertyTypes::new();
+        for (source, summary) in sources.iter().zip(&summaries) {
+            assignments_in(index, summary, source, &assigning, &mut next);
+        }
+        let settled = !assigning.read_self.get() || next == current;
+        current = next;
+        if settled {
+            break;
+        }
+    }
+    current
+}
+
+/// Adds to `found` the types one file assigns to the properties of the class
+/// `assigning` computes.
+fn assignments_in(
+    index: &Index,
+    summary: &FileSummary,
+    source: &[u8],
+    assigning: &Assigning<'_>,
+    found: &mut PropertyTypes,
+) {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    let mut ctx = Ctx::new(index, summary, program, source, &facts);
+    ctx.assigning = Some(assigning);
+    let is_class = |name: &str| name.eq_ignore_ascii_case(&assigning.class);
+    for fact in &facts.properties {
+        let inside = summary
+            .enclosing_class(fact.start)
+            .and_then(|range| range.fqn.as_deref())
+            .is_some_and(is_class);
+        if !inside
+            || !class_names(&ctx.expr(fact.object, fact.start, 0))
+                .iter()
+                .any(|name| is_class(name))
+        {
+            continue;
+        }
+        let ty = ctx.expr(fact.rhs, fact.start, 0);
+        if ty == TypeExpr::Other {
+            continue;
+        }
+        let known = found.remove(&fact.name).unwrap_or(TypeExpr::Other);
+        found.insert(fact.name.clone(), union(vec![known, ty]));
     }
 }
 
