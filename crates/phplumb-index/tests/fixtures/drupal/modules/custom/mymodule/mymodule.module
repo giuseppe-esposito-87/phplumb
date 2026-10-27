@@ -14,11 +14,11 @@ function mymodule_examples(ContainerInterface $container, Container $drupal_cont
     \Drupal::service('shared.id');
 }
 
-function mymodule_cron()
+function /*@cursor:cron_impl*/mymodule_cron()
 {
 }
 
-function mymodule_helper()
+function /*@target:helper*//*@cursor:helper*/mymodule_helper()
 {
 }
 
@@ -27,5 +27,17 @@ function mymodule_update_10001()
 }
 
 function mymodule_install()
+{
+}
+
+function /*@cursor:ping_impl*/mymodule_ping()
+{
+}
+
+function /*@cursor:thing_info_module*/mymodule_thing_info_alter(&$info)
+{
+}
+
+function /*@cursor:thing_data*/mymodule_thing_data_alter(&$data)
 {
 }

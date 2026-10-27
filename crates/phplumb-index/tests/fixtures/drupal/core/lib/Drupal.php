@@ -17,6 +17,13 @@ class Drupal
     }
 
     /**
+     * @return \Drupal\Core\Extension\ModuleHandlerInterface
+     */
+    public static function moduleHandler()
+    {
+    }
+
+    /**
      * @return mixed
      */
     public static function service($id)

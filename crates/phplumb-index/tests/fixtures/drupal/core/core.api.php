@@ -3,4 +3,4 @@
 /**
  * Performs periodic actions.
  */
-function hook_cron() {}
+function /*@target:cron_impl*/hook_cron() {}

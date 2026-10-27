@@ -8,6 +8,10 @@ function gadget_cron()
 {
 }
 
+function /*@target:gadget_ping*//*@cursor:gadget_ping*/gadget_ping()
+{
+}
+
 #[ProceduralHookScanStop]
 function gadget_stop()
 {

@@ -6,12 +6,12 @@ use Drupal\Core\Hook\Attribute\Hook;
 #[Hook('cron', method: 'tick')]
 class MymoduleHooks
 {
-    #[Hook('cron')]
-    public function cron(): void
+    #[Hook(/*@cursor:cron_impl*/'cron')]
+    public function /*@cursor:cron_impl*/cron(): void
     {
     }
 
-    public function tick(): void
+    public function /*@cursor:cron_impl*/tick(): void
     {
     }
 

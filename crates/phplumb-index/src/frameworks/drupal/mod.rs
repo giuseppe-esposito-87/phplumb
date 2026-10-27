@@ -8,7 +8,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::frameworks::{CallTarget, Framework, FrameworkCall};
+use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 
@@ -124,38 +124,52 @@ impl Framework for Drupal {
     }
 
     /// The id of a service call leads to every definition of the service; the id of
-    /// `getStorage()` to the `id` of every declaration of the entity type.
+    /// `getStorage()` to the `id` of every declaration of the entity type; a hook
+    /// name or alter type in an invocation to the hook's implementations and
+    /// documentation.
     fn string_targets(
         &self,
         index: &Index,
         call: &FrameworkCall<'_>,
         argument: usize,
         value: &str,
-    ) -> Vec<Location> {
-        if argument != 0 {
-            return Vec::new();
-        }
-        if service_call(index, call) == Some(value) {
+    ) -> Vec<(Location, String)> {
+        if argument == 0 && service_call(index, call) == Some(value) {
             return self
                 .services
                 .definitions(value)
                 .iter()
-                .map(|definition| Location {
-                    path: definition.path.clone(),
-                    start: definition.start,
-                    end: definition.end,
+                .map(|definition| {
+                    let location = Location {
+                        path: definition.path.clone(),
+                        start: definition.start,
+                        end: definition.end,
+                    };
+                    (location, value.to_string())
                 })
                 .collect();
         }
-        if storage_call(index, call) == Some(value) {
+        if argument == 0 && storage_call(index, call) == Some(value) {
             return self
                 .entities
                 .get(value)
                 .iter()
                 .filter_map(|entity| entity.id_location())
+                .map(|location| (location, value.to_string()))
                 .collect();
         }
-        Vec::new()
+        self.hooks
+            .invocation_targets(index, call.targets, call.strings, argument, value)
+    }
+
+    /// A hook implementation leads to the invocations of its hook and to the hook's
+    /// documentation.
+    fn declaration_targets(
+        &self,
+        index: &Index,
+        declaration: &FrameworkDeclaration<'_>,
+    ) -> Vec<(Location, String)> {
+        self.hooks.implementation_targets(index, declaration)
     }
 
     fn as_any(&self) -> &dyn Any {

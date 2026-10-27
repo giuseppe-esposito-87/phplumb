@@ -197,4 +197,15 @@ suite("definition", () => {
     assert.strictEqual(targets.length, 1, JSON.stringify(targets));
     assert.ok(uriOf(targets[0]).path.endsWith("src/BasicThing.php"), uriOf(targets[0]).toString());
   });
+
+  test("Cmd+click on a hook implementation opens its invocation", async () => {
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+    const document = await open("modules/basic_hooks/src/Hook/BasicHooks.php");
+    const position = document.positionAt(document.getText().indexOf("function cron") + "function c".length);
+
+    const targets = await vscode.commands.executeCommand<Target[]>("vscode.executeDefinitionProvider", document.uri, position);
+
+    assert.strictEqual(targets.length, 1, JSON.stringify(targets));
+    assert.ok(uriOf(targets[0]).path.endsWith("src/HookCalls.php"), uriOf(targets[0]).toString());
+  });
 });

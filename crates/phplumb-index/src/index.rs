@@ -13,10 +13,11 @@ use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
 use crate::frameworks::drupal::Drupal;
-use crate::frameworks::{self, FoundCall, Framework, FrameworkCall};
+use crate::frameworks::{self, FoundCall, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Assigning, PropertyTypes, Receiver};
 use crate::members;
+use crate::metadata::Metadata;
 use crate::phpdoc::TypeExpr;
 use crate::references::{self, Symbol};
 use crate::summary::{
@@ -1113,7 +1114,63 @@ impl Index {
             .frameworks
             .iter()
             .flat_map(|f| f.string_targets(self, &call, argument.position, &argument.value))
-            .map(|location| (location, argument.value.clone()))
+            .collect();
+        (!found.is_empty()).then_some(found)
+    }
+
+    /// What the frameworks give for a cursor on a function or method declaration's
+    /// name, or inside an attribute of a function, method or class but not on a
+    /// class-like name.
+    fn framework_declaration(
+        &self,
+        path: &Path,
+        summary: &FileSummary,
+        offset: u32,
+    ) -> Option<Vec<(Location, String)>> {
+        if self.frameworks.is_empty() {
+            return None;
+        }
+        let covers = |(start, end): (u32, u32)| start <= offset && offset <= end;
+        let on_class =
+            name_at(&summary.names, offset).is_some_and(|n| n.kind == NameKind::ClassLike);
+        let in_attributes = |metadata: &[Metadata]| {
+            !on_class && metadata.iter().any(|m| !m.annotation && covers(m.span))
+        };
+        let declaration = summary.declarations.iter().find_map(|d| {
+            if d.kind == SymbolKind::Function
+                && (covers((d.name_start, d.name_end)) || in_attributes(&d.metadata))
+            {
+                return Some(FrameworkDeclaration::Function {
+                    path,
+                    declaration: d,
+                    file: &summary.declarations,
+                });
+            }
+            let shape = d.class.as_ref()?;
+            if let Some(member) = shape.members.iter().find(|m| {
+                m.kind == MemberKind::Method
+                    && (covers((m.name_start, m.name_end)) || in_attributes(&m.metadata))
+            }) {
+                return Some(FrameworkDeclaration::Method {
+                    path,
+                    class: d,
+                    member,
+                });
+            }
+            let metadata = shape
+                .metadata
+                .iter()
+                .find(|m| !on_class && !m.annotation && covers(m.span))?;
+            Some(FrameworkDeclaration::Class {
+                path,
+                class: d,
+                metadata,
+            })
+        })?;
+        let found: Vec<(Location, String)> = self
+            .frameworks
+            .iter()
+            .flat_map(|f| f.declaration_targets(self, &declaration))
             .collect();
         (!found.is_empty()).then_some(found)
     }
@@ -1121,6 +1178,10 @@ impl Index {
     /// Each target with the lowercased short name the index expects at its range.
     fn resolve(&self, path: &Path, source: &[u8], offset: u32) -> Vec<(Location, String)> {
         let summary = summarize(source);
+
+        if let Some(found) = self.framework_declaration(path, &summary, offset) {
+            return found;
+        }
 
         if let Some(declaration) = summary
             .declarations

@@ -202,6 +202,34 @@ pub(crate) fn calls_named(
     found
 }
 
+/// The value of the string literal covering `offset`: `expression` itself, or one
+/// of its elements when it is an array.
+fn string_literal_at(expression: &Expression<'_>, offset: u32) -> Option<String> {
+    let elements = match expression {
+        Expression::Literal(Literal::String(literal)) => {
+            let span = literal.span();
+            let inside = span.start.offset < offset && offset < span.end.offset;
+            return inside
+                .then(|| {
+                    literal
+                        .value
+                        .map(|v| String::from_utf8_lossy(v).into_owned())
+                })
+                .flatten();
+        }
+        Expression::Array(array) => &array.elements,
+        Expression::LegacyArray(array) => &array.elements,
+        _ => return None,
+    };
+    elements.iter().find_map(|element| match element {
+        ArrayElement::Value(element) => match element.value {
+            Expression::Literal(Literal::String(_)) => string_literal_at(element.value, offset),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
 /// The string literal elements of each positional array argument, by position.
 fn list_arguments(arguments: &ArgumentList<'_>) -> Vec<Vec<String>> {
     arguments
@@ -1147,15 +1175,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     let Argument::Positional(argument) = argument else {
                         return None;
                     };
-                    let Expression::Literal(Literal::String(literal)) = argument.value else {
-                        return None;
-                    };
-                    let span = literal.span();
-                    let inside = span.start.offset < offset && offset < span.end.offset;
-                    let value = literal
-                        .value
-                        .map(|v| String::from_utf8_lossy(v).into_owned())?;
-                    inside.then_some((i, value))
+                    string_literal_at(argument.value, offset).map(|value| (i, value))
                 })?;
         let (receiver, selector) = match call {
             CallRef::Method(c) => (self.expr(c.object, start, 0), &c.method),

@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::index::{Index, Location};
+use crate::metadata::Metadata;
 use crate::phpdoc::TypeExpr;
+use crate::summary::{Declaration, Member};
 
 /// Whether a framework module runs: detected from the project, or forced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -37,6 +39,27 @@ pub struct FrameworkCall<'a> {
     pub strings: &'a [Option<String>],
     /// The receiver's type, for method calls.
     pub receiver: Option<&'a TypeExpr>,
+}
+
+/// The declaration a definition request is on: its name, or one of its attributes.
+pub enum FrameworkDeclaration<'a> {
+    /// A function, with every declaration of its file.
+    Function {
+        path: &'a Path,
+        declaration: &'a Declaration,
+        file: &'a [Declaration],
+    },
+    Method {
+        path: &'a Path,
+        class: &'a Declaration,
+        member: &'a Member,
+    },
+    /// One of the class's own attributes.
+    Class {
+        path: &'a Path,
+        class: &'a Declaration,
+        metadata: &'a Metadata,
+    },
 }
 
 /// A method call found in the index, with its literal arguments.
@@ -75,14 +98,23 @@ pub trait Framework: Send + Sync {
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]);
     /// The type `call` returns when the framework knows better than its declaration.
     fn call_type(&self, index: &Index, call: &FrameworkCall<'_>) -> Option<TypeExpr>;
-    /// Targets of the string literal at position `argument` of `call`.
+    /// Targets of the string literal at position `argument` of `call`, or of one of
+    /// its elements when the argument is an array, each with the text expected at
+    /// its range.
     fn string_targets(
         &self,
         index: &Index,
         call: &FrameworkCall<'_>,
         argument: usize,
         value: &str,
-    ) -> Vec<Location>;
+    ) -> Vec<(Location, String)>;
+    /// Targets of a definition request on a declaration, each with the text expected
+    /// at its range, when the framework knows what the declaration stands for.
+    fn declaration_targets(
+        &self,
+        index: &Index,
+        declaration: &FrameworkDeclaration<'_>,
+    ) -> Vec<(Location, String)>;
     /// The module itself, for code that needs its own API.
     fn as_any(&self) -> &dyn Any;
 }

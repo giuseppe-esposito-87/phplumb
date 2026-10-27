@@ -580,3 +580,48 @@ fn hook_implementations_follow_updates() {
         vec!["modules/custom/m/m.module m_mail m"]
     );
 }
+
+const HOOK_CALLS: &str = "modules/custom/mymodule/src/HookCalls.php";
+
+#[test]
+fn hook_names_in_invocations_lead_to_implementations_and_docs() {
+    assert_eq!(
+        definitions_in(HOOK_CALLS, "invokeAll('cr"),
+        vec![
+            "core/core.api.php: hook_cron",
+            "modules/custom/mymodule/mymodule.module: mymodule_cron",
+            "modules/custom/mymodule/src/Hook/MymoduleHooks.php: cron",
+            "modules/custom/mymodule/src/Hook/MymoduleHooks.php: gadgetCron",
+            "modules/custom/mymodule/src/Hook/MymoduleHooks.php: tick",
+            "modules/custom/mymodule_extra/mymodule_extra.module: mymodule_extra_cron",
+        ]
+    );
+}
+
+#[test]
+fn invoke_with_a_module_reaches_that_module_only() {
+    assert_eq!(
+        definitions_in(HOOK_CALLS, "invoke('mymodule', 'pi"),
+        vec!["modules/custom/mymodule/mymodule.module: mymodule_ping"]
+    );
+}
+
+#[test]
+fn alter_types_in_arrays_lead_to_alter_implementations() {
+    assert_eq!(
+        definitions_in(HOOK_CALLS, "alter(['thing_da"),
+        vec!["modules/custom/mymodule/mymodule.module: mymodule_thing_data_alter"]
+    );
+}
+
+#[test]
+fn theme_manager_invocations_reach_themes_only() {
+    assert_eq!(
+        definitions_in(HOOK_CALLS, "thing_info_theme*/alter('thing_in"),
+        vec!["themes/mytheme/mytheme.theme: mytheme_thing_info_alter"]
+    );
+    assert_eq!(
+        definitions_in(HOOK_CALLS, "thing_info_module*/alter('thing_in"),
+        vec!["modules/custom/mymodule/mymodule.module: mymodule_thing_info_alter"]
+    );
+}

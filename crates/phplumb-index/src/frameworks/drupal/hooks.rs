@@ -10,8 +10,10 @@ use yaml_rust2::YamlLoader;
 use super::is_a;
 use super::services::{drupal_files, is_drupal_file};
 use crate::filter::PathFilter;
-use crate::index::Index;
+use crate::frameworks::{CallTarget, FoundCall, FrameworkDeclaration};
+use crate::index::{Index, Location};
 use crate::metadata::{MetaValue, Metadata};
+use crate::references;
 use crate::summary::{Declaration, MemberKind, SymbolKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +70,94 @@ const NOT_COLLECTED: [&str; 7] = [
     "update_last_removed",
     "update_dependencies",
 ];
+
+/// A method invoking hooks: the position of its hook name, whether that name is an
+/// alter type, and the position of the extension it is limited to.
+struct Invoker {
+    method: &'static str,
+    hook: usize,
+    alter: bool,
+    extension: Option<usize>,
+}
+
+const MODULE_HANDLER: &str = "Drupal\\Core\\Extension\\ModuleHandlerInterface";
+const THEME_MANAGER: &str = "Drupal\\Core\\Theme\\ThemeManagerInterface";
+
+const fn invoker(
+    method: &'static str,
+    hook: usize,
+    alter: bool,
+    extension: Option<usize>,
+) -> Invoker {
+    Invoker {
+        method,
+        hook,
+        alter,
+        extension,
+    }
+}
+
+/// The module handler's invoking methods, which reach modules and profiles.
+const MODULE_INVOKERS: [Invoker; 7] = [
+    invoker("invoke", 1, false, Some(0)),
+    invoker("invokeAll", 0, false, None),
+    invoker("invokeAllWith", 0, false, None),
+    invoker("invokeDeprecated", 2, false, Some(1)),
+    invoker("invokeAllDeprecated", 1, false, None),
+    invoker("alter", 0, true, None),
+    invoker("alterDeprecated", 1, true, None),
+];
+
+/// The theme manager's invoking methods, which reach themes.
+const THEME_INVOKERS: [Invoker; 4] = [
+    invoker("invoke", 1, false, Some(0)),
+    invoker("invokeAllWith", 0, false, None),
+    invoker("alter", 0, true, None),
+    invoker("alterForTheme", 1, true, None),
+];
+
+/// The invoking method a call reaches, and whether it reaches themes.
+fn invoker_of(index: &Index, targets: &[CallTarget]) -> Option<(&'static Invoker, bool)> {
+    targets.iter().find_map(|target| {
+        let CallTarget::Method { class, name } = target else {
+            return None;
+        };
+        let find = |invokers: &'static [Invoker]| {
+            invokers
+                .iter()
+                .find(|i| i.method.eq_ignore_ascii_case(name))
+        };
+        if let Some(found) =
+            find(&MODULE_INVOKERS).filter(|_| is_a(index, class, &[MODULE_HANDLER]))
+        {
+            return Some((found, false));
+        }
+        find(&THEME_INVOKERS)
+            .filter(|_| is_a(index, class, &[THEME_MANAGER]))
+            .map(|found| (found, true))
+    })
+}
+
+/// The hook a name at the invoker's hook position stands for.
+fn invoked_hook(invoker: &Invoker, name: &str) -> String {
+    if invoker.alter {
+        format!("{name}_alter")
+    } else {
+        name.to_string()
+    }
+}
+
+/// The names of every hook-invoking method.
+fn invoking_methods() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = MODULE_INVOKERS
+        .iter()
+        .chain(THEME_INVOKERS.iter())
+        .map(|i| i.method)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
 
 /// Every module, profile and theme on disk, outside test modules.
 #[derive(Default)]
@@ -209,6 +299,152 @@ impl Hooks {
         }
         self.implementations = implementations;
         self.docs = docs;
+    }
+
+    /// From a hook name or alter type at position `argument` of an invoking call: the
+    /// implementations the call reaches, then the hook's documentation.
+    pub(crate) fn invocation_targets(
+        &self,
+        index: &Index,
+        targets: &[CallTarget],
+        strings: &[Option<String>],
+        argument: usize,
+        value: &str,
+    ) -> Vec<(Location, String)> {
+        let Some((invoker, themes)) = invoker_of(index, targets) else {
+            return Vec::new();
+        };
+        if argument != invoker.hook {
+            return Vec::new();
+        }
+        let hook = invoked_hook(invoker, value);
+        let limited = invoker
+            .extension
+            .and_then(|position| strings.get(position)?.as_deref());
+        let mut found: Vec<(Location, String)> = self
+            .implementations(&hook)
+            .iter()
+            .filter(|i| i.kind.is_theme() == themes && limited.is_none_or(|e| e == i.extension))
+            .map(|i| {
+                let location = Location {
+                    path: i.path.clone(),
+                    start: i.start,
+                    end: i.end,
+                };
+                (location, i.name.clone())
+            })
+            .collect();
+        found.extend(self.doc_targets(&hook));
+        found
+    }
+
+    /// From a hook implementation: the invocations of each hook it implements, then
+    /// their documentation.
+    pub(crate) fn implementation_targets(
+        &self,
+        index: &Index,
+        declaration: &FrameworkDeclaration<'_>,
+    ) -> Vec<(Location, String)> {
+        let implemented = self.declared_hooks(index, declaration);
+        if implemented.is_empty() {
+            return Vec::new();
+        }
+        let calls = index.calls_named(&invoking_methods());
+        let mut sites: Vec<&FoundCall> = calls
+            .iter()
+            .filter(|call| implemented.iter().any(|i| invokes(index, call, i)))
+            .collect();
+        sites.sort_by(|a, b| {
+            (
+                references::rank(&a.location.path),
+                &a.location.path,
+                a.location.start,
+            )
+                .cmp(&(
+                    references::rank(&b.location.path),
+                    &b.location.path,
+                    b.location.start,
+                ))
+        });
+        let mut found: Vec<(Location, String)> = sites
+            .into_iter()
+            .map(|call| {
+                let name = match call.targets.first() {
+                    Some(CallTarget::Method { name, .. }) => name.clone(),
+                    _ => String::new(),
+                };
+                (call.location.clone(), name)
+            })
+            .collect();
+        for implementation in &implemented {
+            for doc in self.doc_targets(&implementation.hook) {
+                if !found.contains(&doc) {
+                    found.push(doc);
+                }
+            }
+        }
+        found
+    }
+
+    /// The hooks a declaration implements, by the rules of the registry applied to
+    /// the declaration as the editor has it.
+    fn declared_hooks(
+        &self,
+        index: &Index,
+        declaration: &FrameworkDeclaration<'_>,
+    ) -> Vec<HookImplementation> {
+        match declaration {
+            FrameworkDeclaration::Function {
+                path,
+                declaration,
+                file,
+            } => {
+                let file: Vec<&Declaration> = file.iter().collect();
+                self.file_hooks(index, path, &file)
+                    .into_iter()
+                    .filter(|i| i.start == declaration.name_start)
+                    .collect()
+            }
+            FrameworkDeclaration::Method {
+                path,
+                class,
+                member,
+            } => self
+                .file_hooks(index, path, &[class])
+                .into_iter()
+                .filter(|i| i.start == member.name_start)
+                .collect(),
+            FrameworkDeclaration::Class {
+                path,
+                class,
+                metadata,
+            } => {
+                if !is_hook(index, metadata) {
+                    return Vec::new();
+                }
+                let Some(hook) = hook_name(metadata) else {
+                    return Vec::new();
+                };
+                self.file_hooks(index, path, &[class])
+                    .into_iter()
+                    .filter(|i| i.hook == hook)
+                    .collect()
+            }
+        }
+    }
+
+    fn doc_targets(&self, hook: &str) -> Vec<(Location, String)> {
+        self.docs(hook)
+            .iter()
+            .map(|doc| {
+                let location = Location {
+                    path: doc.path.clone(),
+                    start: doc.start,
+                    end: doc.end,
+                };
+                (location, format!("hook_{}", doc.name))
+            })
+            .collect()
     }
 
     pub(crate) fn implementations(&self, hook: &str) -> &[HookImplementation] {
@@ -354,6 +590,33 @@ impl Hooks {
         }
         found
     }
+}
+
+/// Whether `call` invokes `implementation`'s hook by its literal name, for the
+/// implementation's group and extension.
+fn invokes(index: &Index, call: &FoundCall, implementation: &HookImplementation) -> bool {
+    let Some((invoker, themes)) = invoker_of(index, &call.targets) else {
+        return false;
+    };
+    if themes != implementation.kind.is_theme() {
+        return false;
+    }
+    let limited = invoker
+        .extension
+        .and_then(|position| call.strings.get(position)?.as_deref());
+    if limited.is_some_and(|e| e != implementation.extension) {
+        return false;
+    }
+    let named = call.strings.get(invoker.hook).cloned().flatten();
+    let listed = if invoker.alter {
+        call.lists.get(invoker.hook).cloned().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    named
+        .into_iter()
+        .chain(listed)
+        .any(|name| invoked_hook(invoker, &name) == implementation.hook)
 }
 
 /// Whether a file of an extension, at `relative` to its directory, can hold
