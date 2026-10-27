@@ -159,6 +159,240 @@ fn invoking_methods() -> Vec<&'static str> {
     names
 }
 
+/// Hooks Drupal core invokes under computed names, as patterns, with the methods
+/// whose invoking calls compute them. In a pattern, an uppercase run is a
+/// placeholder.
+const COMPUTED: &[(&[&str], &[&str])] = &[
+    (
+        &[
+            "ENTITY_TYPE_create",
+            "ENTITY_TYPE_presave",
+            "ENTITY_TYPE_insert",
+            "ENTITY_TYPE_update",
+            "ENTITY_TYPE_predelete",
+            "ENTITY_TYPE_delete",
+            "ENTITY_TYPE_revision_delete",
+            "ENTITY_TYPE_translation_create",
+            "ENTITY_TYPE_translation_insert",
+            "ENTITY_TYPE_translation_delete",
+            "ENTITY_TYPE_field_values_init",
+            "entity_create",
+            "entity_presave",
+            "entity_insert",
+            "entity_update",
+            "entity_predelete",
+            "entity_delete",
+            "entity_revision_delete",
+            "entity_translation_create",
+            "entity_translation_insert",
+            "entity_translation_delete",
+            "entity_field_values_init",
+        ],
+        &[
+            "Drupal\\Core\\Entity\\EntityStorageBase::invokeHook",
+            "Drupal\\Core\\Config\\Entity\\ConfigEntityStorage::invokeHook",
+        ],
+    ),
+    (
+        &["ENTITY_TYPE_load"],
+        &["Drupal\\Core\\Entity\\EntityStorageBase::postLoad"],
+    ),
+    (
+        &["ENTITY_TYPE_storage_load"],
+        &["Drupal\\Core\\Entity\\ContentEntityStorageBase::invokeStorageLoadHook"],
+    ),
+    (
+        &["ENTITY_TYPE_revision_create"],
+        &["Drupal\\Core\\Entity\\ContentEntityStorageBase::createRevision"],
+    ),
+    (
+        &["ENTITY_TYPE_duplicate"],
+        &[
+            "Drupal\\Core\\Entity\\EntityBase::createDuplicate",
+            "Drupal\\Core\\Entity\\ContentEntityBase::createDuplicate",
+        ],
+    ),
+    (
+        &["ENTITY_TYPE_access"],
+        &["Drupal\\Core\\Entity\\EntityAccessControlHandler::access"],
+    ),
+    (
+        &["ENTITY_TYPE_create_access"],
+        &["Drupal\\Core\\Entity\\EntityAccessControlHandler::createAccess"],
+    ),
+    (
+        &["ENTITY_TYPE_view", "ENTITY_TYPE_view_alter"],
+        &["Drupal\\Core\\Entity\\EntityViewBuilder::buildMultiple"],
+    ),
+    (
+        &["ENTITY_TYPE_build_defaults_alter"],
+        &["Drupal\\Core\\Entity\\EntityViewBuilder::viewMultiple"],
+    ),
+    (
+        &["ENTITY_TYPE_view_mode_alter"],
+        &["Drupal\\Core\\Entity\\EntityViewBuilder::getBuildDefaults"],
+    ),
+    (
+        &["ENTITY_TYPE_form_mode_alter"],
+        &["Drupal\\Core\\Entity\\Entity\\EntityFormDisplay::collectRenderDisplay"],
+    ),
+    (
+        &["ENTITY_TYPE_prepare_form"],
+        &["Drupal\\Core\\Entity\\EntityForm::prepareInvokeAll"],
+    ),
+    (
+        &[
+            "entity_query_ENTITY_TYPE_alter",
+            "entity_query_tag__TAG_alter",
+            "entity_query_tag__ENTITY_TYPE__TAG_alter",
+        ],
+        &["Drupal\\Core\\Entity\\Query\\QueryBase::alter"],
+    ),
+    (
+        &[
+            "form_alter",
+            "form_FORM_ID_alter",
+            "form_BASE_FORM_ID_alter",
+        ],
+        &["Drupal\\Core\\Form\\FormBuilder::prepareForm"],
+    ),
+    (
+        &["query_alter", "query_TAG_alter"],
+        &[
+            "Drupal\\Core\\Database\\Query\\Select::preExecute",
+            "Drupal\\Core\\Entity\\Plugin\\EntityReferenceSelection\\DefaultSelection::reAlterQuery",
+        ],
+    ),
+    (
+        &["field_widget_single_element_WIDGET_TYPE_form_alter"],
+        &["Drupal\\Core\\Field\\WidgetBase::formSingleElement"],
+    ),
+    (
+        &["field_widget_complete_WIDGET_TYPE_form_alter"],
+        &["Drupal\\Core\\Field\\WidgetBase::form"],
+    ),
+    (
+        &["block_view_BASE_BLOCK_ID_alter"],
+        &["Drupal\\block\\BlockViewBuilder::buildPreRenderableBlock"],
+    ),
+    (
+        &["block_build_BASE_BLOCK_ID_alter"],
+        &["Drupal\\block\\BlockViewBuilder::viewMultiple"],
+    ),
+    (
+        &[
+            "theme_suggestions_HOOK",
+            "theme_suggestions_alter",
+            "theme_suggestions_HOOK_alter",
+        ],
+        &["Drupal\\Core\\Theme\\ThemeManager::buildThemeHookSuggestions"],
+    ),
+    (
+        &["preprocess_HOOK"],
+        &["Drupal\\Core\\Theme\\Registry::collectModulePreprocess"],
+    ),
+    (
+        &[
+            "plugin_filter_TYPE_alter",
+            "plugin_filter_TYPE__CONSUMER_alter",
+        ],
+        &["Drupal\\Core\\Plugin\\FilteredPluginManagerTrait::getFilteredDefinitions"],
+    ),
+    (
+        &[
+            "language_fallback_candidates_alter",
+            "language_fallback_candidates_OPERATION_alter",
+        ],
+        &["Drupal\\language\\ConfigurableLanguageManager::getFallbackCandidates"],
+    ),
+    (
+        &["migrate_MIGRATION_ID_prepare_row"],
+        &["Drupal\\migrate\\Plugin\\migrate\\source\\SourcePluginBase::prepareRow"],
+    ),
+    (
+        &["jsonapi_ENTITY_TYPE_filter_access"],
+        &["Drupal\\jsonapi\\Access\\TemporaryQueryGuard::getAccessResultsFromEntityFilterHook"],
+    ),
+];
+
+/// One piece of a hook name pattern.
+enum Piece<'a> {
+    Text(&'a str),
+    /// An uppercase run, such as `FORM_ID` or `ENTITY_TYPE`.
+    Placeholder(&'a str),
+}
+
+/// A pattern split into text and placeholders: an uppercase run starts a
+/// placeholder at the start of the pattern or after an underscore, and goes on
+/// through underscores followed by more uppercase.
+fn pieces(pattern: &str) -> Vec<Piece<'_>> {
+    let bytes = pattern.as_bytes();
+    let mut pieces = Vec::new();
+    let (mut text_start, mut i) = (0, 0);
+    while i < bytes.len() {
+        let starts = bytes[i].is_ascii_uppercase() && (i == 0 || bytes[i - 1] == b'_');
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let mut end = i;
+        loop {
+            while end < bytes.len()
+                && (bytes[end].is_ascii_uppercase() || bytes[end].is_ascii_digit())
+            {
+                end += 1;
+            }
+            if end + 1 < bytes.len() && bytes[end] == b'_' && bytes[end + 1].is_ascii_uppercase() {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        if text_start < i {
+            pieces.push(Piece::Text(&pattern[text_start..i]));
+        }
+        pieces.push(Piece::Placeholder(&pattern[i..end]));
+        text_start = end;
+        i = end;
+    }
+    if text_start < bytes.len() {
+        pieces.push(Piece::Text(&pattern[text_start..]));
+    }
+    pieces
+}
+
+/// Whether `hook` matches `pattern`: `ENTITY_TYPE` stands for an entity type id,
+/// `N` for digits, any other placeholder for a non-empty run of lowercase letters,
+/// digits and underscores.
+pub(crate) fn matches_pattern(
+    pattern: &str,
+    hook: &str,
+    is_entity_type: &dyn Fn(&str) -> bool,
+) -> bool {
+    fn rest(pieces: &[Piece<'_>], hook: &str, is_entity_type: &dyn Fn(&str) -> bool) -> bool {
+        let Some((first, others)) = pieces.split_first() else {
+            return hook.is_empty();
+        };
+        match first {
+            Piece::Text(text) => hook
+                .strip_prefix(text)
+                .is_some_and(|after| rest(others, after, is_entity_type)),
+            Piece::Placeholder(name) => (1..=hook.len()).any(|length| {
+                let (value, after) = hook.split_at(length);
+                let fits = match *name {
+                    "ENTITY_TYPE" => is_entity_type(value),
+                    "N" => value.bytes().all(|b| b.is_ascii_digit()),
+                    _ => value
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                };
+                fits && rest(others, after, is_entity_type)
+            }),
+        }
+    }
+    rest(&pieces(pattern), hook, is_entity_type)
+}
+
 /// Every module, profile and theme on disk, outside test modules.
 #[derive(Default)]
 pub(crate) struct Extensions {
@@ -232,6 +466,8 @@ pub(crate) struct Hooks {
     extensions: Extensions,
     implementations: HashMap<String, Vec<HookImplementation>>,
     docs: HashMap<String, Vec<HookDoc>>,
+    /// Documented names with placeholders, sorted.
+    documented_patterns: Vec<String>,
 }
 
 impl Hooks {
@@ -297,8 +533,15 @@ impl Hooks {
         for found in docs.values_mut() {
             found.sort_by(|a, b| (&a.path, a.start).cmp(&(&b.path, b.start)));
         }
+        let mut documented_patterns: Vec<String> = docs
+            .keys()
+            .filter(|name| name.bytes().any(|b| b.is_ascii_uppercase()))
+            .cloned()
+            .collect();
+        documented_patterns.sort();
         self.implementations = implementations;
         self.docs = docs;
+        self.documented_patterns = documented_patterns;
     }
 
     /// From a hook name or alter type at position `argument` of an invoking call: the
@@ -310,6 +553,7 @@ impl Hooks {
         strings: &[Option<String>],
         argument: usize,
         value: &str,
+        is_entity_type: &dyn Fn(&str) -> bool,
     ) -> Vec<(Location, String)> {
         let Some((invoker, themes)) = invoker_of(index, targets) else {
             return Vec::new();
@@ -334,7 +578,7 @@ impl Hooks {
                 (location, i.name.clone())
             })
             .collect();
-        found.extend(self.doc_targets(&hook));
+        found.extend(self.doc_targets(&hook, is_entity_type));
         found
     }
 
@@ -344,6 +588,7 @@ impl Hooks {
         &self,
         index: &Index,
         declaration: &FrameworkDeclaration<'_>,
+        is_entity_type: &dyn Fn(&str) -> bool,
     ) -> Vec<(Location, String)> {
         let implemented = self.declared_hooks(index, declaration);
         if implemented.is_empty() {
@@ -352,7 +597,11 @@ impl Hooks {
         let calls = index.calls_named(&invoking_methods());
         let mut sites: Vec<&FoundCall> = calls
             .iter()
-            .filter(|call| implemented.iter().any(|i| invokes(index, call, i)))
+            .filter(|call| {
+                implemented
+                    .iter()
+                    .any(|i| invokes(index, call, i) || computes(index, call, i, is_entity_type))
+            })
             .collect();
         sites.sort_by(|a, b| {
             (
@@ -377,7 +626,7 @@ impl Hooks {
             })
             .collect();
         for implementation in &implemented {
-            for doc in self.doc_targets(&implementation.hook) {
+            for doc in self.doc_targets(&implementation.hook, is_entity_type) {
                 if !found.contains(&doc) {
                     found.push(doc);
                 }
@@ -433,9 +682,24 @@ impl Hooks {
         }
     }
 
-    fn doc_targets(&self, hook: &str) -> Vec<(Location, String)> {
-        self.docs(hook)
-            .iter()
+    /// The documentation of `hook`: its own, or that of every documented pattern it
+    /// matches.
+    fn doc_targets(
+        &self,
+        hook: &str,
+        is_entity_type: &dyn Fn(&str) -> bool,
+    ) -> Vec<(Location, String)> {
+        let exact = self.docs(hook);
+        let docs: Vec<&HookDoc> = if exact.is_empty() {
+            self.documented_patterns
+                .iter()
+                .filter(|pattern| matches_pattern(pattern, hook, is_entity_type))
+                .flat_map(|pattern| self.docs(pattern))
+                .collect()
+        } else {
+            exact.iter().collect()
+        };
+        docs.into_iter()
             .map(|doc| {
                 let location = Location {
                     path: doc.path.clone(),
@@ -617,6 +881,28 @@ fn invokes(index: &Index, call: &FoundCall, implementation: &HookImplementation)
         .into_iter()
         .chain(listed)
         .any(|name| invoked_hook(invoker, &name) == implementation.hook)
+}
+
+/// Whether `call` is an invoking call of the implementation's group inside a method
+/// the table lists for a pattern the implementation's hook matches.
+fn computes(
+    index: &Index,
+    call: &FoundCall,
+    implementation: &HookImplementation,
+    is_entity_type: &dyn Fn(&str) -> bool,
+) -> bool {
+    let Some(caller) = call.caller.as_deref() else {
+        return false;
+    };
+    let in_group = invoker_of(index, &call.targets)
+        .is_some_and(|(_, themes)| themes == implementation.kind.is_theme());
+    in_group
+        && COMPUTED.iter().any(|(patterns, sites)| {
+            sites.iter().any(|site| site.eq_ignore_ascii_case(caller))
+                && patterns
+                    .iter()
+                    .any(|pattern| matches_pattern(pattern, &implementation.hook, is_entity_type))
+        })
 }
 
 /// Whether a file of an extension, at `relative` to its directory, can hold

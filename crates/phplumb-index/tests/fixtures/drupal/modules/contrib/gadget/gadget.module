@@ -12,6 +12,10 @@ function /*@target:gadget_ping*//*@cursor:gadget_ping*/gadget_ping()
 {
 }
 
+function gadget_gadget_widget_slider_alter(&$widget)
+{
+}
+
 #[ProceduralHookScanStop]
 function gadget_stop()
 {

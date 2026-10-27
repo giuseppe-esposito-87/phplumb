@@ -158,8 +158,15 @@ impl Framework for Drupal {
                 .map(|location| (location, value.to_string()))
                 .collect();
         }
-        self.hooks
-            .invocation_targets(index, call.targets, call.strings, argument, value)
+        let is_entity_type = |id: &str| !self.entities.get(id).is_empty();
+        self.hooks.invocation_targets(
+            index,
+            call.targets,
+            call.strings,
+            argument,
+            value,
+            &is_entity_type,
+        )
     }
 
     /// A hook implementation leads to the invocations of its hook and to the hook's
@@ -169,7 +176,9 @@ impl Framework for Drupal {
         index: &Index,
         declaration: &FrameworkDeclaration<'_>,
     ) -> Vec<(Location, String)> {
-        self.hooks.implementation_targets(index, declaration)
+        let is_entity_type = |id: &str| !self.entities.get(id).is_empty();
+        self.hooks
+            .implementation_targets(index, declaration, &is_entity_type)
     }
 
     fn as_any(&self) -> &dyn Any {

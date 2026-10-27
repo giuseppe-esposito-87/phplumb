@@ -625,3 +625,14 @@ fn theme_manager_invocations_reach_themes_only() {
         vec!["modules/custom/mymodule/mymodule.module: mymodule_thing_info_alter"]
     );
 }
+
+#[test]
+fn documented_patterns_outside_the_table_are_the_only_targets() {
+    assert_eq!(
+        definitions_in(
+            "modules/contrib/gadget/gadget.module",
+            "function gadget_gadget_widget_sl"
+        ),
+        vec!["modules/contrib/gadget/gadget.api.php: hook_gadget_widget_TYPE_alter"]
+    );
+}

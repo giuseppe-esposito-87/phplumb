@@ -41,3 +41,7 @@ function /*@cursor:thing_info_module*/mymodule_thing_info_alter(&$info)
 function /*@cursor:thing_data*/mymodule_thing_data_alter(&$data)
 {
 }
+
+function /*@cursor:form_id*/mymodule_form_user_login_form_alter(&$form, $form_state)
+{
+}

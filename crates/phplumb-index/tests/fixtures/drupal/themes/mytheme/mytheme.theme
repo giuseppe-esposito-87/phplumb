@@ -7,3 +7,7 @@ function mytheme_preprocess_node(&$variables)
 function /*@cursor:thing_info_theme*/mytheme_thing_info_alter(&$info)
 {
 }
+
+function /*@cursor:theme_form*/mytheme_form_alter(&$form)
+{
+}

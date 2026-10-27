@@ -19,4 +19,19 @@ class MymoduleHooks
     public function gadgetCron(): void
     {
     }
+
+    #[Hook('thing_presave')]
+    public function /*@cursor:presave*/thingPresave(): void
+    {
+    }
+
+    #[Hook('entity_presave')]
+    public function /*@cursor:entity_presave*/entityPresave(): void
+    {
+    }
+
+    #[Hook('report_presave')]
+    public function /*@target:report*//*@cursor:report*/reportPresave(): void
+    {
+    }
 }
