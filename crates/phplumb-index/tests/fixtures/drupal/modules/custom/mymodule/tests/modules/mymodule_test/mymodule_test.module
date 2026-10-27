@@ -1,0 +1,5 @@
+<?php
+
+function mymodule_test_cron()
+{
+}

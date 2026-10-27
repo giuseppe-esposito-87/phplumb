@@ -1,6 +1,7 @@
-//! Drupal: services from `*.services.yml`.
+//! Drupal: services from `*.services.yml`, entity types, and hooks.
 
 mod entities;
+mod hooks;
 mod services;
 
 use std::any::Any;
@@ -13,6 +14,8 @@ use crate::phpdoc::TypeExpr;
 
 pub use entities::EntityType;
 use entities::EntityTypes;
+use hooks::Hooks;
+pub use hooks::{ExtensionKind, HookDoc, HookImplementation};
 pub use services::ServiceDefinition;
 use services::Services;
 
@@ -20,9 +23,20 @@ use services::Services;
 pub struct Drupal {
     services: Services,
     entities: EntityTypes,
+    hooks: Hooks,
 }
 
 impl Drupal {
+    /// Every implementation of `hook`, sorted by path and offset.
+    pub fn hook_implementations(&self, hook: &str) -> &[HookImplementation] {
+        self.hooks.implementations(hook)
+    }
+
+    /// Every `hook_{name}` documentation function.
+    pub fn hook_docs(&self, name: &str) -> &[HookDoc] {
+        self.hooks.docs(name)
+    }
+
     /// Every declaration of the entity type `id`, outside test modules.
     pub fn entity_types(&self, id: &str) -> &[EntityType] {
         self.entities.get(id)
@@ -64,11 +78,13 @@ impl Framework for Drupal {
     fn rebuild(&mut self, index: &Index) {
         self.services = Services::read(index.filter());
         self.entities = EntityTypes::read(index);
+        self.hooks = Hooks::read(index);
     }
 
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
         self.services.update(index.filter(), changed, removed);
         self.entities = EntityTypes::read(index);
+        self.hooks.update(index, changed, removed);
     }
 
     /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes;
@@ -246,7 +262,7 @@ fn service_call<'a>(index: &Index, call: &'a FrameworkCall<'_>) -> Option<&'a st
 }
 
 /// Whether `class` is, extends or implements one of `ancestors`.
-fn is_a(index: &Index, class: &str, ancestors: &[&str]) -> bool {
+pub(super) fn is_a(index: &Index, class: &str, ancestors: &[&str]) -> bool {
     let mut seen: HashSet<String> = HashSet::new();
     let mut pending = vec![class.to_string()];
     while let Some(next) = pending.pop() {

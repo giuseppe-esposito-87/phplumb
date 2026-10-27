@@ -476,3 +476,107 @@ fn entity_type_ids_point_at_the_id_key() {
         "{before:?}"
     );
 }
+
+fn implementations(index: &Index, root: &Path, hook: &str) -> Vec<String> {
+    index
+        .drupal()
+        .unwrap()
+        .hook_implementations(hook)
+        .iter()
+        .map(|i| {
+            format!(
+                "{} {} {}",
+                i.path.strip_prefix(root).unwrap().display(),
+                i.name,
+                i.extension
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn hook_implementations_follow_drupal_discovery() {
+    let (root, index) = drupal_fixture();
+
+    assert_eq!(
+        implementations(&index, &root, "cron"),
+        vec![
+            "modules/custom/mymodule/mymodule.module mymodule_cron mymodule",
+            "modules/custom/mymodule/src/Hook/MymoduleHooks.php cron mymodule",
+            "modules/custom/mymodule/src/Hook/MymoduleHooks.php tick mymodule",
+            "modules/custom/mymodule/src/Hook/MymoduleHooks.php gadgetCron gadget",
+            "modules/custom/mymodule_extra/mymodule_extra.module mymodule_extra_cron mymodule_extra",
+        ]
+    );
+    assert_eq!(
+        implementations(&index, &root, "thing_info"),
+        vec!["modules/custom/mymodule/src/Hook/ThingInfo.php __invoke mymodule"]
+    );
+    assert!(implementations(&index, &root, "stop").is_empty());
+    assert!(implementations(&index, &root, "page_top").is_empty());
+    assert!(implementations(&index, &root, "update_10001").is_empty());
+    assert!(implementations(&index, &root, "install").is_empty());
+}
+
+#[test]
+fn theme_hooks_belong_to_the_theme() {
+    use phplumb_index::frameworks::drupal::ExtensionKind;
+    let (_root, index) = drupal_fixture();
+
+    let found = index
+        .drupal()
+        .unwrap()
+        .hook_implementations("preprocess_node");
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        (
+            found[0].name.as_str(),
+            found[0].extension.as_str(),
+            found[0].kind
+        ),
+        ("mytheme_preprocess_node", "mytheme", ExtensionKind::Theme)
+    );
+}
+
+#[test]
+fn hook_docs_are_read_from_api_files() {
+    let (root, index) = drupal_fixture();
+
+    let docs: Vec<String> = index
+        .drupal()
+        .unwrap()
+        .hook_docs("cron")
+        .iter()
+        .map(|d| {
+            format!(
+                "{} {}",
+                d.path.strip_prefix(&root).unwrap().display(),
+                d.name
+            )
+        })
+        .collect();
+
+    assert_eq!(docs, vec!["core/core.api.php cron"]);
+}
+
+#[test]
+fn hook_implementations_follow_updates() {
+    let (_dir, root, mut index) = temp_drupal(&[
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        ("modules/custom/m/m.module", "<?php\nfunction m_cron() {}\n"),
+    ]);
+    assert!(implementations(&index, &root, "mail").is_empty());
+
+    write(
+        &root,
+        "modules/custom/m/m.module",
+        "<?php\nfunction m_cron() {}\nfunction m_mail() {}\n",
+    );
+    index.update(&[root.join("modules/custom/m/m.module")], &[]);
+
+    assert_eq!(
+        implementations(&index, &root, "mail"),
+        vec!["modules/custom/m/m.module m_mail m"]
+    );
+}

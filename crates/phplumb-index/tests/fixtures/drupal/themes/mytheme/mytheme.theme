@@ -1,0 +1,5 @@
+<?php
+
+function mytheme_preprocess_node(&$variables)
+{
+}

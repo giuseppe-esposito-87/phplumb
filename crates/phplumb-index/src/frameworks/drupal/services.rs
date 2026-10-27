@@ -37,7 +37,7 @@ impl Services {
     /// Every services file below the filter's root.
     pub(crate) fn read(filter: &PathFilter) -> Services {
         let mut services = Services::default();
-        for path in services_files(filter, filter.root()) {
+        for path in drupal_files(filter, filter.root(), SERVICES) {
             services.by_file.insert(path.clone(), parse_file(&path));
         }
         services.reindex();
@@ -54,11 +54,11 @@ impl Services {
         }
         for path in changed {
             let files = if path.is_dir() {
-                services_files(filter, path)
+                drupal_files(filter, path, SERVICES)
             } else {
                 chosen_path(filter.root(), path)
                     .map(|(_, chosen)| chosen)
-                    .filter(|chosen| is_services_file(filter, chosen) && chosen.is_file())
+                    .filter(|chosen| is_drupal_file(filter, chosen, SERVICES) && chosen.is_file())
                     .into_iter()
                     .collect()
             };
@@ -149,12 +149,15 @@ impl Services {
     }
 }
 
-/// Whether `path` is a services file the registry reads.
-fn is_services_file(filter: &PathFilter, path: &Path) -> bool {
+const SERVICES: &str = ".services.yml";
+
+/// Whether `path` is a file named `*{suffix}` that the Drupal registries read:
+/// outside `vendor`, test modules and hidden or skipped directories.
+pub(super) fn is_drupal_file(filter: &PathFilter, path: &Path, suffix: &str) -> bool {
     let name_matches = path
         .file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n.ends_with(".services.yml"));
+        .is_some_and(|n| n.ends_with(suffix));
     let Ok(relative) = path.strip_prefix(filter.root()) else {
         return false;
     };
@@ -167,9 +170,10 @@ fn is_services_file(filter: &PathFilter, path: &Path) -> bool {
         })
 }
 
-/// Services files below `start`, a directory under the filter's root, each once
-/// under the path PHP discovery would choose for it.
-fn services_files(filter: &PathFilter, start: &Path) -> Vec<PathBuf> {
+/// The files named `*{suffix}` that the Drupal registries read below `start`, a
+/// directory under the filter's root, each once under the path PHP discovery would
+/// choose for it.
+pub(super) fn drupal_files(filter: &PathFilter, start: &Path, suffix: &str) -> Vec<PathBuf> {
     if !filter.accepts_dir(start) {
         return Vec::new();
     }
@@ -198,7 +202,7 @@ fn services_files(filter: &PathFilter, start: &Path) -> Vec<PathBuf> {
         let Some((canonical, chosen)) = chosen_path(filter.root(), entry.path()) else {
             continue;
         };
-        if is_services_file(filter, &chosen) {
+        if is_drupal_file(filter, &chosen, suffix) {
             by_canonical.entry(canonical).or_insert(chosen);
         }
     }

@@ -1,0 +1,18 @@
+<?php
+
+use Drupal\Core\Hook\Attribute\LegacyHook;
+use Drupal\Core\Hook\Attribute\ProceduralHookScanStop;
+
+#[LegacyHook]
+function gadget_cron()
+{
+}
+
+#[ProceduralHookScanStop]
+function gadget_stop()
+{
+}
+
+function gadget_page_top()
+{
+}

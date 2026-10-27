@@ -13,3 +13,19 @@ function mymodule_examples(ContainerInterface $container, Container $drupal_cont
     \Drupal::service('unknown.service')->/*@cursor:none*/greet();
     \Drupal::service('shared.id');
 }
+
+function mymodule_cron()
+{
+}
+
+function mymodule_helper()
+{
+}
+
+function mymodule_update_10001()
+{
+}
+
+function mymodule_install()
+{
+}
