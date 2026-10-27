@@ -23,5 +23,6 @@ class Entities
         $etm->getStorage('gadget')->load(1)->/*@cursor:gadgetName*/gadgetName();
         $etm->getStorage('setting')->/*@cursor:configPrefix*/configPrefix();
         $plain->load(1)->/*@cursor:id*/id();
+        $etm->getStorage('dual');
     }
 }

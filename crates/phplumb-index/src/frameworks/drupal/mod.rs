@@ -105,7 +105,8 @@ impl Framework for Drupal {
         })
     }
 
-    /// The id of a service call leads to every definition of the service.
+    /// The id of a service call leads to every definition of the service; the id of
+    /// `getStorage()` to the `id` of every declaration of the entity type.
     fn string_targets(
         &self,
         index: &Index,
@@ -113,18 +114,30 @@ impl Framework for Drupal {
         argument: usize,
         value: &str,
     ) -> Vec<Location> {
-        if argument != 0 || service_call(index, call) != Some(value) {
+        if argument != 0 {
             return Vec::new();
         }
-        self.services
-            .definitions(value)
-            .iter()
-            .map(|definition| Location {
-                path: definition.path.clone(),
-                start: definition.start,
-                end: definition.end,
-            })
-            .collect()
+        if service_call(index, call) == Some(value) {
+            return self
+                .services
+                .definitions(value)
+                .iter()
+                .map(|definition| Location {
+                    path: definition.path.clone(),
+                    start: definition.start,
+                    end: definition.end,
+                })
+                .collect();
+        }
+        if storage_call(index, call) == Some(value) {
+            return self
+                .entities
+                .get(value)
+                .iter()
+                .filter_map(|entity| entity.id_location())
+                .collect();
+        }
+        Vec::new()
     }
 
     fn as_any(&self) -> &dyn Any {

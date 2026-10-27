@@ -186,4 +186,15 @@ suite("definition", () => {
     assert.strictEqual(targets.length, 1, JSON.stringify(targets));
     assert.ok(uriOf(targets[0]).path.endsWith("basic.services.yml"), uriOf(targets[0]).toString());
   });
+
+  test("Cmd+click on an entity type id opens its declaration", async () => {
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+    const document = await open("src/Storage.php");
+    const position = document.positionAt(document.getText().indexOf("basic_thing") + 2);
+
+    const targets = await vscode.commands.executeCommand<Target[]>("vscode.executeDefinitionProvider", document.uri, position);
+
+    assert.strictEqual(targets.length, 1, JSON.stringify(targets));
+    assert.ok(uriOf(targets[0]).path.endsWith("src/BasicThing.php"), uriOf(targets[0]).toString());
+  });
 });

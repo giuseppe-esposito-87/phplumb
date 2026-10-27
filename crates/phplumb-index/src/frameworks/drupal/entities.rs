@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::index::Index;
+use crate::index::{Index, Location};
 use crate::metadata::Metadata;
 
 /// One declaration of an entity type.
@@ -29,6 +29,29 @@ const KINDS: [(&str, Option<&str>); 3] = [
     ),
     ("EntityType", None),
 ];
+
+impl EntityType {
+    /// Where the id is written in the declaration: inside the first quoted string
+    /// that holds exactly the id.
+    pub fn id_location(&self) -> Option<Location> {
+        let text = std::fs::read(&self.path).ok()?;
+        let (start, end) = (self.span.0 as usize, self.span.1 as usize);
+        let declaration = text.get(start..end)?;
+        let id = self.id.as_bytes();
+        for &quote in b"'\"" {
+            let needle: Vec<u8> = [&[quote][..], id, &[quote][..]].concat();
+            if let Some(at) = declaration.windows(needle.len()).position(|w| w == needle) {
+                let id_start = (start + at + 1) as u32;
+                return Some(Location {
+                    path: self.path.clone(),
+                    start: id_start,
+                    end: id_start + id.len() as u32,
+                });
+            }
+        }
+        None
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct EntityTypes {

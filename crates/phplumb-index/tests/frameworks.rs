@@ -155,8 +155,13 @@ fn services_in_tests_and_vendor_are_ignored() {
 /// Definitions of the cursor right after `needle` in the fixture's module file,
 /// as `relative path: text at the location`.
 fn definitions_after(needle: &str) -> Vec<String> {
+    definitions_in("modules/custom/mymodule/mymodule.module", needle)
+}
+
+/// Like `definitions_after`, in the fixture file `file`.
+fn definitions_in(file: &str, needle: &str) -> Vec<String> {
     let (root, mut index) = drupal_fixture();
-    let path = root.join("modules/custom/mymodule/mymodule.module");
+    let path = root.join(file);
     let source = fs::read(&path).unwrap();
     let text = String::from_utf8(source.clone()).unwrap();
     let offset = text.find(needle).unwrap() + needle.len();
@@ -398,5 +403,34 @@ fn entity_types_in_test_modules_are_ignored() {
             .unwrap()
             .entity_types("test_thing")
             .is_empty()
+    );
+}
+
+#[test]
+fn entity_type_ids_lead_to_their_declarations() {
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/src/Entities.php",
+            "getStorage('thi"
+        ),
+        vec!["modules/custom/mymodule/src/Entity/Thing.php: thing"]
+    );
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/src/Entities.php",
+            "getStorage('gad"
+        ),
+        vec!["modules/contrib/gadget/src/Entity/Gadget.php: gadget"]
+    );
+}
+
+#[test]
+fn entity_type_ids_declared_twice_lead_to_both() {
+    assert_eq!(
+        definitions_in("modules/custom/mymodule/src/Entities.php", "getStorage('du"),
+        vec![
+            "modules/contrib/override/src/Entity/DualOverride.php: dual",
+            "modules/custom/mymodule/src/Entity/DualCustom.php: dual",
+        ]
     );
 }
