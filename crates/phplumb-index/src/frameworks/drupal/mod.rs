@@ -1,5 +1,7 @@
 //! Drupal: services from `*.services.yml`.
 
+mod services;
+
 use std::any::Any;
 use std::path::{Path, PathBuf};
 
@@ -8,8 +10,27 @@ use crate::frameworks::{Framework, FrameworkCall};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 
+pub use services::ServiceDefinition;
+use services::Services;
+
 #[derive(Default)]
-pub struct Drupal {}
+pub struct Drupal {
+    services: Services,
+}
+
+impl Drupal {
+    /// Every definition of `id` on disk.
+    pub fn services(&self, id: &str) -> &[ServiceDefinition] {
+        self.services.definitions(id)
+    }
+
+    /// The classes a service id can give, sorted: through aliases, parents, an id
+    /// that names an indexed class, and every service decorating it. Empty when
+    /// unknown.
+    pub fn service_classes(&self, index: &Index, id: &str) -> Vec<String> {
+        self.services.classes(index, id)
+    }
+}
 
 impl Framework for Drupal {
     fn name(&self) -> &'static str {
@@ -31,9 +52,13 @@ impl Framework for Drupal {
         })
     }
 
-    fn rebuild(&mut self, _filter: &PathFilter) {}
+    fn rebuild(&mut self, filter: &PathFilter) {
+        self.services = Services::read(filter);
+    }
 
-    fn update(&mut self, _filter: &PathFilter, _changed: &[PathBuf], _removed: &[PathBuf]) {}
+    fn update(&mut self, filter: &PathFilter, changed: &[PathBuf], removed: &[PathBuf]) {
+        self.services.update(filter, changed, removed);
+    }
 
     fn call_type(&self, _index: &Index, _call: &FrameworkCall<'_>) -> Option<TypeExpr> {
         None

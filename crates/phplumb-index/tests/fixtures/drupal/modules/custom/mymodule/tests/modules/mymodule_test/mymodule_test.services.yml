@@ -1,0 +1,3 @@
+services:
+  test.only:
+    class: Drupal\mymodule_test\TestOnly

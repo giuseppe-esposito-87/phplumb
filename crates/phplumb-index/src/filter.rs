@@ -41,6 +41,11 @@ impl PathFilter {
     }
 
     /// The canonicalized root.
+    /// Whether `relative`, a path relative to the root, matches an exclusion.
+    pub(crate) fn excludes(&self, relative: &Path) -> bool {
+        self.exclude.is_match(relative)
+    }
+
     /// Whether the user excluded any paths from the index.
     pub fn has_exclusions(&self) -> bool {
         !self.exclude_patterns.is_empty()

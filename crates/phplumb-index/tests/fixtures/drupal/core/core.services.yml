@@ -1,0 +1,25 @@
+parameters:
+  some.parameter: true
+services:
+  _defaults:
+    autowire: true
+  entity_type.manager:
+    class: Drupal\Core\Entity\EntityTypeManager
+  entity_type.manager.alias: '@entity_type.manager'
+  logger.factory:
+    alias: logger.factory.real
+  logger.factory.real:
+    class: Drupal\Core\Logger\LoggerChannelFactory
+  cycle.a: '@cycle.b'
+  cycle.b:
+    alias: cycle.a
+  base.service:
+    abstract: true
+    class: Drupal\Core\Base
+  child.service:
+    parent: base.service
+  Drupal\Core\Named: ~
+  Drupal\Core\Autowired:
+    autowire: true
+  shared.id:
+    class: Drupal\Core\SharedCore

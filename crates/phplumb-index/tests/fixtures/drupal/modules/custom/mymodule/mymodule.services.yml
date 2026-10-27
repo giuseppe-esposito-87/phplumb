@@ -1,0 +1,9 @@
+services:
+  mymodule.greeter:
+    class: Drupal\mymodule\Greeter
+    arguments: ['@entity_type.manager']
+  mymodule.greeter.decorator:
+    class: Drupal\mymodule\GreeterDecorator
+    decorates: mymodule.greeter
+  shared.id:
+    class: Drupal\mymodule\SharedCustom

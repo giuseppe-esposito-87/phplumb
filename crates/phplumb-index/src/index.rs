@@ -11,6 +11,7 @@ use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
+use crate::frameworks::drupal::Drupal;
 use crate::frameworks::{self, Framework};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Receiver};
@@ -253,6 +254,13 @@ impl Index {
         });
         found.dedup();
         found
+    }
+
+    /// The Drupal module, when it is active.
+    pub fn drupal(&self) -> Option<&Drupal> {
+        self.frameworks
+            .iter()
+            .find_map(|f| f.as_any().downcast_ref::<Drupal>())
     }
 
     /// The names of the framework modules active for this project.

@@ -1,0 +1,3 @@
+services:
+  vendor.only:
+    class: Acme\VendorOnly
