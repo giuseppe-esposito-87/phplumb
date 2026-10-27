@@ -303,3 +303,24 @@ class Child extends Base {
         vec!["Private.php:3"]
     );
 }
+
+#[test]
+fn php_files_with_other_extensions_keep_their_navigation() {
+    let (_dir, root, mut index) = index(&[
+        ("Ctrl.php", "class Ctrl { public function run() {} }\n"),
+        ("Page.phtml", "(new Ctrl())->run();\n"),
+    ]);
+    let path = root.join("Page.phtml");
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8(source.clone())
+        .unwrap()
+        .find("new Ct")
+        .unwrap()
+        + 5;
+
+    let found = index.definition(&path, &source, offset as u32);
+
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, root.join("Ctrl.php"));
+    assert!(index.hover(&path, &source, offset as u32).is_some());
+}

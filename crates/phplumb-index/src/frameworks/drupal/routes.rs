@@ -16,11 +16,12 @@ const ROUTING: &str = ".routing.yml";
 
 /// Methods taking a route name, with the class declaring them and the position of
 /// the name.
-const ROUTE_CALLS: [(&str, &str, usize); 6] = [
+const ROUTE_CALLS: [(&str, &str, usize); 7] = [
     ("Drupal\\Core\\Url", "fromRoute", 0),
     ("Drupal\\Core\\Link", "createFromRoute", 1),
     ("Drupal\\Core\\Form\\FormStateInterface", "setRedirect", 0),
     ("Drupal\\Core\\Controller\\ControllerBase", "redirect", 0),
+    ("Drupal\\Core\\Form\\FormBase", "redirect", 0),
     (
         "Drupal\\Core\\Routing\\UrlGeneratorInterface",
         "generateFromRoute",

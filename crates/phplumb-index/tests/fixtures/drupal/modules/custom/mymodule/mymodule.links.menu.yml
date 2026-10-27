@@ -2,3 +2,5 @@ mymodule.page_link:
   title: 'Page'
   route_name: mymodule.page
   class: Drupal\mymodule\Plugin\Menu\PageLink
+mymodule.derived_links:
+  deriver: 'Drupal\mymodule\Plugin\Derivative\MenuDeriver'

@@ -17,6 +17,10 @@ mymodule.service_page:
     _controller: 'mymodule.page_controller:page'
 shared.route:
   path: '/shared'
+mymodule.invokable:
+  path: '/invokable'
+  defaults:
+    _controller: '\Drupal\mymodule\Controller\Invokable'
 route_callbacks:
   - '\Drupal\mymodule\Routing\Routes::routes'
 mymodule.missing:

@@ -13,11 +13,12 @@ pub const PHP_EXTENSIONS: &[&str] = &[
     "php", "module", "inc", "install", "theme", "profile", "engine",
 ];
 
-/// Whether `path` has one of the PHP extensions.
-pub fn is_php(path: &Path) -> bool {
+/// Whether `path` is a YAML file, which the engine does not read as PHP: only the
+/// frameworks answer definitions in it.
+pub fn is_yaml(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| PHP_EXTENSIONS.iter().any(|p| e.eq_ignore_ascii_case(p)))
+        .is_some_and(|e| e.eq_ignore_ascii_case("yml") || e.eq_ignore_ascii_case("yaml"))
 }
 
 /// Directories never indexed, whatever the exclusions say.

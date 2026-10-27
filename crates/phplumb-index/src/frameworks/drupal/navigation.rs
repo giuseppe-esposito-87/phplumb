@@ -131,9 +131,11 @@ fn routing(
                 Some((service, method)) => {
                     method_targets(index, &own_classes(drupal, index, service), method)
                 }
-                None => Vec::new(),
+                // An invokable controller class.
+                None => class_targets(index, value),
             },
         },
+        [Step::Key("route_callbacks"), Step::Index(_)] => callable_targets(index, value),
         [Step::Key(_), Step::Key("defaults"), Step::Key("_form")] => class_targets(index, value),
         _ => Vec::new(),
     }
@@ -148,7 +150,7 @@ fn links(
     match steps {
         [Step::Key(_), Step::Key("route_name" | "base_route")]
         | [Step::Key(_), Step::Key("appears_on"), Step::Index(_)] => drupal.routes.targets(value),
-        [Step::Key(_), Step::Key("class")] => class_targets(index, value),
+        [Step::Key(_), Step::Key("class" | "deriver")] => class_targets(index, value),
         _ => Vec::new(),
     }
 }

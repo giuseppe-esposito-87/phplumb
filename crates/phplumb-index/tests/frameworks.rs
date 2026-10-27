@@ -1324,3 +1324,33 @@ fn links_files_lead_to_routes_and_classes() {
         settings
     );
 }
+
+#[test]
+fn form_redirects_lead_to_their_route() {
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/src/Form/SettingsForm.php",
+            "redirect('mymodule.pa"
+        ),
+        vec![format!("{ROUTING}: mymodule.page")]
+    );
+}
+
+#[test]
+fn route_callbacks_invokable_controllers_and_derivers_lead_to_their_code() {
+    assert_eq!(
+        definitions_in(ROUTING, "Routes::rou"),
+        vec!["modules/custom/mymodule/src/Routing/Routes.php: routes"]
+    );
+    assert_eq!(
+        definitions_in(ROUTING, "Controller\\Invokab"),
+        vec!["modules/custom/mymodule/src/Controller/Invokable.php: Invokable"]
+    );
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/mymodule.links.menu.yml",
+            "Derivative\\MenuDer"
+        ),
+        vec!["modules/custom/mymodule/src/Plugin/Derivative/MenuDeriver.php: MenuDeriver"]
+    );
+}
