@@ -36,6 +36,26 @@ fn drupal_is_detected_from_composer_lock() {
 }
 
 #[test]
+fn drupal_is_detected_from_a_composer_lock_below_the_root() {
+    let (_dir, root) = project(None);
+    fs::create_dir_all(root.join("src/drupal")).unwrap();
+    fs::write(root.join("src/drupal/composer.lock"), DRUPAL_LOCK).unwrap();
+
+    assert_eq!(active(&root, Activation::Auto), vec!["drupal"]);
+}
+
+#[test]
+fn drupal_ignores_composer_locks_in_vendor_hidden_or_deep_directories() {
+    let (_dir, root) = project(None);
+    for dir in ["vendor/acme/site", ".cache", "a/b/c/d"] {
+        fs::create_dir_all(root.join(dir)).unwrap();
+        fs::write(root.join(dir).join("composer.lock"), DRUPAL_LOCK).unwrap();
+    }
+
+    assert_eq!(active(&root, Activation::Auto), Vec::<&str>::new());
+}
+
+#[test]
 fn drupal_stays_off_without_drupal_core() {
     let (_dir, other) = project(Some(OTHER_LOCK));
     let (_dir2, none) = project(None);

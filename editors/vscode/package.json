@@ -48,7 +48,7 @@
             "off"
           ],
           "default": "auto",
-          "description": "Drupal support, such as types for services. auto turns it on when composer.lock requires drupal/core."
+          "description": "Drupal support, such as types for services. auto turns it on when a composer.lock in the workspace or up to three directories below it requires drupal/core."
         },
         "phplumb.trace.server": {
           "type": "string",
