@@ -21,15 +21,16 @@ use mago_database::file::FileId;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Access, AnonymousClass, ArrayElement, ArrowFunction, Assignment, BinaryOperator, Call,
-    ClassLikeMemberSelector, Closure, DoWhile, Expression, For, Foreach, ForeachTarget, Function,
-    FunctionLikeParameterList, Global, Hint, If, IfBody, Literal, Method, MethodCall,
-    NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem,
-    Switch, TriviaKind, Try, TryCatchClause, Variable, While,
+    Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
+    BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector, Closure, DoWhile,
+    Expression, For, Foreach, ForeachTarget, Function, FunctionLikeParameterList, Global, Hint, If,
+    IfBody, Literal, Method, MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program,
+    PropertyAccess, Static, StaticItem, Switch, TriviaKind, Try, TryCatchClause, Variable, While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
 
+use crate::frameworks::{CallTarget, FrameworkCall};
 use crate::index::Index;
 use crate::phpdoc::{TypeExpr, parse_docblock, parse_type};
 use crate::summary::{FileSummary, MemberKind, NameKind, NameRef, SymbolKind, pick_type};
@@ -780,18 +781,20 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                 self.expr(conditional.then.unwrap_or(conditional.condition), at, depth),
                 self.expr(conditional.r#else, at, depth),
             ]),
-            Expression::Call(Call::Method(call)) => self.member_on(
-                &self.expr(call.object, at, depth),
-                &call.method,
-                MemberKind::Method,
-                None,
-            ),
-            Expression::Call(Call::NullSafeMethod(call)) => self.member_on(
-                &self.expr(call.object, at, depth),
-                &call.method,
-                MemberKind::Method,
-                None,
-            ),
+            Expression::Call(Call::Method(call)) => {
+                let receiver = self.expr(call.object, at, depth);
+                self.framework_type(&receiver, &call.method, &call.argument_list, at)
+                    .unwrap_or_else(|| {
+                        self.member_on(&receiver, &call.method, MemberKind::Method, None)
+                    })
+            }
+            Expression::Call(Call::NullSafeMethod(call)) => {
+                let receiver = self.expr(call.object, at, depth);
+                self.framework_type(&receiver, &call.method, &call.argument_list, at)
+                    .unwrap_or_else(|| {
+                        self.member_on(&receiver, &call.method, MemberKind::Method, None)
+                    })
+            }
             Expression::Call(Call::StaticMethod(call)) => {
                 let Some(class) = self.class_of(call.class, at) else {
                     return TypeExpr::Other;
@@ -804,12 +807,16 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     }
                     _ => None,
                 };
-                self.member_on(
-                    &TypeExpr::Named(class),
-                    &call.method,
-                    MemberKind::Method,
-                    forwarded.as_deref(),
-                )
+                let receiver = TypeExpr::Named(class);
+                self.framework_type(&receiver, &call.method, &call.argument_list, at)
+                    .unwrap_or_else(|| {
+                        self.member_on(
+                            &receiver,
+                            &call.method,
+                            MemberKind::Method,
+                            forwarded.as_deref(),
+                        )
+                    })
             }
             Expression::Call(Call::Function(call)) => self.function_returns(call.function),
             Expression::Access(Access::Property(access)) => self.member_on(
@@ -836,6 +843,73 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                 }
             }
             _ => TypeExpr::Other,
+        }
+    }
+
+    /// The type the active frameworks give a method call on `receiver`, when one of
+    /// them knows better than the method's declaration.
+    fn framework_type(
+        &self,
+        receiver: &TypeExpr,
+        selector: &ClassLikeMemberSelector<'_>,
+        arguments: &ArgumentList<'_>,
+        at: u32,
+    ) -> Option<TypeExpr> {
+        if self.index.frameworks().is_empty() {
+            return None;
+        }
+        let ClassLikeMemberSelector::Identifier(name) = selector else {
+            return None;
+        };
+        let name = String::from_utf8_lossy(name.value);
+        let targets: Vec<CallTarget> = class_names(receiver)
+            .iter()
+            .flat_map(|class| self.index.find_member(class, MemberKind::Method, &name))
+            .map(|(declaring, member)| CallTarget::Method {
+                class: declaring.declaration.fqn.clone(),
+                name: member.name.clone(),
+            })
+            .collect();
+        if targets.is_empty() {
+            return None;
+        }
+        let strings = self.string_arguments(arguments, at);
+        let call = FrameworkCall {
+            targets: &targets,
+            strings: &strings,
+        };
+        self.index
+            .frameworks()
+            .iter()
+            .find_map(|framework| framework.call_type(self.index, &call))
+    }
+
+    /// Positional arguments that are string literals or `X::class`, by position.
+    fn string_arguments(&self, arguments: &ArgumentList<'_>, at: u32) -> Vec<Option<String>> {
+        arguments
+            .arguments
+            .iter()
+            .map(|argument| match argument {
+                Argument::Positional(argument) => self.string_value(argument.value, at),
+                Argument::Named(_) => None,
+            })
+            .collect()
+    }
+
+    fn string_value(&self, expression: &Expression<'_>, at: u32) -> Option<String> {
+        match expression {
+            Expression::Literal(Literal::String(literal)) => literal
+                .value
+                .map(|v| String::from_utf8_lossy(v).into_owned()),
+            Expression::Access(Access::ClassConstant(access)) => match &access.constant {
+                ClassLikeConstantSelector::Identifier(name)
+                    if name.value.eq_ignore_ascii_case(b"class") =>
+                {
+                    self.class_of(access.class, at)
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 

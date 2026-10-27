@@ -10,7 +10,7 @@ class Base
 
 class Named
 {
-    public function named(): void
+    public function /*@target:named*/named(): void
     {
     }
 }

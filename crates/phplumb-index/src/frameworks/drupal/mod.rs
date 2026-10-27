@@ -3,10 +3,11 @@
 mod services;
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::filter::PathFilter;
-use crate::frameworks::{Framework, FrameworkCall};
+use crate::frameworks::{CallTarget, Framework, FrameworkCall};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 
@@ -60,8 +61,17 @@ impl Framework for Drupal {
         self.services.update(filter, changed, removed);
     }
 
-    fn call_type(&self, _index: &Index, _call: &FrameworkCall<'_>) -> Option<TypeExpr> {
-        None
+    /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes.
+    fn call_type(&self, index: &Index, call: &FrameworkCall<'_>) -> Option<TypeExpr> {
+        let id = service_call(index, call)?;
+        let classes = self.services.classes(index, id);
+        match classes.len() {
+            0 => None,
+            1 => classes.into_iter().next().map(TypeExpr::Named),
+            _ => Some(TypeExpr::Union(
+                classes.into_iter().map(TypeExpr::Named).collect(),
+            )),
+        }
     }
 
     fn string_targets(
@@ -77,4 +87,42 @@ impl Framework for Drupal {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// Container interfaces whose `get(id)` returns a service.
+const CONTAINERS: [&str; 2] = [
+    "Symfony\\Component\\DependencyInjection\\ContainerInterface",
+    "Psr\\Container\\ContainerInterface",
+];
+
+/// The service id `call` asks for, when it is `\Drupal::service(id)` or a
+/// container's `get(id)` with a literal id.
+fn service_call<'a>(index: &Index, call: &'a FrameworkCall<'_>) -> Option<&'a str> {
+    let id = call.strings.first()?.as_deref()?;
+    let asks_for_service = call.targets.iter().any(|target| match target {
+        CallTarget::Method { class, name } => {
+            (class.eq_ignore_ascii_case("Drupal") && name.eq_ignore_ascii_case("service"))
+                || (name.eq_ignore_ascii_case("get") && is_container(index, class))
+        }
+        CallTarget::Function(_) => false,
+    });
+    asks_for_service.then_some(id)
+}
+
+/// Whether `class` is or implements one of the `CONTAINERS`.
+fn is_container(index: &Index, class: &str) -> bool {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut pending = vec![class.to_string()];
+    while let Some(next) = pending.pop() {
+        if CONTAINERS.iter().any(|c| c.eq_ignore_ascii_case(&next)) {
+            return true;
+        }
+        if !seen.insert(next.to_ascii_lowercase()) {
+            continue;
+        }
+        for supertype in index.supertypes(&next) {
+            pending.push(supertype.declaration.fqn.clone());
+        }
+    }
+    false
 }

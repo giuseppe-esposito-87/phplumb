@@ -309,3 +309,8 @@ fn diagnostics_stay_silent_in_namespaces_hidden_by_exclusions() {
 
     assert_eq!(messages, vec!["Undefined class 'App\\Ghost'"]);
 }
+
+#[test]
+fn drupal() {
+    run_fixture("drupal");
+}

@@ -3,7 +3,7 @@ namespace Drupal\mymodule;
 
 class Greeter
 {
-    public function greet(): string
+    public function /*@target:greet*/greet(): string
     {
         return 'hi';
     }
@@ -11,7 +11,7 @@ class Greeter
 
 class GreeterDecorator
 {
-    public function greet(): string
+    public function /*@target:greet*/greet(): string
     {
         return 'hello';
     }

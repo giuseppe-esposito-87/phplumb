@@ -1,0 +1,14 @@
+<?php
+
+use Drupal\Core\DependencyInjection\Container;
+use Symfony\Component\DependencyInjection\ContainerInterface;
+
+function mymodule_examples(ContainerInterface $container, Container $drupal_container): void
+{
+    \Drupal::service('mymodule.greeter')->/*@cursor:greet*/greet();
+    $container->get('entity_type.manager')->/*@cursor:storage*/getStorage('node');
+    $drupal_container->get('entity_type.manager')->/*@cursor:storage*/getStorage('node');
+    \Drupal::getContainer()->get('entity_type.manager.alias')->/*@cursor:storage*/getStorage('node');
+    $container->get(\Drupal\Core\Named::class)->/*@cursor:named*/named();
+    \Drupal::service('unknown.service')->/*@cursor:none*/greet();
+}

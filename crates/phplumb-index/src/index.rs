@@ -263,6 +263,11 @@ impl Index {
             .find_map(|f| f.as_any().downcast_ref::<Drupal>())
     }
 
+    /// The framework modules active for this project.
+    pub(crate) fn frameworks(&self) -> &[Box<dyn Framework>] {
+        &self.frameworks
+    }
+
     /// The names of the framework modules active for this project.
     pub fn active_frameworks(&self) -> Vec<&'static str> {
         self.frameworks.iter().map(|f| f.name()).collect()

@@ -3,7 +3,7 @@ namespace Drupal\Core\Entity;
 
 class EntityTypeManager
 {
-    public function getStorage(string $entity_type)
+    public function /*@target:storage*/getStorage(string $entity_type)
     {
     }
 }
