@@ -9,13 +9,13 @@ use mago_names::resolver::NameResolver;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    Access, AnonymousClass, Argument, Class, ClassConstantAccess, ClassLikeConstantSelector,
-    ClassLikeMember, ClassLikeMemberSelector, Constant, ConstantAccess, Enum, EnumCaseItem,
-    Expression, Function, FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
-    FunctionPartialApplication, Hint, Instantiation, Interface, Literal, Method, MethodCall,
-    Modifier, Namespace, NullSafeMethodCall, NullSafePropertyAccess, Program, Property,
-    PropertyAccess, PropertyItem, Sequence, StaticMethodCall, StaticMethodPartialApplication,
-    StaticPropertyAccess, Trait, Use, UseItems, UseType, Variable,
+    Access, AnonymousClass, Argument, Attribute, Class, ClassConstantAccess,
+    ClassLikeConstantSelector, ClassLikeMember, ClassLikeMemberSelector, Constant, ConstantAccess,
+    Enum, EnumCaseItem, Expression, Function, FunctionCall, FunctionLikeParameterList,
+    FunctionLikeReturnTypeHint, FunctionPartialApplication, Hint, Instantiation, Interface,
+    Literal, Method, MethodCall, Modifier, Namespace, NullSafeMethodCall, NullSafePropertyAccess,
+    Program, Property, PropertyAccess, PropertyItem, Sequence, StaticMethodCall,
+    StaticMethodPartialApplication, StaticPropertyAccess, Trait, Use, UseItems, UseType, Variable,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -298,6 +298,10 @@ pub struct FileSummary {
     /// `defined`: classes fully qualified, functions and constants as written
     /// without a leading backslash, methods by their bare name. Sorted and unique.
     pub guarded: Vec<String>,
+    /// Spans of import statements and attributes, whose names are not uses.
+    pub unchecked: Vec<(u32, u32)>,
+    /// Spans of type declarations: parameter, return, property and catch types.
+    pub hints: Vec<(u32, u32)>,
 }
 
 impl FileSummary {
@@ -341,6 +345,8 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         member_names: HashSet::new(),
         guard_names: Vec::new(),
         guard_classes: Vec::new(),
+        unchecked: Vec::new(),
+        hints: Vec::new(),
     };
     SyntaxVisitor.walk_program(program, &mut collector);
 
@@ -498,6 +504,8 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         class_ranges,
         ref_keys,
         guarded,
+        unchecked: std::mem::take(&mut collector.unchecked),
+        hints: std::mem::take(&mut collector.hints),
     }
 }
 
@@ -601,6 +609,8 @@ struct Collector<'a> {
     /// names in `X::class` arguments to those calls.
     guard_names: Vec<String>,
     guard_classes: Vec<u32>,
+    unchecked: Vec<(u32, u32)>,
+    hints: Vec<(u32, u32)>,
     constants: HashSet<u32>,
     /// Namespace names, which the resolver records but which name no symbol.
     not_refs: HashSet<u32>,
@@ -1012,7 +1022,14 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
         });
     }
 
+    fn walk_in_attribute(&self, attribute: &'ast Attribute<'arena>, c: &mut Collector<'arena>) {
+        let span = attribute.span();
+        c.unchecked.push((span.start.offset, span.end.offset));
+    }
+
     fn walk_in_use(&self, r#use: &'ast Use<'arena>, c: &mut Collector<'arena>) {
+        let span = r#use.span();
+        c.unchecked.push((span.start.offset, span.end.offset));
         let offset = r#use.span().start.offset;
         let mut imports: Vec<(String, String)> = Vec::new();
         match &r#use.items {
@@ -1352,6 +1369,8 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
     }
 
     fn walk_in_hint(&self, hint: &'ast Hint<'arena>, c: &mut Collector<'arena>) {
+        let span = hint.span();
+        c.hints.push((span.start.offset, span.end.offset));
         let (keyword, class) = match hint {
             Hint::Self_(keyword) => (keyword, ClassSel::SelfKw),
             Hint::Static(keyword) => (keyword, ClassSel::StaticKw),

@@ -97,6 +97,28 @@ pub(crate) fn member_accesses_named(
     source: &[u8],
     name: &str,
 ) -> Vec<(u32, u32, Receiver, MemberKind)> {
+    accesses(index, summary, source, Some(name))
+        .into_iter()
+        .map(|(start, end, _, receiver, kind)| (start, end, receiver, kind))
+        .collect()
+}
+
+/// Every instance member access in the file, resolved with one parse: start and
+/// end of the member name, the name, receiver, and kind.
+pub(crate) fn member_accesses(
+    index: &Index,
+    summary: &FileSummary,
+    source: &[u8],
+) -> Vec<(u32, u32, String, Receiver, MemberKind)> {
+    accesses(index, summary, source, None)
+}
+
+fn accesses(
+    index: &Index,
+    summary: &FileSummary,
+    source: &[u8],
+    name: Option<&str>,
+) -> Vec<(u32, u32, String, Receiver, MemberKind)> {
     let arena = LocalArena::new();
     let program = parse_file_content(&arena, FileId::zero(), source);
     let mut facts = Facts::default();
@@ -105,13 +127,19 @@ pub(crate) fn member_accesses_named(
     facts
         .accesses
         .iter()
-        .filter(|a| crate::references::same_name(&a.name, name, a.kind))
+        .filter(|a| name.is_none_or(|name| crate::references::same_name(&a.name, name, a.kind)))
         .map(|access| {
             let receiver = match ctx.anonymous_this(access.object, access.start) {
                 Some(range) => Receiver::Anonymous(range),
                 None => Receiver::Classes(class_names(&ctx.expr(access.object, access.start, 0))),
             };
-            (access.start, access.end, receiver, access.kind)
+            (
+                access.start,
+                access.end,
+                access.name.clone(),
+                receiver,
+                access.kind,
+            )
         })
         .collect()
 }

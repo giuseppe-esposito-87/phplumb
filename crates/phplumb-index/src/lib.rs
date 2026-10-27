@@ -4,6 +4,7 @@ pub mod builtins;
 mod cache;
 mod calls;
 mod composer;
+pub mod diagnostics;
 pub mod discover;
 pub mod filter;
 mod hover;

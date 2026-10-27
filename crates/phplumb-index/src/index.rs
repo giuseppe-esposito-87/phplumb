@@ -8,6 +8,7 @@ use rayon::prelude::*;
 
 use crate::cache::{self, CachedFile};
 use crate::calls::{self, CallItem, CallKind, Calls};
+use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
 use crate::hover::{self, Hover};
@@ -235,6 +236,27 @@ impl Index {
         });
         found.dedup();
         found
+    }
+
+    /// Broken references in `source`, the content of the file at `path`, sorted by
+    /// offset. Every rule must prove the target missing; uncertainty stays silent.
+    pub fn diagnostics(&self, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+        diagnostics::find(self, path, source)
+    }
+
+    /// Whether a class-like named `fqn` is indexed.
+    pub(crate) fn has_class(&self, fqn: &str) -> bool {
+        !lookup(&self.classes, &fqn.to_ascii_lowercase()).is_empty()
+    }
+
+    /// Whether a function named `fqn` is indexed.
+    pub(crate) fn has_function(&self, fqn: &str) -> bool {
+        !lookup(&self.functions, &fqn.to_ascii_lowercase()).is_empty()
+    }
+
+    /// Whether a constant named `fqn` is indexed.
+    pub(crate) fn has_constant(&self, fqn: &str) -> bool {
+        !lookup(&self.constants, &symbol_key(SymbolKind::Constant, fqn)).is_empty()
     }
 
     /// Declarations and members matching `query`, best first, at most `limit`.

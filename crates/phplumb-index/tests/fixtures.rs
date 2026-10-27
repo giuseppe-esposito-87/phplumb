@@ -185,3 +185,93 @@ fn inheritdoc() {
 fn references() {
     run_reference_fixture("references");
 }
+
+/// `/*@broken*/` marks a name that must be flagged, at the first code byte after
+/// the marker; the flagged names of every file must equal the marked ones.
+const BROKEN: &[u8] = b"/*@broken*/";
+
+fn diagnostics_of(name: &str) -> (PathBuf, Index) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+        .canonicalize()
+        .unwrap();
+    let (index, _) = Index::build(&root, &DiscoverOptions::default()).unwrap();
+    (root, index)
+}
+
+fn run_diagnostics_fixture(name: &str) {
+    let (root, index) = diagnostics_of(name);
+    let mut failures = Vec::new();
+    for path in discover(&root, &DiscoverOptions::default()).unwrap() {
+        let source = fs::read(&path).unwrap();
+        let rel = path.strip_prefix(&root).unwrap().display().to_string();
+        let mut expected = BTreeSet::new();
+        let mut pos = 0;
+        while let Some(found) = find(&source[pos..], BROKEN) {
+            let end = pos + found + BROKEN.len();
+            expected.insert(skip_to_code(&source, end) as u32);
+            pos = end;
+        }
+        let found = index.diagnostics(&path, &source);
+        let actual: BTreeSet<u32> = found.iter().map(|d| d.start).collect();
+        for missing in expected.difference(&actual) {
+            failures.push(format!(
+                "{rel}:{} not flagged",
+                line_of(&source, *missing as usize)
+            ));
+        }
+        for d in found.iter().filter(|d| !expected.contains(&d.start)) {
+            failures.push(format!(
+                "{rel}:{} flagged without a marker: {}",
+                line_of(&source, d.start as usize),
+                d.message
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+#[test]
+fn diagnostics() {
+    run_diagnostics_fixture("diagnostics");
+}
+
+#[test]
+fn diagnostic_messages_and_severities() {
+    use phplumb_index::diagnostics::Severity;
+
+    let (root, index) = diagnostics_of("diagnostics");
+    let mut seen: Vec<(String, Severity)> = Vec::new();
+    for file in ["app/Uses.php", "app/Members.php"] {
+        let path = root.join(file);
+        let source = fs::read(&path).unwrap();
+        seen.extend(
+            index
+                .diagnostics(&path, &source)
+                .into_iter()
+                .map(|d| (d.message, d.severity)),
+        );
+    }
+    for wanted in [
+        ("Undefined class 'App\\Ghost'", Severity::Error),
+        ("Undefined class 'App\\Undefined'", Severity::Warning),
+        ("Undefined class 'App\\Phantom'", Severity::Warning),
+        ("Undefined class 'App\\Absent'", Severity::Error),
+        ("Undefined function 'App\\invented'", Severity::Error),
+        ("Undefined constant 'App\\UNDEFINED_LIMIT'", Severity::Error),
+        (
+            "Undefined method 'Lib\\Content::invented()'",
+            Severity::Error,
+        ),
+        (
+            "Undefined class constant 'Lib\\Content::KIND'",
+            Severity::Error,
+        ),
+    ] {
+        assert!(
+            seen.contains(&(wanted.0.to_string(), wanted.1)),
+            "{wanted:?} not in {seen:#?}"
+        );
+    }
+}
