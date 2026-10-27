@@ -322,3 +322,61 @@ fn abstract_flags() {
     assert!(member(i, "h").is_abstract);
     assert!(!shape(&summary, "C").is_abstract);
 }
+
+#[test]
+fn magic_marks_call_handlers_and_docblock_tags() {
+    let summary = summarize(
+        b"<?php
+class Calls { public function __call($n, $a) {} }
+class StaticCalls { public static function __callStatic($n, $a) {} }
+/** @method int foo() */
+class Documented {}
+/**
+ * Mixes in another class.
+ *
+ * @mixin Other
+ */
+class Mixed {}
+/** A plain class. */
+class Plain { public function run() {} }
+",
+    );
+
+    let magic: Vec<(&str, bool)> = summary
+        .declarations
+        .iter()
+        .map(|d| (d.fqn.as_str(), d.class.as_ref().unwrap().magic))
+        .collect();
+    assert_eq!(
+        magic,
+        vec![
+            ("Calls", true),
+            ("StaticCalls", true),
+            ("Documented", true),
+            ("Mixed", true),
+            ("Plain", false),
+        ]
+    );
+}
+
+#[test]
+fn guarded_collects_exists_checks() {
+    let summary = summarize(
+        b"<?php
+namespace App;
+use Lib\\Foo;
+if (class_exists(Foo::class)) {}
+if (\\class_exists('Lib\\\\Bar')) {}
+function_exists('helper');
+method_exists($x, 'run');
+defined('LIMIT');
+",
+    );
+
+    let mut guarded = summary.guarded.clone();
+    guarded.sort();
+    assert_eq!(
+        guarded,
+        vec!["helper", "lib\\bar", "lib\\foo", "limit", "run"]
+    );
+}

@@ -9,7 +9,7 @@ use mago_names::resolver::NameResolver;
 use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
-    AnonymousClass, Argument, Class, ClassConstantAccess, ClassLikeConstantSelector,
+    Access, AnonymousClass, Argument, Class, ClassConstantAccess, ClassLikeConstantSelector,
     ClassLikeMember, ClassLikeMemberSelector, Constant, ConstantAccess, Enum, EnumCaseItem,
     Expression, Function, FunctionCall, FunctionLikeParameterList, FunctionLikeReturnTypeHint,
     FunctionPartialApplication, Hint, Instantiation, Interface, Literal, Method, MethodCall,
@@ -114,6 +114,10 @@ pub struct ClassShape {
     /// An abstract class or an interface.
     #[serde(default)]
     pub is_abstract: bool,
+    /// Declares `__call` or `__callStatic`, or its docblock has an `@method` or
+    /// `@mixin` tag: it may answer methods it does not declare.
+    #[serde(default)]
+    pub magic: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +293,11 @@ pub struct FileSummary {
     pub class_ranges: Vec<ClassRange>,
     /// Hashes of every `RefKey` the file mentions or declares, sorted and unique.
     pub ref_keys: Vec<u64>,
+    /// Lowercased names the file checks with `class_exists`, `interface_exists`,
+    /// `trait_exists`, `enum_exists`, `function_exists`, `method_exists` or
+    /// `defined`: classes fully qualified, functions and constants as written
+    /// without a leading backslash, methods by their bare name. Sorted and unique.
+    pub guarded: Vec<String>,
 }
 
 impl FileSummary {
@@ -330,6 +339,8 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         keywords: Vec::new(),
         anonymous: Vec::new(),
         member_names: HashSet::new(),
+        guard_names: Vec::new(),
+        guard_classes: Vec::new(),
     };
     SyntaxVisitor.walk_program(program, &mut collector);
 
@@ -372,10 +383,12 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                     members: Vec::new(),
                 });
             }
+            let documented_magic = pending.doc.as_deref().is_some_and(has_magic_tags);
             let class = pending.shape.map(|shape| ClassShape {
                 parent: shape.parent.and_then(fqn_at),
                 interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
                 traits: shape.traits.into_iter().filter_map(fqn_at).collect(),
+                magic: documented_magic || shape.members.iter().any(handles_calls),
                 members: shape.members,
                 is_abstract: shape.is_abstract,
             });
@@ -464,6 +477,16 @@ pub fn summarize(source: &[u8]) -> FileSummary {
     }
     let mut ref_keys: Vec<u64> = keys.into_iter().collect();
     ref_keys.sort_unstable();
+    let mut guarded = std::mem::take(&mut collector.guard_names);
+    guarded.extend(
+        collector
+            .guard_classes
+            .iter()
+            .filter_map(|&start| fqn_at(start))
+            .map(|fqn| fqn.to_ascii_lowercase()),
+    );
+    guarded.sort();
+    guarded.dedup();
 
     FileSummary {
         declarations,
@@ -474,7 +497,27 @@ pub fn summarize(source: &[u8]) -> FileSummary {
         keywords: collector.keywords,
         class_ranges,
         ref_keys,
+        guarded,
     }
+}
+
+/// Whether a docblock declares members by tag: `@method` or `@mixin`.
+fn has_magic_tags(doc: &str) -> bool {
+    ["@method", "@mixin"].iter().any(|tag| {
+        doc.match_indices(tag).any(|(i, _)| {
+            doc[i + tag.len()..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace)
+        })
+    })
+}
+
+/// Whether `member` is `__call` or `__callStatic`.
+fn handles_calls(member: &Member) -> bool {
+    member.kind == MemberKind::Method
+        && (member.name.eq_ignore_ascii_case("__call")
+            || member.name.eq_ignore_ascii_case("__callStatic"))
 }
 
 fn to_fqn(name: &[u8]) -> String {
@@ -554,6 +597,10 @@ struct Collector<'a> {
     names: FileNames,
     pending: Vec<Pending>,
     functions: HashSet<u32>,
+    /// Names checked by `*_exists` and `defined` calls, and offsets of the class
+    /// names in `X::class` arguments to those calls.
+    guard_names: Vec<String>,
+    guard_classes: Vec<u32>,
     constants: HashSet<u32>,
     /// Namespace names, which the resolver records but which name no symbol.
     not_refs: HashSet<u32>,
@@ -573,6 +620,41 @@ struct PendingAnonymous {
 }
 
 impl Collector<'_> {
+    /// Records the name a guard call checks: the first argument of the `*_exists`
+    /// functions for classes and functions and of `defined`, the second of
+    /// `method_exists`.
+    fn guard(&mut self, function: &[u8], call: &FunctionCall<'_>) {
+        let function = function.strip_prefix(b"\\").unwrap_or(function);
+        let position = match function.to_ascii_lowercase().as_slice() {
+            b"class_exists" | b"interface_exists" | b"trait_exists" | b"enum_exists"
+            | b"function_exists" | b"defined" => 0,
+            b"method_exists" => 1,
+            _ => return,
+        };
+        let Some(Argument::Positional(argument)) =
+            call.argument_list.arguments.iter().nth(position)
+        else {
+            return;
+        };
+        match argument.value {
+            Expression::Literal(Literal::String(literal)) => {
+                if let Some(value) = literal.value {
+                    let name = String::from_utf8_lossy(value);
+                    self.guard_names
+                        .push(name.trim_start_matches('\\').to_ascii_lowercase());
+                }
+            }
+            Expression::Access(Access::ClassConstant(access)) => {
+                let is_class = matches!(&access.constant,
+                    ClassLikeConstantSelector::Identifier(name) if name.value.eq_ignore_ascii_case(b"class"));
+                if let (true, Expression::Identifier(class)) = (is_class, access.class) {
+                    self.guard_classes.push(class.span().start.offset);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The class an expression before `::` or after `new` names, recording `self`,
     /// `static` and `parent` as keyword references. Dynamic classes give nothing.
     fn class_sel(&mut self, expression: &Expression<'_>) -> Option<PendingSel> {
@@ -1170,6 +1252,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
             return;
         };
         c.functions.insert(identifier.span().start.offset);
+        c.guard(identifier.value(), call);
         if !identifier.value().eq_ignore_ascii_case(b"define") {
             return;
         }
