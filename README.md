@@ -36,10 +36,10 @@ PHPlumb starts with Drupal, because its code calls almost everything through int
 - Inside `vendor`, only the code that Composer's autoloader reaches is indexed, so package tests and leftover copies never show up as targets.
 - Broken reference diagnostics are tested against Drupal core and contrib for false alarms.
 - **Services.** `\Drupal::service('id')` and `$container->get('id')` are typed from every `*.services.yml`, so navigation continues on the next call. Cmd+click on a service id opens its definition.
+- **Entities.** `getStorage('node')` is typed as the storage class of that entity type, and `->load()` as the entity class, from entity types declared by attributes or annotations. Cmd+click on an entity type id opens its declaration.
 
 Planned, in this order:
 
-- [ ] **Entities.** Type `getStorage('node')` as the storage class of that entity type, and `->load()` as the entity class.
 - [ ] **Hooks.** Navigate from a hook implementation to the places that invoke it, and back, including computed names such as `hook_form_FORM_ID_alter`.
 - [ ] **Plugins.** Navigate from a plugin id to its class, and from a plugin manager to all its plugins.
 - [ ] **Routes and YAML.** Navigate from `Url::fromRoute('name')` to the route and its controller. Cmd+click on classes and methods in services, routing and links YAML files.

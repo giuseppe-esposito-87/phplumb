@@ -2,6 +2,20 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 4b Drupal entities
+
+Same machine and project. The Drupal module reads entity types from attributes (65 outside tests) and annotations (62), types `getStorage('id')` as that entity type's storage, and `load()`, `create()` and `loadMultiple()` on it as the entity class.
+
+| Metric                                  | Value                             | Target        |
+| --------------------------------------- | --------------------------------- | ------------- |
+| Member coverage in `web/modules/custom` | 42,452 of 46,204 accesses (91.9%) | above 91.6%   |
+| Cold index                              | 3.7 to 5.0 s                      | under 10 s    |
+| Peak resident memory                    | 405 to 445 MB                     | under 1024 MB |
+| Slowest references case                 | 163 to 244 ms                     | under 1 s     |
+| All cases                               | 57 passed, 0 failed               | all pass      |
+
+New cases cover methods on files, menu links, a custom entity type and a contrib entity type declared by annotation, each loaded through its storage, and an entity type id leading to its declaration. With storages typed precisely, calls such as `getStorage('node')->load()` resolve to the storage's own `load()`; references of `EntityStorageInterface::load` now also list calls to its implementations, and grew from 1,104 to 1,156.
+
 ## 2026-10-27, step 4a Drupal services
 
 Same machine and project. The Drupal module reads 252 services files (test modules and `vendor` excluded) and types `\Drupal::service()` and container `get()` calls.
