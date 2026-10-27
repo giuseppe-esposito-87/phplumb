@@ -19,3 +19,7 @@ shared.route:
   path: '/shared'
 route_callbacks:
   - '\Drupal\mymodule\Routing\Routes::routes'
+mymodule.missing:
+  path: '/missing'
+  defaults:
+    _form: '\Drupal\mymodule\Form\Missing'

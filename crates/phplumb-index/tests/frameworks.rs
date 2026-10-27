@@ -1208,3 +1208,119 @@ fn other_strings_in_route_calls_lead_nowhere() {
     assert!(definitions_in(PAGE_CONTROLLER, "createFromRoute('mymodule.pa").is_empty());
     assert!(definitions_in(PAGE_CONTROLLER, "fromRoute('mymodule.now").is_empty());
 }
+
+const ROUTING: &str = "modules/custom/mymodule/mymodule.routing.yml";
+const SERVICES_YML: &str = "modules/custom/mymodule/mymodule.services.yml";
+
+#[test]
+fn routing_files_lead_to_controllers_and_forms() {
+    let method = |name: &str| vec![format!("{PAGE_CONTROLLER}: {name}")];
+
+    assert_eq!(
+        definitions_in(ROUTING, "PageController::pa"),
+        method("page")
+    );
+    assert_eq!(
+        definitions_in(ROUTING, "PageController::ti"),
+        method("title")
+    );
+    assert_eq!(
+        definitions_in(ROUTING, "PageController::acc"),
+        method("access")
+    );
+    assert_eq!(
+        definitions_in(ROUTING, "'mymodule.page_controller:pa"),
+        method("page")
+    );
+    assert_eq!(
+        definitions_in(ROUTING, "Form\\SettingsF"),
+        vec!["modules/custom/mymodule/src/Form/SettingsForm.php: SettingsForm"]
+    );
+    assert!(definitions_in(ROUTING, "Form\\Miss").is_empty());
+}
+
+#[test]
+fn services_files_lead_to_classes_methods_and_services() {
+    let greeter = vec!["modules/custom/mymodule/src/Greeter.php: Greeter".to_string()];
+    let factory = "modules/custom/mymodule/src/GreeterFactory.php";
+
+    assert_eq!(
+        definitions_in(
+            SERVICES_YML,
+            "class: '\\Drupal\\mymodule\\Controller\\PageCont"
+        ),
+        vec![format!("{PAGE_CONTROLLER}: PageController")]
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "\"Drupal\\\\mymodule\\\\Gree"),
+        greeter
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "\n  Drupal\\mymodule\\Gree"),
+        greeter
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "GreeterFactory::cre"),
+        vec![format!("{factory}: create")]
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "factory_service', ma"),
+        vec![format!("{factory}: make")]
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "['@mymodule.factory_ser"),
+        vec![format!("{SERVICES_YML}: mymodule.factory_service")]
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "[setMan"),
+        vec!["modules/custom/mymodule/src/Greeter.php: setManager"]
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "['@entity_type.man"),
+        vec!["core/core.services.yml: entity_type.manager"]
+    );
+    let greeter_service = vec![format!("{SERVICES_YML}: mymodule.greeter")];
+    assert_eq!(
+        definitions_in(SERVICES_YML, "parent: mymodule.gree"),
+        greeter_service
+    );
+    assert_eq!(
+        definitions_in(SERVICES_YML, "decorates: mymodule.gree"),
+        greeter_service
+    );
+}
+
+#[test]
+fn links_files_lead_to_routes_and_classes() {
+    let page = vec![format!("{ROUTING}: mymodule.page")];
+    let settings = vec![format!("{ROUTING}: mymodule.settings")];
+
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/mymodule.links.menu.yml",
+            "route_name: mymodule.pa"
+        ),
+        page
+    );
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/mymodule.links.menu.yml",
+            "class: Drupal\\mymodule\\Plugin\\Menu\\PageL"
+        ),
+        vec!["modules/custom/mymodule/src/Plugin/Menu/PageLink.php: PageLink"]
+    );
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/mymodule.links.task.yml",
+            "base_route: mymodule.sett"
+        ),
+        settings
+    );
+    assert_eq!(
+        definitions_in(
+            "modules/custom/mymodule/mymodule.links.action.yml",
+            "- mymodule.sett"
+        ),
+        settings
+    );
+}

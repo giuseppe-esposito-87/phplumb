@@ -1,4 +1,5 @@
-//! A YAML tree that keeps where each scalar is written, for the Drupal registries.
+//! A YAML tree that keeps where each scalar is written, for the Drupal registries
+//! and for navigation inside Drupal YAML files.
 
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust2::scanner::Marker;
@@ -11,7 +12,7 @@ pub(crate) enum Yaml {
         end: u32,
     },
     Map(Vec<(Yaml, Yaml)>),
-    Sequence,
+    Sequence(Vec<Yaml>),
     Other,
 }
 
@@ -35,6 +36,17 @@ impl Yaml {
     }
 }
 
+/// One step from a node to the scalar under the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Step<'a> {
+    /// Into the value of this key.
+    Key(&'a str),
+    /// Into this element of a sequence.
+    Index(usize),
+    /// The scalar is the key of this map entry.
+    KeyItself,
+}
+
 /// The tree of `text`; nothing when it does not parse.
 pub(crate) fn parse(text: &str) -> Option<Yaml> {
     let mut builder = Builder {
@@ -47,6 +59,43 @@ pub(crate) fn parse(text: &str) -> Option<Yaml> {
     };
     Parser::new_from_str(text).load(&mut builder, false).ok()?;
     builder.root
+}
+
+/// The scalar covering `offset` and the steps leading to it from `root`.
+pub(crate) fn scalar_at(root: &Yaml, offset: u32) -> Option<(Vec<Step<'_>>, &Yaml)> {
+    let mut steps = Vec::new();
+    let found = find(root, offset, &mut steps)?;
+    Some((steps, found))
+}
+
+fn find<'a>(node: &'a Yaml, offset: u32, steps: &mut Vec<Step<'a>>) -> Option<&'a Yaml> {
+    match node {
+        Yaml::Scalar { start, end, .. } => (*start <= offset && offset <= *end).then_some(node),
+        Yaml::Map(entries) => entries.iter().find_map(|(key, value)| {
+            if let Yaml::Scalar { start, end, .. } = key
+                && *start <= offset
+                && offset <= *end
+            {
+                steps.push(Step::KeyItself);
+                return Some(key);
+            }
+            steps.push(Step::Key(key.text().unwrap_or_default()));
+            let found = find(value, offset, steps);
+            if found.is_none() {
+                steps.pop();
+            }
+            found
+        }),
+        Yaml::Sequence(items) => items.iter().enumerate().find_map(|(i, item)| {
+            steps.push(Step::Index(i));
+            let found = find(item, offset, steps);
+            if found.is_none() {
+                steps.pop();
+            }
+            found
+        }),
+        Yaml::Other => None,
+    }
 }
 
 /// The byte range of the text `value` inside the scalar written at `start..end`:
@@ -64,7 +113,7 @@ pub(crate) fn value_range(text: &str, value: &str, start: u32, end: u32) -> (u32
 
 enum Frame {
     Map(Vec<(Yaml, Yaml)>, Option<Yaml>),
-    Sequence,
+    Sequence(Vec<Yaml>),
 }
 
 struct Builder<'t> {
@@ -82,7 +131,7 @@ impl Builder<'_> {
                 Some(key) => entries.push((key, node)),
                 None => *key = Some(node),
             },
-            Some(Frame::Sequence) => {}
+            Some(Frame::Sequence(items)) => items.push(node),
             None => self.root = Some(node),
         }
     }
@@ -158,10 +207,11 @@ impl MarkedEventReceiver for Builder<'_> {
                     self.push(Yaml::Map(entries));
                 }
             }
-            Event::SequenceStart(..) => self.stack.push(Frame::Sequence),
+            Event::SequenceStart(..) => self.stack.push(Frame::Sequence(Vec::new())),
             Event::SequenceEnd => {
-                self.stack.pop();
-                self.push(Yaml::Sequence);
+                if let Some(Frame::Sequence(items)) = self.stack.pop() {
+                    self.push(Yaml::Sequence(items));
+                }
             }
             Event::Alias(_) => self.push(Yaml::Other),
             _ => {}

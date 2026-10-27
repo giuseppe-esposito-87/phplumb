@@ -7,3 +7,20 @@ services:
     decorates: mymodule.greeter
   shared.id:
     class: Drupal\mymodule\SharedCustom
+  mymodule.page_controller:
+    class: '\Drupal\mymodule\Controller\PageController'
+  mymodule.factory_made:
+    class: Drupal\mymodule\Greeter
+    factory: 'Drupal\mymodule\GreeterFactory::create'
+  mymodule.array_factory:
+    class: Drupal\mymodule\Greeter
+    factory: ['@mymodule.factory_service', make]
+    calls:
+      - [setManager, ['@entity_type.manager']]
+  mymodule.factory_service:
+    class: Drupal\mymodule\GreeterFactory
+  mymodule.quoted:
+    class: "Drupal\\mymodule\\Greeter"
+  mymodule.child:
+    parent: mymodule.greeter
+  Drupal\mymodule\Greeter: ~

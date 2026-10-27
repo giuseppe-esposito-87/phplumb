@@ -125,6 +125,15 @@ pub trait Framework: Send + Sync {
     /// Implementations the framework adds to the class-like `class`, each with the
     /// text expected at its range.
     fn class_implementations(&self, index: &Index, class: &str) -> Vec<(Location, String)>;
+    /// Targets at `offset` in a file the PHP engine does not read, whose current
+    /// content is `source`, each with the text expected at its range.
+    fn file_targets(
+        &self,
+        index: &Index,
+        path: &Path,
+        source: &[u8],
+        offset: u32,
+    ) -> Vec<(Location, String)>;
     /// Targets of a definition request on a declaration, each with the text expected
     /// at its range, when the framework knows what the declaration stands for.
     fn declaration_targets(

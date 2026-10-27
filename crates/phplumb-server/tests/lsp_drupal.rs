@@ -139,3 +139,54 @@ fn registers_a_yaml_watcher() {
     client.reply_null(&request);
     client.shutdown();
 }
+
+#[test]
+fn routing_files_answer_definitions_only() {
+    let ws = Workspace::new(GREETER);
+    ws.write(
+        "modules/custom/mymodule/src/Form/SettingsForm.php",
+        "<?php\nnamespace App\\Form;\nclass SettingsForm\n{\n}\n",
+    );
+    ws.write(
+        "modules/custom/mymodule/mymodule.routing.yml",
+        "mymodule.settings:\n  path: '/admin'\n  defaults:\n    _form: '\\App\\Form\\SettingsForm'\n",
+    );
+    let mut client = ws.start(json!({}));
+    client.wait_for_notification("window/logMessage");
+    let uri = ws.uri("modules/custom/mymodule/mymodule.routing.yml");
+    let position = json!({"line": 3, "character": 22});
+
+    let found = client.request(
+        10,
+        "textDocument/definition",
+        json!({"textDocument": {"uri": uri}, "position": position}),
+    );
+    let hover = client.request(
+        11,
+        "textDocument/hover",
+        json!({"textDocument": {"uri": uri}, "position": position}),
+    );
+    let diagnostics = client.request(
+        12,
+        "textDocument/diagnostic",
+        json!({"textDocument": {"uri": uri}}),
+    );
+    let symbols = client.request(
+        13,
+        "textDocument/documentSymbol",
+        json!({"textDocument": {"uri": uri}}),
+    );
+
+    let found = found.as_array().cloned().unwrap_or_default();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0]["uri"]
+            .as_str()
+            .unwrap()
+            .ends_with("SettingsForm.php")
+    );
+    assert_eq!(hover, Value::Null);
+    assert_eq!(diagnostics["items"], json!([]));
+    assert!(symbols.is_null() || symbols == json!([]), "{symbols}");
+    client.shutdown();
+}

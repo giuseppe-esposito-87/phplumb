@@ -7,6 +7,10 @@ class Greeter
     {
         return 'hi';
     }
+
+    public function setManager($manager)
+    {
+    }
 }
 
 class GreeterDecorator

@@ -1,0 +1,5 @@
+mymodule.add:
+  title: 'Add'
+  route_name: mymodule.page
+  appears_on:
+    - mymodule.settings

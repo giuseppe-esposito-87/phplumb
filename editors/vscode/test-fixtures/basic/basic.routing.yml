@@ -1,0 +1,4 @@
+basic.page:
+  path: '/basic'
+  defaults:
+    _controller: '\BasicController::page'

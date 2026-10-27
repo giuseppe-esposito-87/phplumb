@@ -11,7 +11,7 @@ use crate::cache::{self, CachedFile};
 use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
-use crate::filter::PathFilter;
+use crate::filter::{PathFilter, is_php};
 use crate::frameworks::drupal::Drupal;
 use crate::frameworks::{self, FoundCall, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::hover::{self, Hover};
@@ -242,6 +242,9 @@ impl Index {
     /// `source`: the inferred type of a variable, or the signatures and docblock
     /// summaries of what the word refers to.
     pub fn hover(&mut self, path: &Path, source: &[u8], offset: u32) -> Option<Hover> {
+        if !is_php(path) {
+            return None;
+        }
         hover::hover(self, path, source, offset)
     }
 
@@ -335,6 +338,9 @@ impl Index {
     /// Broken references in `source`, the content of the file at `path`, sorted by
     /// offset. Every rule must prove the target missing; uncertainty stays silent.
     pub fn diagnostics(&self, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+        if !is_php(path) {
+            return Vec::new();
+        }
         diagnostics::find(self, path, source)
     }
 
@@ -965,6 +971,9 @@ impl Index {
     /// subtype uses, when it is not the original. Sorted and deduplicated; stale
     /// targets are re-indexed like definitions.
     pub fn implementations(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
+        if !is_php(path) {
+            return Vec::new();
+        }
         // What the cursor is on is read from the index, so the cursor file must be current.
         let key = self.filter.under_root(path);
         if self.ids.contains_key(&key) {
@@ -1243,7 +1252,8 @@ impl Index {
     }
 
     /// Each target with the lowercased short name the index expects at its range.
-    /// With `declarations`, the frameworks answer for the declaration under the cursor.
+    /// With `declarations`, the frameworks answer for the declaration under the cursor,
+    /// and for files the engine does not read as PHP.
     fn resolve(
         &self,
         path: &Path,
@@ -1251,6 +1261,16 @@ impl Index {
         offset: u32,
         declarations: bool,
     ) -> Vec<(Location, String)> {
+        if !is_php(path) {
+            if !declarations {
+                return Vec::new();
+            }
+            return self
+                .frameworks
+                .iter()
+                .flat_map(|f| f.file_targets(self, path, source, offset))
+                .collect();
+        }
         let summary = summarize(source);
 
         if declarations && let Some(found) = self.framework_declaration(path, &summary, offset) {

@@ -3,6 +3,7 @@
 mod entities;
 mod extensions;
 mod hooks;
+mod navigation;
 mod plugins;
 mod routes;
 mod services;
@@ -234,6 +235,18 @@ impl Framework for Drupal {
         call: Option<(&FrameworkCall<'_>, usize)>,
     ) -> Vec<(Location, String)> {
         self.plugins.keyed_targets(index, key, value, call)
+    }
+
+    /// A class, method, service or route referenced in a services, routing or links
+    /// YAML file leads to its definition.
+    fn file_targets(
+        &self,
+        index: &Index,
+        path: &Path,
+        source: &[u8],
+        offset: u32,
+    ) -> Vec<(Location, String)> {
+        navigation::targets(self, index, path, source, offset)
     }
 
     /// A plugin manager, or an interface only one plugin manager implements, has its

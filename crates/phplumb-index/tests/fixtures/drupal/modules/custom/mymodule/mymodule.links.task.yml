@@ -1,0 +1,4 @@
+mymodule.page_tab:
+  title: 'Page'
+  route_name: mymodule.page
+  base_route: mymodule.settings

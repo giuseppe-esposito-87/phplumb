@@ -55,7 +55,14 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 
   const serverOptions: ServerOptions = { command, args: ["serve"] };
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: "php" }],
+    documentSelector: [
+      { scheme: "file", language: "php" },
+      {
+        scheme: "file",
+        language: "yaml",
+        pattern: "**/*.{services,routing,links.menu,links.task,links.action,links.contextual}.yml",
+      },
+    ],
     initializationOptions: {
       exclude: config.get<string[]>("exclude", []),
       cacheDir: cacheDir(context),

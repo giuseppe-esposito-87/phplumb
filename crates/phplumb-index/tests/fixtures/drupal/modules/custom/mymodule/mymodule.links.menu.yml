@@ -1,0 +1,4 @@
+mymodule.page_link:
+  title: 'Page'
+  route_name: mymodule.page
+  class: Drupal\mymodule\Plugin\Menu\PageLink

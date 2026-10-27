@@ -13,6 +13,13 @@ pub const PHP_EXTENSIONS: &[&str] = &[
     "php", "module", "inc", "install", "theme", "profile", "engine",
 ];
 
+/// Whether `path` has one of the PHP extensions.
+pub fn is_php(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| PHP_EXTENSIONS.iter().any(|p| e.eq_ignore_ascii_case(p)))
+}
+
 /// Directories never indexed, whatever the exclusions say.
 pub(crate) const SKIPPED_DIR_NAMES: &[&str] = &["node_modules"];
 
