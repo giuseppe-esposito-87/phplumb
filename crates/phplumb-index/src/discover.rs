@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 
 use crate::filter::{PathFilter, SKIPPED_DIR_NAMES};
+use crate::frameworks::FrameworkSettings;
 
 pub use crate::filter::PHP_EXTENSIONS;
 
@@ -14,6 +15,8 @@ pub struct DiscoverOptions {
     pub exclude: Vec<String>,
     /// Larger files are skipped: they are almost always generated data.
     pub max_file_bytes: u64,
+    /// Which framework modules run.
+    pub frameworks: FrameworkSettings,
 }
 
 impl Default for DiscoverOptions {
@@ -21,6 +24,7 @@ impl Default for DiscoverOptions {
         Self {
             exclude: Vec::new(),
             max_file_bytes: 4 * 1024 * 1024,
+            frameworks: FrameworkSettings::default(),
         }
     }
 }

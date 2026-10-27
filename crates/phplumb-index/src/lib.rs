@@ -7,6 +7,7 @@ mod composer;
 pub mod diagnostics;
 pub mod discover;
 pub mod filter;
+pub mod frameworks;
 mod hover;
 pub mod index;
 mod infer;

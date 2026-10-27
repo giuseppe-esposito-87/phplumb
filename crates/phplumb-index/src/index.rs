@@ -11,6 +11,7 @@ use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
+use crate::frameworks::{self, Framework};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Receiver};
 use crate::members;
@@ -71,6 +72,8 @@ pub struct ClassRef<'a> {
 /// and modification time, so a cache can tell whether it is still current.
 pub struct Index {
     filter: PathFilter,
+    /// Framework modules active for this project.
+    frameworks: Vec<Box<dyn Framework>>,
     files: Vec<Option<CachedFile>>,
     ids: HashMap<PathBuf, u32>,
     classes: HashMap<String, Vec<Entry>>,
@@ -140,6 +143,7 @@ impl Index {
 
         let mut index = Index {
             filter,
+            frameworks: frameworks::active(root, &opts.frameworks),
             files: Vec::new(),
             ids: HashMap::new(),
             classes: HashMap::new(),
@@ -154,6 +158,9 @@ impl Index {
             stats.files_with_parse_errors += usize::from(file.has_errors);
             stats.declarations += file.declarations.len();
             index.insert(file);
+        }
+        for framework in &mut index.frameworks {
+            framework.rebuild(&index.filter);
         }
         stats.elapsed_ms = started.elapsed().as_millis();
         Ok((index, stats))
@@ -203,6 +210,9 @@ impl Index {
         for file in read_files(&fresh) {
             self.insert(file);
         }
+        for framework in &mut self.frameworks {
+            framework.update(&self.filter, changed, removed);
+        }
         stats.elapsed_ms = started.elapsed().as_millis();
         stats
     }
@@ -243,6 +253,11 @@ impl Index {
         });
         found.dedup();
         found
+    }
+
+    /// The names of the framework modules active for this project.
+    pub fn active_frameworks(&self) -> Vec<&'static str> {
+        self.frameworks.iter().map(|f| f.name()).collect()
     }
 
     /// Broken references in `source`, the content of the file at `path`, sorted by
