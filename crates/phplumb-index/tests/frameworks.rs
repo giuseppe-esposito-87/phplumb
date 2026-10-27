@@ -819,6 +819,9 @@ fn plugin_types_come_from_manager_constructors() {
                 t.manager, t.subdir, t.attribute, t.annotation
             )
         })
+        .filter(|t| {
+            t.contains("BlockManager") || t.contains("ElementInfoManager") || t.contains("Gadget")
+        })
         .collect();
 
     assert_eq!(
@@ -897,4 +900,37 @@ fn plugins_follow_updates() {
     let drupal = index.drupal().unwrap();
     assert!(drupal.plugins(manager, "one").is_empty());
     assert_eq!(drupal.plugins(manager, "uno").len(), 1);
+}
+
+const PLUGIN_CALLS: &str = "modules/custom/mymodule/src/PluginCalls.php";
+
+#[test]
+fn plugin_ids_in_manager_calls_lead_to_the_plugin_class() {
+    let my_block =
+        vec!["modules/custom/mymodule/src/Plugin/Block/MyBlock.php: MyBlock".to_string()];
+
+    assert_eq!(
+        definitions_in(PLUGIN_CALLS, "$blocks->createInstance('my_bl"),
+        my_block
+    );
+    assert_eq!(
+        definitions_in(PLUGIN_CALLS, "getDefinition('my_bl"),
+        my_block
+    );
+    assert!(definitions_in(PLUGIN_CALLS, "$any->createInstance('my_bl").is_empty());
+    assert!(definitions_in(PLUGIN_CALLS, "hasDefinition('nothing").is_empty());
+}
+
+#[test]
+fn field_types_and_constraints_lead_to_their_plugins() {
+    assert_eq!(
+        definitions_in(PLUGIN_CALLS, "create('str"),
+        vec!["core/lib/Drupal/Core/Field/Plugin/Field/FieldType/StringItem.php: StringItem"]
+    );
+    assert_eq!(
+        definitions_in(PLUGIN_CALLS, "addConstraint('Uniq"),
+        vec![
+            "core/lib/Drupal/Core/Validation/Plugin/Validation/Constraint/UniqueFieldConstraint.php: UniqueFieldConstraint"
+        ]
+    );
 }

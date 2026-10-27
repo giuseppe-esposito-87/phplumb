@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 use super::extensions::Extensions;
 use super::is_a;
-use crate::frameworks::CallTarget;
-use crate::index::Index;
-use crate::infer;
+use crate::frameworks::{CallTarget, FrameworkCall};
+use crate::index::{Index, Location};
+use crate::infer::{self, class_names};
 use crate::metadata::{MetaValue, Metadata};
 use crate::summary::{SymbolKind, summarize};
 
@@ -34,6 +34,16 @@ pub struct Plugin {
 }
 
 const DEFAULT_MANAGER: &str = "Drupal\\Core\\Plugin\\DefaultPluginManager";
+const FIELD_TYPES: &str = "Drupal\\Core\\Field\\FieldTypePluginManager";
+const CONSTRAINTS: &str = "Drupal\\Core\\Validation\\ConstraintManager";
+const BASE_FIELD: &str = "Drupal\\Core\\Field\\BaseFieldDefinition";
+/// Classes whose `addConstraint` takes a constraint plugin id.
+const CONSTRAINED: [&str; 2] = [
+    "Drupal\\Core\\TypedData\\DataDefinitionInterface",
+    "Drupal\\Core\\Field\\FieldConfigInterface",
+];
+/// Plugin manager methods whose first argument is a plugin id.
+const BY_ID: [&str; 3] = ["createInstance", "getDefinition", "hasDefinition"];
 const DEFAULT_ATTRIBUTE: &str = "Drupal\\Component\\Plugin\\Attribute\\Plugin";
 const DEFAULT_ANNOTATION: &str = "Drupal\\Component\\Annotation\\Plugin";
 
@@ -99,6 +109,94 @@ impl Plugins {
             return Vec::new();
         };
         self.of(manager).iter().filter(|p| p.id == base).collect()
+    }
+
+    /// The plugin classes a plugin id at position `argument` of `call` names, each
+    /// with its class name as the expected text.
+    pub(crate) fn call_targets(
+        &self,
+        index: &Index,
+        call: &FrameworkCall<'_>,
+        argument: usize,
+        value: &str,
+    ) -> Vec<(Location, String)> {
+        if argument != 0 {
+            return Vec::new();
+        }
+        let named = |wanted: &str| -> Vec<&str> {
+            call.targets
+                .iter()
+                .filter_map(|target| match target {
+                    CallTarget::Method { class, name } if name.eq_ignore_ascii_case(wanted) => {
+                        Some(class.as_str())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let manager = if BY_ID.iter().any(|m| !named(m).is_empty()) {
+            call.receiver
+                .and_then(|receiver| self.manager_of(index, &class_names(receiver)))
+        } else if named("create")
+            .iter()
+            .any(|class| class.eq_ignore_ascii_case(BASE_FIELD))
+        {
+            Some(FIELD_TYPES.to_string())
+        } else if named("addConstraint")
+            .iter()
+            .any(|class| is_a(index, class, &CONSTRAINED))
+        {
+            Some(CONSTRAINTS.to_string())
+        } else {
+            None
+        };
+        manager.map_or_else(Vec::new, |manager| self.targets(&manager, value))
+    }
+
+    /// The plugin manager that a receiver of these classes is: a manager class, or an
+    /// interface exactly one manager implements; nothing when that is not one
+    /// manager.
+    pub(crate) fn manager_of(&self, index: &Index, classes: &[String]) -> Option<String> {
+        let mut found: Vec<&str> = Vec::new();
+        for class in classes {
+            let managers: Vec<&str> = match self
+                .types
+                .iter()
+                .find(|t| t.manager.eq_ignore_ascii_case(class))
+            {
+                Some(own) => vec![own.manager.as_str()],
+                None => self
+                    .types
+                    .iter()
+                    .filter(|t| is_a(index, &t.manager, &[class.as_str()]))
+                    .map(|t| t.manager.as_str())
+                    .collect(),
+            };
+            if managers.len() != 1 {
+                return None;
+            }
+            if !found.contains(&managers[0]) {
+                found.push(managers[0]);
+            }
+        }
+        (found.len() == 1).then(|| found[0].to_string())
+    }
+
+    /// The plugin classes of `manager` an id names, each with its class name as the
+    /// expected text.
+    pub(crate) fn targets(&self, manager: &str, id: &str) -> Vec<(Location, String)> {
+        self.named(manager, id)
+            .into_iter()
+            .map(|plugin| {
+                let location = Location {
+                    path: plugin.path.clone(),
+                    start: plugin.start,
+                    end: plugin.end,
+                };
+                let name = plugin.class.rsplit('\\').next().unwrap_or(&plugin.class);
+                (location, name.to_string())
+            })
+            .collect()
     }
 
     /// Every subclass of the default plugin manager whose own constructor calls the

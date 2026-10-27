@@ -193,6 +193,10 @@ impl Framework for Drupal {
                 .map(|location| (location, value.to_string()))
                 .collect();
         }
+        let plugins = self.plugins.call_targets(index, call, argument, value);
+        if !plugins.is_empty() {
+            return plugins;
+        }
         let entity_types = |id: &str, storage: Storage| self.has_entity_type(index, id, storage);
         self.hooks.invocation_targets(
             index,

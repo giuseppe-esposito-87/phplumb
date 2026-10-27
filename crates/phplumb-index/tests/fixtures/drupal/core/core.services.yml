@@ -23,3 +23,5 @@ services:
     autowire: true
   shared.id:
     class: Drupal\Core\SharedCore
+  plugin.manager.block:
+    class: Drupal\Core\Block\BlockManager
