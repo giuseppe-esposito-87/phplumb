@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::discover::{DiscoverOptions, discover};
+use phplumb_index::discover::{DiscoverOptions, discover};
 use tempfile::TempDir;
 
 fn write(root: &Path, rel: &str, content: &str) {

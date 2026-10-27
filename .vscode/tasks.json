@@ -4,7 +4,7 @@
     {
       "label": "build all",
       "type": "shell",
-      "command": "cargo build -p phpnav-server && npm --prefix editors/vscode run build",
+      "command": "cargo build -p phplumb-server && npm --prefix editors/vscode run build",
       "options": {
         // Homebrew installs rustup keg-only, outside the default PATH.
         "env": {

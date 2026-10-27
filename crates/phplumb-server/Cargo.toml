@@ -1,12 +1,12 @@
 [package]
-name = "phpnav-server"
+name = "phplumb-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "php-navigator"
+name = "phplumb"
 path = "src/main.rs"
 
 [dependencies]
@@ -14,7 +14,7 @@ anyhow.workspace = true
 libc.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
-phpnav-index.workspace = true
+phplumb-index.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

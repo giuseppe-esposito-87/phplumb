@@ -3,8 +3,8 @@ import * as path from "node:path";
 import { resolveServerPath } from "../serverPath";
 
 const ext = "/ext/editors/vscode";
-const bundled = path.join(ext, "bin", "php-navigator");
-const dev = path.join(ext, "..", "..", "target", "debug", "php-navigator");
+const bundled = path.join(ext, "bin", "phplumb");
+const dev = path.join(ext, "..", "..", "target", "debug", "phplumb");
 
 function existing(...paths: string[]): (p: string) => boolean {
   return (p) => paths.includes(p);
@@ -12,11 +12,11 @@ function existing(...paths: string[]): (p: string) => boolean {
 
 suite("resolveServerPath", () => {
   test("prefers the configured path", () => {
-    assert.strictEqual(resolveServerPath(ext, "/a", { PHPNAV_SERVER_PATH: "/b" }, existing("/a", "/b", bundled)), "/a");
+    assert.strictEqual(resolveServerPath(ext, "/a", { PHPLUMB_SERVER_PATH: "/b" }, existing("/a", "/b", bundled)), "/a");
   });
 
   test("falls back to the env var", () => {
-    assert.strictEqual(resolveServerPath(ext, "", { PHPNAV_SERVER_PATH: "/b" }, existing("/b", bundled)), "/b");
+    assert.strictEqual(resolveServerPath(ext, "", { PHPLUMB_SERVER_PATH: "/b" }, existing("/b", bundled)), "/b");
   });
 
   test("falls back to the bundled binary, then the dev build", () => {
@@ -31,7 +31,7 @@ suite("resolveServerPath", () => {
 
   test("throws listing every path tried when none exists", () => {
     assert.throws(
-      () => resolveServerPath(ext, "/a", { PHPNAV_SERVER_PATH: "/b" }, existing()),
+      () => resolveServerPath(ext, "/a", { PHPLUMB_SERVER_PATH: "/b" }, existing()),
       (err: Error) => ["/a", "/b", bundled, dev].every((p) => err.message.includes(p)),
     );
   });

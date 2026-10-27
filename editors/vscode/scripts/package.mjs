@@ -1,4 +1,4 @@
-// Builds a platform-specific .vsix with the php-navigator binary for that platform.
+// Builds a platform-specific .vsix with the phplumb binary for that platform.
 //
 //   npm run package -- [darwin-arm64 | linux-x64]
 //
@@ -18,8 +18,8 @@ const builds = {
     if (host !== "darwin-arm64") {
       throw new Error(`darwin-arm64 packages build on an Apple silicon Mac, not on ${host}`);
     }
-    run("cargo", ["build", "--release", "--locked", "-p", "phpnav-server"], repoRoot);
-    return path.join(repoRoot, "target", "release", "php-navigator");
+    run("cargo", ["build", "--release", "--locked", "-p", "phplumb-server"], repoRoot);
+    return path.join(repoRoot, "target", "release", "phplumb");
   },
   "linux-x64": () => {
     const out = path.join(repoRoot, "target", "linux-x64");
@@ -39,7 +39,7 @@ const builds = {
       ],
       repoRoot,
     );
-    return path.join(out, "php-navigator");
+    return path.join(out, "phplumb");
   },
 };
 
@@ -57,11 +57,11 @@ if (build === undefined) {
 const binary = build();
 const bin = path.join(extensionDir, "bin");
 mkdirSync(bin, { recursive: true });
-copyFileSync(binary, path.join(bin, "php-navigator"));
-chmodSync(path.join(bin, "php-navigator"), 0o755);
+copyFileSync(binary, path.join(bin, "phplumb"));
+chmodSync(path.join(bin, "phplumb"), 0o755);
 
 const { version } = JSON.parse(readFileSync(path.join(extensionDir, "package.json"), "utf8"));
-const vsix = `php-navigator-${target}-${version}.vsix`;
+const vsix = `phplumb-${target}-${version}.vsix`;
 run("npm", ["run", "build"], extensionDir);
 run(
   "npx",

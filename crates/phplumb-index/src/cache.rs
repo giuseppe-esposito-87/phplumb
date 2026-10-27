@@ -12,7 +12,8 @@ const FORMAT: u32 = 1;
 
 /// The engine that writes and reads caches: the crate version plus a fingerprint of
 /// the indexing code, so any rebuild of the engine invalidates older caches.
-pub(crate) const ENGINE: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("PHPNAV_INDEX_BUILD"));
+pub(crate) const ENGINE: &str =
+    concat!(env!("CARGO_PKG_VERSION"), "+", env!("PHPLUMB_INDEX_BUILD"));
 
 #[derive(Serialize, Deserialize)]
 struct CacheFile {

@@ -1,4 +1,4 @@
-//! A minimal LSP client that drives the `php-navigator` binary over stdio.
+//! A minimal LSP client that drives the `phplumb` binary over stdio.
 
 #![allow(dead_code)]
 
@@ -19,7 +19,7 @@ pub struct Client {
 
 impl Client {
     pub fn start() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_phplumb"))
             .arg("serve")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

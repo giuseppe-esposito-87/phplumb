@@ -9,7 +9,7 @@ rust-version = "1.99"
 publish = false
 
 [workspace.dependencies]
-phpnav-index = { path = "crates/phpnav-index" }
+phplumb-index = { path = "crates/phplumb-index" }
 mago-syntax = "=1.59.0"
 mago-names = "=1.59.0"
 mago-database = "=1.59.0"

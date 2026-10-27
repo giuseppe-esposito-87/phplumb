@@ -10,9 +10,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::Location;
-use phpnav_index::discover::{DiscoverOptions, discover};
-use phpnav_index::index::Index;
+use phplumb_index::Location;
+use phplumb_index::discover::{DiscoverOptions, discover};
+use phplumb_index::index::Index;
 
 const OPEN: &[u8] = b"/*@";
 const CLOSE: &[u8] = b"*/";

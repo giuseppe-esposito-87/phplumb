@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use phpnav_index::discover::DiscoverOptions;
-use phpnav_index::{ClassRef, Index};
+use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::{ClassRef, Index};
 use tempfile::TempDir;
 
 fn workspace(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {

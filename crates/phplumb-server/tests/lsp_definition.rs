@@ -1,4 +1,4 @@
-//! Drives the `php-navigator` binary over stdio the way an editor does.
+//! Drives the `phplumb` binary over stdio the way an editor does.
 
 mod common;
 

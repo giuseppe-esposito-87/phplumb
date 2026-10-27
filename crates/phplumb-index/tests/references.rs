@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::discover::DiscoverOptions;
-use phpnav_index::summary::summarize;
-use phpnav_index::{Index, RefKey};
+use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::summary::summarize;
+use phplumb_index::{Index, RefKey};
 use tempfile::TempDir;
 
 fn workspace(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {

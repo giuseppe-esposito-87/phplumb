@@ -15,7 +15,7 @@ fn main() -> ExitCode {
         None | Some("serve") => match lsp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("php-navigator: {err:#}");
+                eprintln!("phplumb: {err:#}");
                 ExitCode::FAILURE
             }
         },
@@ -32,17 +32,17 @@ fn main() -> ExitCode {
                 }
             }
             Err(err) => {
-                eprintln!("php-navigator bench: {err:#}");
+                eprintln!("phplumb bench: {err:#}");
                 ExitCode::from(2)
             }
         },
         Some("--version") => {
-            println!("php-navigator {}", env!("CARGO_PKG_VERSION"));
+            println!("phplumb {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Some(other) => {
             eprintln!(
-                "php-navigator: unknown command {other}\nusage: php-navigator [serve | bench --root <DIR> [--cases <FILE>] [--cache <FILE>] [--coverage <DIR>] [--exclude <GLOB>]... | --version]"
+                "phplumb: unknown command {other}\nusage: phplumb [serve | bench --root <DIR> [--cases <FILE>] [--cache <FILE>] [--coverage <DIR>] [--exclude <GLOB>]... | --version]"
             );
             ExitCode::FAILURE
         }

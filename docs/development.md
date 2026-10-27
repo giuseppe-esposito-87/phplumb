@@ -1,6 +1,6 @@
 # Development
 
-PHP Navigator has two parts: the Rust engine in `crates/` and the VS Code extension in `editors/vscode`. The extension starts the engine binary and talks to it over LSP.
+PHPlumb has two parts: the Rust engine in `crates/` and the VS Code extension in `editors/vscode`. The extension starts the engine binary and talks to it over LSP.
 
 ## Prerequisites
 
@@ -14,9 +14,9 @@ PHP Navigator has two parts: the Rust engine in `crates/` and the VS Code extens
 2. In that window, open a Drupal project once with File > Open Folder. The window reopens it on the next F5.
 3. After each change the agent reports as built, press Cmd+R in that window to reload it with the new build.
 
-The index follows file changes made outside the editor, such as an agent's edits or a branch switch, and is cached in the workspace storage, so reopening a project skips parsing unchanged files. Indexing progress appears in the status bar. The **PHP Navigator** output channel shows the server log.
+The index follows file changes made outside the editor, such as an agent's edits or a branch switch, and is cached in the workspace storage, so reopening a project skips parsing unchanged files. Indexing progress appears in the status bar. The **PHPlumb** output channel shows the server log.
 
-To skip paths, set `phpNavigator.exclude` in the workspace settings, for example `["psalm-stubs/**"]`.
+To skip paths, set `phplumb.exclude` in the workspace settings, for example `["psalm-stubs/**"]`.
 
 ## Automated checks
 
@@ -32,7 +32,7 @@ The extension tests download VS Code Insiders on first run, so they work while t
 ## Benchmark
 
 ```sh
-cargo run --release -p phpnav-server -- bench --root <drupal-root> --cases <cases.toml>
+cargo run --release -p phplumb-server -- bench --root <drupal-root> --cases <cases.toml>
 ```
 
 The command prints a JSON report and exits with code 1 when a case fails. Case files that point into client code stay outside the repository. See `docs/benchmarks.md` for recorded results.
@@ -49,8 +49,8 @@ npm --prefix editors/vscode run package -- linux-x64
 - **`darwin-arm64`** builds with the host toolchain, so it needs an Apple silicon Mac. It is the default target there.
 - **`linux-x64`** builds a static binary inside the pinned `rust` Alpine image for `linux/amd64`, so it needs only Docker and runs on any x64 distribution. On a Mac, Docker emulates x64, which makes the first build slow; later builds reuse the Cargo caches.
 
-Each command writes `editors/vscode/php-navigator-<target>-<version>.vsix`. Install it in a dedicated profile to test it as a user would:
+Each command writes `editors/vscode/phplumb-<target>-<version>.vsix`. Install it in a dedicated profile to test it as a user would:
 
 ```sh
-code --profile "PHP Navigator" --install-extension editors/vscode/php-navigator-linux-x64-0.1.0.vsix
+code --profile "PHPlumb" --install-extension editors/vscode/phplumb-linux-x64-0.1.0.vsix
 ```

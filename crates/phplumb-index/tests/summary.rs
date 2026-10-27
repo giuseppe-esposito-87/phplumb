@@ -1,5 +1,5 @@
-use phpnav_index::phpdoc::TypeExpr;
-use phpnav_index::summary::{
+use phplumb_index::phpdoc::TypeExpr;
+use phplumb_index::summary::{
     ClassShape, Declaration, FileSummary, Member, MemberKind, NameKind, NameRef, SymbolKind,
     summarize,
 };

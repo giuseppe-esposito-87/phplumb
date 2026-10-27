@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::Index;
-use phpnav_index::discover::DiscoverOptions;
-use phpnav_index::summary::{MemberKind, SymbolKind};
-use phpnav_index::symbols::{Kind, OutlineSymbol, outline};
+use phplumb_index::Index;
+use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::summary::{MemberKind, SymbolKind};
+use phplumb_index::symbols::{Kind, OutlineSymbol, outline};
 use tempfile::TempDir;
 
 fn names(symbols: &[OutlineSymbol]) -> Vec<(&str, Kind)> {

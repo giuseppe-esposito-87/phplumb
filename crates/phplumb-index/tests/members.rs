@@ -2,10 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use phpnav_index::Index;
-use phpnav_index::discover::DiscoverOptions;
-use phpnav_index::phpdoc::TypeExpr;
-use phpnav_index::summary::MemberKind;
+use phplumb_index::Index;
+use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::phpdoc::TypeExpr;
+use phplumb_index::summary::MemberKind;
 use tempfile::TempDir;
 
 fn index(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {

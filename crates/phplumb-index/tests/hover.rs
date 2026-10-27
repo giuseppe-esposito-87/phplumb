@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::Index;
-use phpnav_index::discover::DiscoverOptions;
+use phplumb_index::Index;
+use phplumb_index::discover::DiscoverOptions;
 use tempfile::TempDir;
 
 const FOO: &str = "<?php\nnamespace Lib;\n\n/**\n * A foo.\n */\nfinal class Foo\n{\n    /**\n     * Loads one.\n     *\n     * @return static|null\n     */\n    public function load(int $id): ?static\n    {\n    }\n}\n";

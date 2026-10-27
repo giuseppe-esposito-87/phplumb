@@ -27,18 +27,18 @@ use lsp_types::{
     WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkspaceSymbol, WorkspaceSymbolParams,
     WorkspaceSymbolResponse,
 };
-use phpnav_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
-use phpnav_index::line_index::LineIndex;
-use phpnav_index::summary::{MemberKind, SymbolKind as IndexSymbolKind};
-use phpnav_index::symbols::{self, Kind, OutlineSymbol};
-use phpnav_index::{CallItem, CallKind, ClassRef, Index, IndexStats};
+use phplumb_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
+use phplumb_index::line_index::LineIndex;
+use phplumb_index::summary::{MemberKind, SymbolKind as IndexSymbolKind};
+use phplumb_index::symbols::{self, Kind, OutlineSymbol};
+use phplumb_index::{CallItem, CallKind, ClassRef, Index, IndexStats};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::convert::{path_to_uri, uri_to_path};
 
-const PROGRESS_TOKEN: &str = "php-navigator/indexing";
-const WATCH_REGISTRATION: &str = "php-navigator/watch";
+const PROGRESS_TOKEN: &str = "phplumb/indexing";
+const WATCH_REGISTRATION: &str = "phplumb/watch";
 const CACHE_FILE: &str = "index-v1.bin";
 /// How long to wait for more file events before applying a batch. Branch switches
 /// and agents report changes in many small notifications.
@@ -81,7 +81,7 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         id,
         json!({
             "capabilities": capabilities,
-            "serverInfo": {"name": "php-navigator", "version": env!("CARGO_PKG_VERSION")},
+            "serverInfo": {"name": "phplumb", "version": env!("CARGO_PKG_VERSION")},
         }),
     )?;
 
@@ -385,7 +385,7 @@ impl Server<'_> {
             self.send_progress(
                 &token,
                 WorkDoneProgress::Begin(WorkDoneProgressBegin {
-                    title: "PHP Navigator".to_string(),
+                    title: "PHPlumb".to_string(),
                     message: Some("Indexing".to_string()),
                     ..WorkDoneProgressBegin::default()
                 }),
@@ -820,7 +820,7 @@ fn hierarchy_item(class: &ClassRef<'_>) -> Option<TypeHierarchyItem> {
 }
 
 /// Index locations as LSP locations, with positions read from each target file.
-fn to_locations(targets: &[phpnav_index::Location]) -> Vec<Location> {
+fn to_locations(targets: &[phplumb_index::Location]) -> Vec<Location> {
     targets
         .iter()
         .filter_map(|target| {

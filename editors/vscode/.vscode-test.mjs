@@ -12,9 +12,9 @@ export default defineConfig({
   workspaceFolder: "./test-fixtures/basic",
   // macOS caps socket paths at 104 bytes; the default user data dir under
   // .vscode-test makes the main socket path longer than that.
-  launchArgs: ["--disable-extensions", `--user-data-dir=${path.join(os.tmpdir(), "phpnav-vscode-test")}`],
+  launchArgs: ["--disable-extensions", `--user-data-dir=${path.join(os.tmpdir(), "phplumb-vscode-test")}`],
   env: {
-    PHPNAV_SERVER_PATH: path.resolve(here, "../../target/debug/php-navigator"),
+    PHPLUMB_SERVER_PATH: path.resolve(here, "../../target/debug/phplumb"),
   },
   mocha: {
     ui: "tdd",

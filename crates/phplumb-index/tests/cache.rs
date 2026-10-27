@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::discover::DiscoverOptions;
-use phpnav_index::{Index, IndexStats};
+use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::{Index, IndexStats};
 use tempfile::TempDir;
 
 struct Workspace {

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use phpnav_index::discover::{DiscoverOptions, discover};
+use phplumb_index::discover::{DiscoverOptions, discover};
 use serde_json::Value;
 
 /// 1-based `line:column` of the first occurrence of `needle` in `text`, with the
@@ -18,7 +18,7 @@ fn position_of(text: &str, needle: &str) -> String {
 #[test]
 fn bench_reports_cases() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../phpnav-index/tests/fixtures/names")
+        .join("../phplumb-index/tests/fixtures/names")
         .canonicalize()
         .unwrap();
     let consumer = std::fs::read_to_string(root.join("app/Consumer.php")).unwrap();
@@ -37,7 +37,7 @@ fn bench_reports_cases() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
         .arg("bench")
         .arg("--root")
         .arg(&root)
@@ -59,13 +59,13 @@ fn bench_reports_cases() {
 #[test]
 fn bench_reports_warm_start_and_updates() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../phpnav-index/tests/fixtures/names")
+        .join("../phplumb-index/tests/fixtures/names")
         .canonicalize()
         .unwrap();
     let cache_dir = tempfile::TempDir::new().unwrap();
     let cache = cache_dir.path().join("index-v1.bin");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
         .arg("bench")
         .arg("--root")
         .arg(&root)
@@ -90,11 +90,11 @@ fn bench_reports_warm_start_and_updates() {
 #[test]
 fn bench_reports_member_coverage() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../phpnav-index/tests/fixtures/inference")
+        .join("../phplumb-index/tests/fixtures/inference")
         .canonicalize()
         .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
         .arg("bench")
         .arg("--root")
         .arg(&root)
@@ -119,7 +119,7 @@ fn bench_reports_member_coverage() {
 #[test]
 fn bench_runs_implementation_cases() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../phpnav-index/tests/fixtures/implementations")
+        .join("../phplumb-index/tests/fixtures/implementations")
         .canonicalize()
         .unwrap();
     let shapes = std::fs::read_to_string(root.join("lib/Shapes.php")).unwrap();
@@ -135,7 +135,7 @@ fn bench_runs_implementation_cases() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
         .arg("bench")
         .arg("--root")
         .arg(&root)
@@ -153,7 +153,7 @@ fn bench_runs_implementation_cases() {
 #[test]
 fn bench_runs_reference_cases() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../phpnav-index/tests/fixtures/references")
+        .join("../phplumb-index/tests/fixtures/references")
         .canonicalize()
         .unwrap();
     let global = std::fs::read_to_string(root.join("global.php")).unwrap();
@@ -171,7 +171,7 @@ fn bench_runs_reference_cases() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
         .arg("bench")
         .arg("--root")
         .arg(&root)
@@ -189,11 +189,11 @@ fn bench_runs_reference_cases() {
 #[test]
 fn bench_reports_symbol_search_time() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../phpnav-index/tests/fixtures/names")
+        .join("../phplumb-index/tests/fixtures/names")
         .canonicalize()
         .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_php-navigator"))
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
         .arg("bench")
         .arg("--root")
         .arg(&root)

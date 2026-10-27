@@ -6,15 +6,15 @@ import { resolveServerPath } from "./serverPath";
 let client: LanguageClient | undefined;
 
 /** What `activate` returns; tests use it to find the index cache. */
-export interface PhpNavigatorApi {
+export interface PhplumbApi {
   cacheDir: string | undefined;
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<PhpNavigatorApi> {
+export async function activate(context: vscode.ExtensionContext): Promise<PhplumbApi> {
   context.subscriptions.push(
-    vscode.commands.registerCommand("phpNavigator.restartServer", () => restart(context)),
+    vscode.commands.registerCommand("phplumb.restartServer", () => restart(context)),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("phpNavigator.exclude") || event.affectsConfiguration("phpNavigator.server.path")) {
+      if (event.affectsConfiguration("phplumb.exclude") || event.affectsConfiguration("phplumb.server.path")) {
         void restart(context);
       }
     }),
@@ -37,7 +37,7 @@ export async function deactivate(): Promise<void> {
 }
 
 async function start(context: vscode.ExtensionContext): Promise<void> {
-  const config = vscode.workspace.getConfiguration("phpNavigator");
+  const config = vscode.workspace.getConfiguration("phplumb");
   let command: string;
   try {
     command = resolveServerPath(
@@ -48,7 +48,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
       context.extensionMode === vscode.ExtensionMode.Development,
     );
   } catch (err) {
-    void vscode.window.showErrorMessage(`PHP Navigator: ${(err as Error).message}`);
+    void vscode.window.showErrorMessage(`PHPlumb: ${(err as Error).message}`);
     return;
   }
 
@@ -75,7 +75,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
         document.isDirty ? undefined : next(document, token),
     },
   };
-  client = new LanguageClient("phpNavigator", "PHP Navigator", serverOptions, clientOptions);
+  client = new LanguageClient("phplumb", "PHPlumb", serverOptions, clientOptions);
   await client.start();
 }
 

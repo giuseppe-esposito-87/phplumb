@@ -1,6 +1,6 @@
-# PHP Navigator design
+# PHPlumb design
 
-PHP Navigator (working name) is a VS Code extension that gives PHPStorm-grade code navigation for large PHP codebases, starting with Drupal. It uses its own engine and does not wrap an existing language server.
+PHPlumb is a VS Code extension that gives PHPStorm-grade code navigation for large PHP codebases, starting with Drupal. It uses its own engine and does not wrap an existing language server.
 
 Status: draft, 2026-10-26.
 
@@ -127,11 +127,10 @@ Each step is usable on its own:
 
 The user has not explicitly confirmed these:
 
-- **Working name** PHP Navigator.
 - **Delivery order** above.
 - **Framework activation.** A setting with the default `auto`: the Drupal module turns on when `composer.lock` contains `drupal/core`. The user can force it on or off.
 - **Settings live in VS Code settings** (workspace or user), passed to the engine by the extension.
-- **Coexistence with Intelephense.** No special handling. The user disables Intelephense in workspaces where PHP Navigator runs, to avoid duplicate results.
+- **Coexistence with Intelephense.** No special handling. The user disables Intelephense in workspaces where PHPlumb runs, to avoid duplicate results.
 - **Memory target** of 1 GB.
 - **Platforms** macOS arm64 and Linux x64, because the team uses both.
 - **Distribution.** Local `.vsix` builds for now. No marketplace publishing.

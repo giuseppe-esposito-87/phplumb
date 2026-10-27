@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::discover::DiscoverOptions;
-use phpnav_index::{CallItem, CallKind, Index};
+use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::{CallItem, CallKind, Index};
 use tempfile::TempDir;
 
 const SOURCE: &str = "<?php\nclass X { public function __construct() {} }\nfunction helper() {}\nclass A\n{\n    public function a($unknown)\n    {\n        $this->b();\n        $this->b();\n        helper();\n        new X();\n        $unknown->c();\n    }\n\n    public function b() {}\n}\nfunction f() { (new A())->b(); }\n(new A())->b();\n";

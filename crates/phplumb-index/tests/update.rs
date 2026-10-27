@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use phpnav_index::discover::DiscoverOptions;
-use phpnav_index::{Index, Location};
+use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::{Index, Location};
 use tempfile::TempDir;
 
 const TARGET: &str = "<?php\nnamespace App;\nclass Target {}\n";

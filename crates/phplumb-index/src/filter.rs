@@ -131,7 +131,7 @@ fn build_globset(patterns: &[String]) -> anyhow::Result<GlobSet> {
             Ok(glob) => {
                 builder.add(glob);
             }
-            Err(err) => eprintln!("php-navigator: ignoring exclude pattern {pattern:?}: {err}"),
+            Err(err) => eprintln!("phplumb: ignoring exclude pattern {pattern:?}: {err}"),
         }
     }
     Ok(builder.build()?)

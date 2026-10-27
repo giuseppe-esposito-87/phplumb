@@ -1,6 +1,6 @@
 {
-  "name": "php-navigator",
-  "displayName": "PHP Navigator",
+  "name": "phplumb",
+  "displayName": "PHPlumb",
   "description": "Fast code navigation for large PHP and Drupal codebases.",
   "publisher": "sparkfabrik",
   "version": "0.1.0",
@@ -30,14 +30,14 @@
       }
     ],
     "configuration": {
-      "title": "PHP Navigator",
+      "title": "PHPlumb",
       "properties": {
-        "phpNavigator.server.path": {
+        "phplumb.server.path": {
           "type": "string",
           "default": "",
-          "description": "Path of the php-navigator binary. Empty uses the bundled binary."
+          "description": "Path of the phplumb binary. Empty uses the bundled binary."
         },
-        "phpNavigator.exclude": {
+        "phplumb.exclude": {
           "type": "array",
           "items": {
             "type": "string"
@@ -45,7 +45,7 @@
           "default": [],
           "description": "Glob patterns, relative to the workspace folder, of paths not to index."
         },
-        "phpNavigator.trace.server": {
+        "phplumb.trace.server": {
           "type": "string",
           "enum": [
             "off",
@@ -53,14 +53,14 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Traces the communication between VS Code and the php-navigator server."
+          "description": "Traces the communication between VS Code and the phplumb server."
         }
       }
     },
     "commands": [
       {
-        "command": "phpNavigator.restartServer",
-        "title": "PHP Navigator: Restart Server"
+        "command": "phplumb.restartServer",
+        "title": "PHPlumb: Restart Server"
       }
     ]
   },

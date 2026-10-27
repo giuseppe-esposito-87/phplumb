@@ -1,4 +1,4 @@
-//! `php-navigator bench`: indexes a project, measures it and checks a case file.
+//! `phplumb bench`: indexes a project, measures it and checks a case file.
 //!
 //! Case positions are `relative/path:line:column`, 1-based, with columns in UTF-16
 //! units, pointing at the start of a name. An empty `expect` means "nothing".
@@ -8,9 +8,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use phpnav_index::discover::{DiscoverOptions, discover};
-use phpnav_index::line_index::LineIndex;
-use phpnav_index::{Index, Location, member_access_offsets};
+use phplumb_index::discover::{DiscoverOptions, discover};
+use phplumb_index::line_index::LineIndex;
+use phplumb_index::{Index, Location, member_access_offsets};
 use serde::{Deserialize, Serialize};
 
 pub struct BenchArgs {

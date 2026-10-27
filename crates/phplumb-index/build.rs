@@ -20,7 +20,7 @@ fn main() {
         hasher.write(&std::fs::read(input).unwrap_or_default());
     }
     println!(
-        "cargo:rustc-env=PHPNAV_INDEX_BUILD={:016x}",
+        "cargo:rustc-env=PHPLUMB_INDEX_BUILD={:016x}",
         hasher.finish()
     );
 }

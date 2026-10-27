@@ -1,6 +1,6 @@
 # Benchmarks
 
-Results of `php-navigator bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
+Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
 ## 2026-10-26, step 2e symbols and outline
 
