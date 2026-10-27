@@ -2,6 +2,25 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 4f broken Drupal references
+
+Same machine and project. `phplumb bench --diagnostics <dir>` lists every diagnostic; the Drupal ones are service ids, route names and plugin ids defined nowhere on disk. Every Drupal diagnostic below was checked by hand.
+
+| Area                  | Files  | Drupal diagnostics | What they are                                                                                                                     | Slowest file |
+| --------------------- | ------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `web/modules/custom`  | 1,228  | 6                  | 4 `'#type' => 'markup'`, 2 uses of a formatter defined nowhere                                                                    | 9 ms         |
+| `web/modules/contrib` | 6,596  | 91                 | 34 `markup`, 16 wrong widget or formatter ids, 36 services and routes of modules not on disk or missing files, 5 other plugin ids | 26 ms        |
+| `web/core`            | 11,473 | 11                 | 5 services called only by deprecated fallbacks, 5 `markup`, 1 `'#type' => '#markup'`                                              | 35 ms        |
+
+The first sweep found 519 Drupal diagnostics. The false alarms came from routes declared by attributes, route aliases, routes and services defined by PHP code, hook classes as services, plugin managers that look ids up their own way, webform elements, test code and `*.api.php` files; each became a rule with a test.
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | at least 42,455 |
+| Cold index                              | 5.9 s                             | under 10 s      |
+| Peak resident memory                    | 397 to 420 MB                     | under 1024 MB   |
+| All cases                               | 84 passed, 0 failed               | all pass        |
+
 ## 2026-10-27, step 4e Drupal routes and YAML
 
 Same machine and project. The Drupal module reads routes from `*.routing.yml`, and the server answers definitions inside services, routing and links YAML files.
