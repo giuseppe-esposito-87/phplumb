@@ -1,11 +1,11 @@
 //! Drupal routes: every route of every `*.routing.yml` on disk outside `vendor` and
 //! test modules.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::is_a;
-use super::services::{drupal_files, is_drupal_file};
+use super::services::{Tests, drupal_files, in_tests, is_drupal_file};
 use super::yaml::{self, Yaml};
 use crate::discover::chosen_path;
 use crate::filter::PathFilter;
@@ -46,13 +46,20 @@ pub struct RouteDefinition {
 #[derive(Default)]
 pub(crate) struct Routes {
     by_file: HashMap<PathBuf, Vec<RouteDefinition>>,
+    /// Routes outside test modules, which navigation uses.
     by_name: HashMap<String, Vec<RouteDefinition>>,
+    /// Every route name defined, test modules included.
+    defined: HashSet<String>,
+    root: PathBuf,
 }
 
 impl Routes {
     pub(crate) fn read(filter: &PathFilter) -> Routes {
-        let mut routes = Routes::default();
-        for path in drupal_files(filter, filter.root(), ROUTING) {
+        let mut routes = Routes {
+            root: filter.root().to_path_buf(),
+            ..Routes::default()
+        };
+        for path in drupal_files(filter, filter.root(), ROUTING, Tests::Include) {
             routes.by_file.insert(path.clone(), parse_file(&path));
         }
         routes.reindex();
@@ -66,11 +73,13 @@ impl Routes {
         }
         for path in changed {
             let files = if path.is_dir() {
-                drupal_files(filter, path, ROUTING)
+                drupal_files(filter, path, ROUTING, Tests::Include)
             } else {
                 chosen_path(filter.root(), path)
                     .map(|(_, chosen)| chosen)
-                    .filter(|chosen| is_drupal_file(filter, chosen, ROUTING) && chosen.is_file())
+                    .filter(|chosen| {
+                        is_drupal_file(filter, chosen, ROUTING, Tests::Include) && chosen.is_file()
+                    })
                     .into_iter()
                     .collect()
             };
@@ -82,8 +91,19 @@ impl Routes {
     }
 
     fn reindex(&mut self) {
+        self.defined = self
+            .by_file
+            .values()
+            .flatten()
+            .map(|r| r.name.clone())
+            .collect();
         let mut by_name: HashMap<String, Vec<RouteDefinition>> = HashMap::new();
-        for definition in self.by_file.values().flatten() {
+        for definition in self
+            .by_file
+            .iter()
+            .filter(|(file, _)| !in_tests(&self.root, file))
+            .flat_map(|(_, definitions)| definitions)
+        {
             by_name
                 .entry(definition.name.clone())
                 .or_default()
@@ -93,6 +113,11 @@ impl Routes {
             definitions.sort_by(|a, b| (&a.path, a.start).cmp(&(&b.path, b.start)));
         }
         self.by_name = by_name;
+    }
+
+    /// Whether some routing file defines `name`, test modules included.
+    pub(crate) fn defines(&self, name: &str) -> bool {
+        self.defined.contains(name)
     }
 
     pub(crate) fn get(&self, name: &str) -> &[RouteDefinition] {

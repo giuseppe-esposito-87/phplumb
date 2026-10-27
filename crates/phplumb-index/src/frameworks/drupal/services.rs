@@ -27,7 +27,11 @@ pub struct ServiceDefinition {
 #[derive(Default)]
 pub(crate) struct Services {
     by_file: HashMap<PathBuf, Vec<(String, ServiceDefinition)>>,
+    /// Definitions outside test modules, which navigation uses.
     by_id: HashMap<String, Vec<ServiceDefinition>>,
+    /// Every id defined, test modules included.
+    defined: HashSet<String>,
+    root: PathBuf,
     /// Decorated id to the ids decorating it.
     decorators: HashMap<String, Vec<String>>,
 }
@@ -35,8 +39,11 @@ pub(crate) struct Services {
 impl Services {
     /// Every services file below the filter's root.
     pub(crate) fn read(filter: &PathFilter) -> Services {
-        let mut services = Services::default();
-        for path in drupal_files(filter, filter.root(), SERVICES) {
+        let mut services = Services {
+            root: filter.root().to_path_buf(),
+            ..Services::default()
+        };
+        for path in drupal_files(filter, filter.root(), SERVICES, Tests::Include) {
             services.by_file.insert(path.clone(), parse_file(&path));
         }
         services.reindex();
@@ -53,11 +60,13 @@ impl Services {
         }
         for path in changed {
             let files = if path.is_dir() {
-                drupal_files(filter, path, SERVICES)
+                drupal_files(filter, path, SERVICES, Tests::Include)
             } else {
                 chosen_path(filter.root(), path)
                     .map(|(_, chosen)| chosen)
-                    .filter(|chosen| is_drupal_file(filter, chosen, SERVICES) && chosen.is_file())
+                    .filter(|chosen| {
+                        is_drupal_file(filter, chosen, SERVICES, Tests::Include) && chosen.is_file()
+                    })
                     .into_iter()
                     .collect()
             };
@@ -69,6 +78,11 @@ impl Services {
         if touched {
             self.reindex();
         }
+    }
+
+    /// Whether some services file defines `id`, test modules included.
+    pub(crate) fn defines(&self, id: &str) -> bool {
+        self.defined.contains(id)
     }
 
     pub(crate) fn definitions(&self, id: &str) -> &[ServiceDefinition] {
@@ -129,7 +143,17 @@ impl Services {
     fn reindex(&mut self) {
         self.by_id.clear();
         self.decorators.clear();
-        let mut files: Vec<&PathBuf> = self.by_file.keys().collect();
+        self.defined = self
+            .by_file
+            .values()
+            .flatten()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut files: Vec<&PathBuf> = self
+            .by_file
+            .keys()
+            .filter(|file| !in_tests(&self.root, file))
+            .collect();
         files.sort();
         for file in files {
             for (id, definition) in &self.by_file[file] {
@@ -150,9 +174,23 @@ impl Services {
 
 const SERVICES: &str = ".services.yml";
 
+/// Whether the Drupal registries read files of test modules.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tests {
+    Skip,
+    Include,
+}
+
+/// Whether `path`, below the root, is in a test module: a `tests` component.
+pub(super) fn in_tests(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .is_ok_and(|relative| relative.components().any(|c| c.as_os_str() == "tests"))
+}
+
 /// Whether `path` is a file named `*{suffix}` that the Drupal registries read:
-/// outside `vendor`, test modules and hidden or skipped directories.
-pub(super) fn is_drupal_file(filter: &PathFilter, path: &Path, suffix: &str) -> bool {
+/// outside `vendor`, hidden or skipped directories, and test modules unless `tests`
+/// includes them.
+pub(super) fn is_drupal_file(filter: &PathFilter, path: &Path, suffix: &str, tests: Tests) -> bool {
     let name_matches = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -165,14 +203,21 @@ pub(super) fn is_drupal_file(filter: &PathFilter, path: &Path, suffix: &str) -> 
         && !has_skipped_component(relative)
         && !relative.components().any(|c| {
             let name = c.as_os_str();
-            name == "vendor" || name == "tests" || SKIPPED_DIR_NAMES.iter().any(|s| name == *s)
+            name == "vendor"
+                || (tests == Tests::Skip && name == "tests")
+                || SKIPPED_DIR_NAMES.iter().any(|s| name == *s)
         })
 }
 
 /// The files named `*{suffix}` that the Drupal registries read below `start`, a
 /// directory under the filter's root, each once under the path PHP discovery would
 /// choose for it.
-pub(super) fn drupal_files(filter: &PathFilter, start: &Path, suffix: &str) -> Vec<PathBuf> {
+pub(super) fn drupal_files(
+    filter: &PathFilter,
+    start: &Path,
+    suffix: &str,
+    tests: Tests,
+) -> Vec<PathBuf> {
     if !filter.accepts_dir(start) {
         return Vec::new();
     }
@@ -184,12 +229,12 @@ pub(super) fn drupal_files(filter: &PathFilter, start: &Path, suffix: &str) -> V
         .git_global(false)
         .git_exclude(false)
         .follow_links(true)
-        .filter_entry(|entry| {
+        .filter_entry(move |entry| {
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
             let name = entry.file_name();
             !(is_dir
                 && (name == "vendor"
-                    || name == "tests"
+                    || (tests == Tests::Skip && name == "tests")
                     || SKIPPED_DIR_NAMES.iter().any(|s| name == *s)))
         })
         .build();
@@ -201,7 +246,7 @@ pub(super) fn drupal_files(filter: &PathFilter, start: &Path, suffix: &str) -> V
         let Some((canonical, chosen)) = chosen_path(filter.root(), entry.path()) else {
             continue;
         };
-        if is_drupal_file(filter, &chosen, suffix) {
+        if is_drupal_file(filter, &chosen, suffix, tests) {
             by_canonical.entry(canonical).or_insert(chosen);
         }
     }

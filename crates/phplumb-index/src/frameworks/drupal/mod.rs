@@ -3,6 +3,7 @@
 mod entities;
 mod extensions;
 mod hooks;
+mod literals;
 mod navigation;
 mod plugins;
 mod routes;
@@ -12,6 +13,7 @@ mod yaml;
 use std::any::Any;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
@@ -21,6 +23,7 @@ pub use entities::EntityType;
 use entities::EntityTypes;
 pub use hooks::{ExtensionKind, HookDoc, HookImplementation};
 use hooks::{Hooks, Storage};
+use literals::PhpLiterals;
 use plugins::Plugins;
 pub use plugins::{Plugin, PluginType};
 pub use routes::RouteDefinition;
@@ -35,7 +38,13 @@ pub struct Drupal {
     hooks: Hooks,
     plugins: Plugins,
     routes: Routes,
+    /// String literals of the PHP files that may define ids, read on first use and
+    /// emptied on every rebuild and update.
+    literals: RwLock<Option<Arc<PhpLiterals>>>,
 }
+
+/// Services the kernel sets itself.
+const SYNTHETIC: [&str; 3] = ["service_container", "kernel", "class_loader"];
 
 impl Drupal {
     /// Whether `id` is an entity type stored as `storage` asks.
@@ -47,6 +56,48 @@ impl Drupal {
             Storage::Config => found.iter().any(config),
             Storage::Content => found.iter().any(|entity| !config(entity)),
         }
+    }
+
+    /// Whether the service `id` is defined anywhere on disk: in a services file,
+    /// test modules included, by the kernel, or possibly by PHP code that defines
+    /// services.
+    pub fn defines_service(&self, index: &Index, id: &str) -> bool {
+        self.services.defines(id)
+            || SYNTHETIC.contains(&id)
+            || self.literals(index).services.contains(id)
+    }
+
+    /// Whether the route `name` is defined anywhere on disk: in a routing file, test
+    /// modules included, or possibly by PHP code that builds routes.
+    pub fn defines_route(&self, index: &Index, name: &str) -> bool {
+        self.routes.defines(name) || self.literals(index).routes.contains(name)
+    }
+
+    /// Whether `manager` has a plugin `id` (or its base, for `base:derivative`)
+    /// anywhere on disk, test modules included, or possibly added by PHP code.
+    pub fn defines_plugin(&self, index: &Index, manager: &str, id: &str) -> bool {
+        let base = id.split_once(':').map_or(id, |(base, _)| base);
+        self.plugins.defines(manager, id) || {
+            let literals = self.literals(index);
+            literals.plugins.contains(id) || literals.plugins.contains(base)
+        }
+    }
+
+    fn literals(&self, index: &Index) -> Arc<PhpLiterals> {
+        if let Some(found) = self
+            .literals
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            return found.clone();
+        }
+        let found = Arc::new(PhpLiterals::read(index));
+        self.literals
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert(found)
+            .clone()
     }
 
     /// Every definition of the route `name`, sorted by path.
@@ -98,6 +149,15 @@ impl Drupal {
     }
 }
 
+impl Drupal {
+    fn clear_literals(&mut self) {
+        *self
+            .literals
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+    }
+}
+
 impl Framework for Drupal {
     fn name(&self) -> &'static str {
         "drupal"
@@ -124,6 +184,7 @@ impl Framework for Drupal {
         self.hooks = Hooks::read(index);
         self.plugins = Plugins::read(index, self.hooks.extensions());
         self.routes = Routes::read(index.filter());
+        self.clear_literals();
     }
 
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
@@ -133,6 +194,7 @@ impl Framework for Drupal {
         self.plugins
             .update(index, self.hooks.extensions(), changed, removed);
         self.routes.update(index.filter(), changed, removed);
+        self.clear_literals();
     }
 
     /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes;

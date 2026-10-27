@@ -10,4 +10,9 @@ class ConstraintManager extends DefaultPluginManager
     {
         parent::__construct('Plugin/Validation/Constraint', $namespaces, $module_handler, NULL, Constraint::class, 'Drupal\Core\Validation\Annotation\Constraint');
     }
+
+    public function registerDefinitions()
+    {
+        $this->getDiscovery()->setDefinition('NotBlank', ['label' => 'Not blank']);
+    }
 }

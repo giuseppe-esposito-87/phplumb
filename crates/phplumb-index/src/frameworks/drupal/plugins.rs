@@ -65,6 +65,8 @@ pub(crate) struct Plugins {
     /// The files declaring plugin managers.
     manager_files: HashSet<PathBuf>,
     by_manager: HashMap<String, Vec<Plugin>>,
+    /// Plugin ids of test modules by lowercased manager, which navigation ignores.
+    test_ids: HashMap<String, HashSet<String>>,
 }
 
 impl Plugins {
@@ -313,10 +315,12 @@ impl Plugins {
         let root = index.filter().root().to_path_buf();
         let mut is_a_cache: HashMap<(String, String), bool> = HashMap::new();
         let mut found: HashMap<String, Vec<Plugin>> = HashMap::new();
+        let mut test_ids: HashMap<String, HashSet<String>> = HashMap::new();
         for (path, declaration) in index.declarations() {
-            if declaration.kind != SymbolKind::Class || in_tests(&root, path) {
+            if declaration.kind != SymbolKind::Class {
                 continue;
             }
+            let tests = in_tests(&root, path);
             let Some(shape) = &declaration.class else {
                 continue;
             };
@@ -327,7 +331,9 @@ impl Plugins {
             let Some((extension, rest)) = rest.split_once('\\') else {
                 continue;
             };
-            if !roots.contains(extension) {
+            // Test modules are not in the extension list; any namespace below
+            // `Drupal\` may be one.
+            if !roots.contains(extension) && !tests {
                 continue;
             }
             // Core and component plugins live in a namespace one level below,
@@ -375,6 +381,13 @@ impl Plugins {
                     let Some(id) = declared.and_then(plugin_id) else {
                         continue;
                     };
+                    if tests {
+                        test_ids
+                            .entry(plugin_type.manager.to_ascii_lowercase())
+                            .or_default()
+                            .insert(id.to_string());
+                        continue;
+                    }
                     found
                         .entry(plugin_type.manager.to_ascii_lowercase())
                         .or_default()
@@ -393,6 +406,22 @@ impl Plugins {
             plugins.sort_by(|a, b| (&a.path, a.start).cmp(&(&b.path, b.start)));
         }
         self.by_manager = found;
+        self.test_ids = test_ids;
+    }
+
+    /// Whether `manager` has a plugin `id`, or its base for `base:derivative`, test
+    /// modules included.
+    pub(crate) fn defines(&self, manager: &str, id: &str) -> bool {
+        if !self.named(manager, id).is_empty() {
+            return true;
+        }
+        let Some(ids) = self.test_ids.get(&manager.to_ascii_lowercase()) else {
+            return false;
+        };
+        ids.contains(id)
+            || id
+                .split_once(':')
+                .is_some_and(|(base, _)| ids.contains(base))
     }
 }
 

@@ -32,10 +32,10 @@ use mago_syntax::cst::{
     Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
     AssignmentOperator, BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector,
     Closure, CompositeString, DoWhile, Expression, For, Foreach, ForeachTarget, Function,
-    FunctionLikeParameterList, Global, Hint, If, IfBody, KeyValueArrayElement, Literal, Method,
-    MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static,
-    StaticItem, StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable,
-    While,
+    FunctionLikeParameterList, Global, Hint, If, IfBody, KeyValueArrayElement, Literal,
+    LiteralString, Method, MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program,
+    PropertyAccess, Static, StaticItem, StaticMethodCall, StringPart, Switch, TriviaKind, Try,
+    TryCatchClause, Variable, While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -139,6 +139,29 @@ pub(crate) fn string_argument_at(
         .iter()
         .rev()
         .find_map(|call| ctx.string_argument(call, offset))
+}
+
+/// The values of every string literal in a file.
+pub(crate) fn string_literals(source: &[u8]) -> Vec<String> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut found = Vec::new();
+    StringLiterals.walk_program(program, &mut found);
+    found
+}
+
+struct StringLiterals;
+
+impl<'ast, 'arena> Walker<'ast, 'arena, Vec<String>> for StringLiterals {
+    fn walk_in_literal_string(
+        &self,
+        literal: &'ast LiteralString<'arena>,
+        found: &mut Vec<String>,
+    ) {
+        if let Some(value) = literal.value {
+            found.push(String::from_utf8_lossy(value).into_owned());
+        }
+    }
 }
 
 /// A string literal that is the value of an array key, and the call whose

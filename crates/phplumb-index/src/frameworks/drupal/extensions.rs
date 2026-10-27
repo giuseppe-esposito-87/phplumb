@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use yaml_rust2::YamlLoader;
 
 use super::hooks::ExtensionKind;
-use super::services::drupal_files;
+use super::services::{Tests, drupal_files};
 use crate::filter::PathFilter;
 
 pub(crate) const INFO: &str = ".info.yml";
@@ -25,7 +25,7 @@ pub(crate) struct Extensions {
 impl Extensions {
     pub(crate) fn read(filter: &PathFilter) -> Extensions {
         let mut extensions = Extensions::default();
-        for path in drupal_files(filter, filter.root(), INFO) {
+        for path in drupal_files(filter, filter.root(), INFO, Tests::Skip) {
             let Some(kind) = info_kind(&path) else {
                 continue;
             };

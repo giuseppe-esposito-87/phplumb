@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use super::extensions::{Extensions, INFO};
 use super::is_a;
-use super::services::is_drupal_file;
+use super::services::{Tests, is_drupal_file};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
 use crate::metadata::{MetaValue, Metadata};
@@ -486,7 +486,7 @@ impl Hooks {
         let filter = index.filter();
         let extensions_changed = removed.iter().chain(changed).any(|path| {
             path.is_dir()
-                || is_drupal_file(filter, path, INFO)
+                || is_drupal_file(filter, path, INFO, Tests::Skip)
                 || self
                     .extensions
                     .by_dir

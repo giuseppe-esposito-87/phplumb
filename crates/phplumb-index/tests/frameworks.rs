@@ -1354,3 +1354,39 @@ fn route_callbacks_invokable_controllers_and_derivers_lead_to_their_code() {
         vec!["modules/custom/mymodule/src/Plugin/Derivative/MenuDeriver.php: MenuDeriver"]
     );
 }
+
+#[test]
+fn drupal_ids_defined_anywhere_include_test_modules_and_php() {
+    let (_root, index) = drupal_fixture();
+    let drupal = index.drupal().unwrap();
+    let constraints = "Drupal\\Core\\Validation\\ConstraintManager";
+
+    for id in [
+        "mymodule.greeter",
+        "test.only",
+        "mymodule.dynamic",
+        "kernel",
+    ] {
+        assert!(drupal.defines_service(&index, id), "{id}");
+    }
+    assert!(!drupal.defines_service(&index, "nowhere.service"));
+    for name in [
+        "mymodule.page",
+        "mymodule_test.route",
+        "mymodule.dynamic_route",
+    ] {
+        assert!(drupal.defines_route(&index, name), "{name}");
+    }
+    assert!(!drupal.defines_route(&index, "nowhere.route"));
+    for id in ["my_block", "test_block", "menu_block:main"] {
+        assert!(drupal.defines_plugin(&index, BLOCKS, id), "{id}");
+    }
+    assert!(!drupal.defines_plugin(&index, BLOCKS, "nowhere_block"));
+    assert!(drupal.defines_plugin(&index, constraints, "NotBlank"));
+    assert!(drupal.defines_plugin(&index, constraints, "UniqueField"));
+    assert!(!drupal.defines_plugin(&index, constraints, "Nowhere"));
+
+    assert!(drupal.services("test.only").is_empty());
+    assert!(drupal.routes("mymodule_test.route").is_empty());
+    assert!(drupal.plugins(BLOCKS, "test_block").is_empty());
+}
