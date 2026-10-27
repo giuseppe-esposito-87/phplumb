@@ -39,10 +39,10 @@ PHPlumb starts with Drupal, because its code calls almost everything through int
 - Broken reference diagnostics are tested against Drupal core and contrib for false alarms.
 - **Services.** `\Drupal::service('id')` and `$container->get('id')` are typed from every `*.services.yml`, so navigation continues on the next call. Cmd+click on a service id opens its definition.
 - **Entities.** `getStorage('node')` is typed as the storage class of that entity type, and `->load()` as the entity class, from entity types declared by attributes or annotations. Cmd+click on an entity type id opens its declaration.
+- **Hooks.** Cmd+click on a hook implementation, a `#[Hook]` method or a procedural `mymodule_form_alter()`, opens the places that invoke the hook and its `hook_*` documentation. Cmd+click on the hook name in `invokeAll('cron')` or `alter('form')` lists every implementation. Hooks invoked under computed names, such as `hook_form_FORM_ID_alter` or `hook_ENTITY_TYPE_presave`, lead to the core code that computes them.
 
 Planned, in this order:
 
-- [ ] **Hooks.** Navigate from a hook implementation to the places that invoke it, and back, including computed names such as `hook_form_FORM_ID_alter`.
 - [ ] **Plugins.** Navigate from a plugin id to its class, and from a plugin manager to all its plugins.
 - [ ] **Routes and YAML.** Navigate from `Url::fromRoute('name')` to the route and its controller. Cmd+click on classes and methods in services, routing and links YAML files.
 - [ ] **Broken Drupal references.** Flag service ids, route names and plugin ids that do not exist.
