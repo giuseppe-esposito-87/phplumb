@@ -90,6 +90,9 @@ pub struct Report {
     update_one_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     update_1000_ms: Option<u128>,
+    /// The slowest definition case, when the case file has any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    definition_ms: Option<u128>,
     /// The slowest implementation case, when the case file has any.
     #[serde(skip_serializing_if = "Option::is_none")]
     implementation_ms: Option<u128>,
@@ -155,6 +158,7 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
         warm_start_ms: None,
         update_one_ms: None,
         update_1000_ms: None,
+        definition_ms: None,
         implementation_ms: None,
         references_ms: None,
         coverage: None,
@@ -202,7 +206,13 @@ pub fn run(args: &BenchArgs) -> anyhow::Result<Report> {
     for case in file.cases {
         let expected: BTreeSet<String> = case.expect.iter().cloned().collect();
         let actual = match case.kind.as_str() {
-            "definition" => query_case(&mut index, &root, &case.at, Index::definition),
+            "definition" => {
+                let started = std::time::Instant::now();
+                let found = query_case(&mut index, &root, &case.at, Index::definition);
+                let elapsed = started.elapsed().as_millis();
+                report.definition_ms = report.definition_ms.max(Some(elapsed));
+                found
+            }
             "implementation" => {
                 let started = std::time::Instant::now();
                 let found = query_case(&mut index, &root, &case.at, Index::implementations);

@@ -54,6 +54,7 @@ fn bench_reports_cases() {
     assert_eq!(report["cases_failed"], 1);
     assert_eq!(report["failures"][0]["name"], "wrong on purpose");
     assert_eq!(report["failures"][0]["actual"][0], target);
+    assert!(report["definition_ms"].is_number(), "{report}");
 }
 
 #[test]
