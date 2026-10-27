@@ -1,0 +1,21 @@
+mymodule.page:
+  path: '/mymodule/page'
+  defaults:
+    _controller: '\Drupal\mymodule\Controller\PageController::page'
+    _title_callback: 'Drupal\mymodule\Controller\PageController::title'
+  requirements:
+    _custom_access: '\Drupal\mymodule\Controller\PageController::access'
+mymodule.settings:
+  path: '/admin/mymodule'
+  defaults:
+    _form: '\Drupal\mymodule\Form\SettingsForm'
+  requirements:
+    _permission: 'administer site configuration'
+mymodule.service_page:
+  path: '/mymodule/service'
+  defaults:
+    _controller: 'mymodule.page_controller:page'
+shared.route:
+  path: '/shared'
+route_callbacks:
+  - '\Drupal\mymodule\Routing\Routes::routes'

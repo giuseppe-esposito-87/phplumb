@@ -1,10 +1,12 @@
-//! Drupal: services from `*.services.yml`, entity types, and hooks.
+//! Drupal: services, entity types, hooks, plugins and routes.
 
 mod entities;
 mod extensions;
 mod hooks;
 mod plugins;
+mod routes;
 mod services;
+mod yaml;
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -20,6 +22,8 @@ pub use hooks::{ExtensionKind, HookDoc, HookImplementation};
 use hooks::{Hooks, Storage};
 use plugins::Plugins;
 pub use plugins::{Plugin, PluginType};
+pub use routes::RouteDefinition;
+use routes::Routes;
 pub use services::ServiceDefinition;
 use services::Services;
 
@@ -29,6 +33,7 @@ pub struct Drupal {
     entities: EntityTypes,
     hooks: Hooks,
     plugins: Plugins,
+    routes: Routes,
 }
 
 impl Drupal {
@@ -41,6 +46,11 @@ impl Drupal {
             Storage::Config => found.iter().any(config),
             Storage::Content => found.iter().any(|entity| !config(entity)),
         }
+    }
+
+    /// Every definition of the route `name`, sorted by path.
+    pub fn routes(&self, name: &str) -> &[RouteDefinition] {
+        self.routes.get(name)
     }
 
     /// Every plugin type, sorted by manager.
@@ -112,6 +122,7 @@ impl Framework for Drupal {
         self.entities = EntityTypes::read(index);
         self.hooks = Hooks::read(index);
         self.plugins = Plugins::read(index, self.hooks.extensions());
+        self.routes = Routes::read(index.filter());
     }
 
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
@@ -120,6 +131,7 @@ impl Framework for Drupal {
         self.hooks.update(index, changed, removed);
         self.plugins
             .update(index, self.hooks.extensions(), changed, removed);
+        self.routes.update(index.filter(), changed, removed);
     }
 
     /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes;

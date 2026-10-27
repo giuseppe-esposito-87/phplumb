@@ -1104,3 +1104,74 @@ fn render_element_types_set_by_offset_lead_to_their_element_class() {
         vec!["core/lib/Drupal/Core/Render/Element/Textfield.php: Textfield"]
     );
 }
+
+fn route_keys(index: &Index, root: &Path, name: &str) -> Vec<String> {
+    index
+        .drupal()
+        .unwrap()
+        .routes(name)
+        .iter()
+        .map(|r| {
+            let content = fs::read_to_string(&r.path).unwrap();
+            format!(
+                "{}: {}",
+                r.path.strip_prefix(root).unwrap().display(),
+                &content[r.start as usize..r.end as usize]
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn routes_are_read_from_routing_files() {
+    let (root, index) = drupal_fixture();
+
+    assert_eq!(
+        route_keys(&index, &root, "mymodule.page"),
+        vec!["modules/custom/mymodule/mymodule.routing.yml: mymodule.page"]
+    );
+    assert_eq!(
+        route_keys(&index, &root, "shared.route"),
+        vec![
+            "modules/contrib/gadget/gadget.routing.yml: shared.route",
+            "modules/custom/mymodule/mymodule.routing.yml: shared.route",
+        ]
+    );
+    assert!(route_keys(&index, &root, "mymodule_test.route").is_empty());
+    assert!(route_keys(&index, &root, "route_callbacks").is_empty());
+}
+
+#[test]
+fn routes_follow_updates() {
+    let (_dir, root, mut index) =
+        temp_drupal(&[("modules/custom/m/m.routing.yml", "m.one:\n  path: '/one'\n")]);
+    assert_eq!(route_keys(&index, &root, "m.one").len(), 1);
+
+    write(
+        &root,
+        "modules/custom/m/m.routing.yml",
+        "m.two:\n  path: '/two'\n",
+    );
+    index.update(&[root.join("modules/custom/m/m.routing.yml")], &[]);
+
+    assert!(route_keys(&index, &root, "m.one").is_empty());
+    assert_eq!(
+        route_keys(&index, &root, "m.two"),
+        vec!["modules/custom/m/m.routing.yml: m.two"]
+    );
+}
+
+#[test]
+fn service_keys_after_multibyte_text_keep_their_range() {
+    let (_dir, root, index) = temp_drupal(&[(
+        "modules/custom/m/m.services.yml",
+        "# café crème\nservices:\n  m.svc:\n    class: App\\Foo\n  'm.quoted':\n    class: App\\Foo\n",
+    )]);
+    let text = fs::read_to_string(root.join("modules/custom/m/m.services.yml")).unwrap();
+    let drupal = index.drupal().unwrap();
+
+    for id in ["m.svc", "m.quoted"] {
+        let found = &drupal.services(id)[0];
+        assert_eq!(&text[found.start as usize..found.end as usize], id);
+    }
+}

@@ -1,0 +1,2 @@
+mymodule_test.route:
+  path: '/test'

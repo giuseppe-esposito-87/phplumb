@@ -5,9 +5,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
-use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
-use yaml_rust2::scanner::Marker;
 
+use super::yaml::{self, Yaml};
 use crate::discover::chosen_path;
 use crate::filter::{PathFilter, SKIPPED_DIR_NAMES, has_skipped_component};
 use crate::index::Index;
@@ -217,31 +216,18 @@ fn parse_file(path: &Path) -> Vec<(String, ServiceDefinition)> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
-    let mut builder = Builder::default();
-    if Parser::new_from_str(&text)
-        .load(&mut builder, false)
-        .is_err()
-    {
-        return Vec::new();
-    }
-    let Some(Node::Map(top)) = builder.root else {
+    let Some(top) = yaml::parse(&text) else {
         return Vec::new();
     };
-    let Some((_, Node::Map(services))) = top
-        .into_iter()
-        .find(|(key, _)| key.text() == Some("services"))
-    else {
+    let Some(Yaml::Map(services)) = top.get("services") else {
         return Vec::new();
     };
-    let lines: Vec<usize> = std::iter::once(0)
-        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
-        .collect();
     let mut found = Vec::new();
     for (key, value) in services {
-        let Node::Scalar {
+        let Yaml::Scalar {
             value: id,
-            line,
-            column,
+            start,
+            end,
         } = key
         else {
             continue;
@@ -249,7 +235,7 @@ fn parse_file(path: &Path) -> Vec<(String, ServiceDefinition)> {
         if id.starts_with('_') {
             continue;
         }
-        let (start, end) = key_span(&text, &lines, line, column, &id);
+        let (start, end) = yaml::value_range(&text, id, *start, *end);
         let mut definition = ServiceDefinition {
             path: path.to_path_buf(),
             start,
@@ -260,10 +246,10 @@ fn parse_file(path: &Path) -> Vec<(String, ServiceDefinition)> {
             decorates: None,
         };
         match value {
-            Node::Scalar { value, .. } => {
+            Yaml::Scalar { value, .. } => {
                 definition.alias = value.strip_prefix('@').map(str::to_string);
             }
-            Node::Map(entries) => {
+            Yaml::Map(entries) => {
                 for (key, value) in entries {
                     let Some(text) = value.text() else {
                         continue;
@@ -278,100 +264,9 @@ fn parse_file(path: &Path) -> Vec<(String, ServiceDefinition)> {
                     }
                 }
             }
-            Node::Other => {}
-        }
-        found.push((id, definition));
-    }
-    found
-}
-
-/// The byte range of the key `id` written on 1-based `line` from character
-/// `column`: the id itself, or, when the written key differs from its value (escapes),
-/// an empty range where the key starts.
-fn key_span(text: &str, lines: &[usize], line: usize, column: usize, id: &str) -> (u32, u32) {
-    let Some(&line_start) = lines.get(line.saturating_sub(1)) else {
-        return (0, 0);
-    };
-    let line_text = &text[line_start..];
-    let line_text = &line_text[..line_text.find('\n').unwrap_or(line_text.len())];
-    let key_start = line_start
-        + line_text
-            .char_indices()
-            .nth(column)
-            .map_or(line_text.len(), |(i, _)| i);
-    for start in [key_start, key_start + 1] {
-        if text.get(start..start + id.len()) == Some(id) {
-            return (start as u32, (start + id.len()) as u32);
-        }
-    }
-    (key_start as u32, key_start as u32)
-}
-
-/// A YAML node, keeping where scalars start: a 1-based line and a character column.
-enum Node {
-    Scalar {
-        value: String,
-        line: usize,
-        column: usize,
-    },
-    Map(Vec<(Node, Node)>),
-    Other,
-}
-
-impl Node {
-    fn text(&self) -> Option<&str> {
-        match self {
-            Node::Scalar { value, .. } => Some(value),
-            _ => None,
-        }
-    }
-}
-
-enum Frame {
-    Map(Vec<(Node, Node)>, Option<Node>),
-    Sequence,
-}
-
-#[derive(Default)]
-struct Builder {
-    stack: Vec<Frame>,
-    root: Option<Node>,
-}
-
-impl Builder {
-    fn push(&mut self, node: Node) {
-        match self.stack.last_mut() {
-            Some(Frame::Map(entries, key)) => match key.take() {
-                Some(key) => entries.push((key, node)),
-                None => *key = Some(node),
-            },
-            Some(Frame::Sequence) => {}
-            None => self.root = Some(node),
-        }
-    }
-}
-
-impl MarkedEventReceiver for Builder {
-    fn on_event(&mut self, event: Event, mark: Marker) {
-        match event {
-            Event::Scalar(value, ..) => self.push(Node::Scalar {
-                value,
-                line: mark.line(),
-                column: mark.col(),
-            }),
-            Event::MappingStart(..) => self.stack.push(Frame::Map(Vec::new(), None)),
-            Event::MappingEnd => {
-                if let Some(Frame::Map(entries, _)) = self.stack.pop() {
-                    self.push(Node::Map(entries));
-                }
-            }
-            Event::SequenceStart(..) => self.stack.push(Frame::Sequence),
-            Event::SequenceEnd => {
-                self.stack.pop();
-                self.push(Node::Other);
-            }
-            Event::Alias(_) => self.push(Node::Other),
             _ => {}
         }
+        found.push((id.clone(), definition));
     }
+    found
 }
