@@ -242,3 +242,64 @@ fn assignments_read_across_classes_do_not_depend_on_query_order() {
     assert_eq!(c_first, c_after);
     assert_eq!(d_after, d_first);
 }
+
+#[test]
+fn properties_assigned_an_unknown_value_get_no_assigned_type() {
+    let (_dir, root, mut index) = index(&[(
+        "Unknown.php",
+        "class A { public function a() {} }
+class Unknown {
+    protected $h;
+    public function __construct($x) { $this->h = $x; }
+    public function reset() { $this->h = new A(); }
+    public function run() { $this->h->a(); }
+}
+",
+    )]);
+
+    assert!(definition_targets(&mut index, &root, "Unknown.php", "$this->h->").is_empty());
+}
+
+#[test]
+fn properties_reset_to_null_keep_their_assigned_type() {
+    let (_dir, root, mut index) = index(&[(
+        "Reset.php",
+        "class A { public function a() {} }
+class Reset {
+    protected $h;
+    public function __construct() { $this->h = new A(); }
+    public function clear() { $this->h = NULL; }
+    public function run() { $this->h->a(); }
+}
+",
+    )]);
+
+    assert_eq!(
+        definition_targets(&mut index, &root, "Reset.php", "$this->h->"),
+        vec!["Reset.php:2"]
+    );
+}
+
+#[test]
+fn private_properties_of_a_parent_do_not_type_the_child_property() {
+    let (_dir, root, mut index) = index(&[(
+        "Private.php",
+        "class A { public function a() {} }
+class B { public function a() {} }
+class Base {
+    private $h;
+    public function __construct() { $this->h = new A(); }
+}
+class Child extends Base {
+    private $h;
+    public function __construct() { parent::__construct(); $this->h = new B(); }
+    public function run() { $this->h->a(); }
+}
+",
+    )]);
+
+    assert_eq!(
+        definition_targets(&mut index, &root, "Private.php", "$this->h->"),
+        vec!["Private.php:3"]
+    );
+}

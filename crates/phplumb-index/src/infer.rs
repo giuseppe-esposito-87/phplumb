@@ -14,7 +14,9 @@
 //! than a guess.
 //!
 //! A property's type is its declared type plus the types its class and the class's
-//! parents assign to it. Those are computed per class, from the class's own code;
+//! parents assign to it; an assigned value of unknown type, other than a literal or
+//! an array, leaves the declared type alone. Those are computed per class, from the
+//! class's own code;
 //! while one is computed, only the class itself and its ancestors are read, so a
 //! result never depends on which class happened to be computed first.
 
@@ -50,7 +52,8 @@ const MAX_DEPTH: u32 = 16;
 /// from the class's own properties.
 const MAX_PASSES: usize = 3;
 
-/// The types a class's code assigns to each of its properties, by property name.
+/// The types a class's code assigns to each of its properties, by property name;
+/// `Other` for a property assigned a value of unknown type.
 pub(crate) type PropertyTypes = HashMap<String, TypeExpr>;
 
 /// A class whose property assignments are being computed, with the types found by
@@ -62,6 +65,9 @@ pub(crate) struct Assigning<'s> {
     outer: Option<&'s Assigning<'s>>,
     /// Whether this pass read the class's own assigned types.
     read_self: Cell<bool>,
+    /// Whether the value being evaluated read a property of the class that the
+    /// previous pass found no assignment for.
+    pending: Cell<bool>,
 }
 
 impl Assigning<'_> {
@@ -1169,19 +1175,26 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         union(types)
     }
 
-    /// The types the classes of `class`'s parent chain assign to property `name`.
-    /// While assignments are being computed, only the class being computed and its
-    /// ancestors are read, as their assignments do not depend on the computation in
-    /// progress.
+    /// The types the classes of `class`'s parent chain assign to property `name`,
+    /// or none when one of them assigns a value of unknown type. An ancestor's
+    /// private property is another property. While assignments are being computed,
+    /// only the class being computed and its ancestors are read, as their
+    /// assignments do not depend on the computation in progress.
     fn assigned_types(&self, class: &str, name: &str) -> Vec<TypeExpr> {
-        self.index
-            .parent_chain(class)
-            .iter()
-            .filter_map(|key| match self.assigning {
+        let mut types = Vec::new();
+        for (i, key) in self.index.parent_chain(class).iter().enumerate() {
+            if i > 0 && self.index.has_private_property(key, name) {
+                continue;
+            }
+            let assigned = match self.assigning {
                 None => self.index.property_types(key, None).get(name).cloned(),
                 Some(assigning) if assigning.class == *key => {
                     assigning.read_self.set(true);
-                    assigning.current.get(name).cloned()
+                    let found = assigning.current.get(name).cloned();
+                    if found.is_none() {
+                        assigning.pending.set(true);
+                    }
+                    found
                 }
                 Some(assigning)
                     if !assigning.holds(key)
@@ -1193,8 +1206,14 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                         .cloned()
                 }
                 Some(_) => None,
-            })
-            .collect()
+            };
+            match assigned {
+                Some(TypeExpr::Other) => return Vec::new(),
+                Some(ty) => types.push(ty),
+                None => {}
+            }
+        }
+        types
     }
 
     fn function_returns(&self, function: &Expression<'_>) -> TypeExpr {
@@ -1453,6 +1472,7 @@ pub(crate) fn property_assignments(
             current: &current,
             outer,
             read_self: Cell::new(false),
+            pending: Cell::new(false),
         };
         let mut next = PropertyTypes::new();
         for (source, summary) in sources.iter().zip(&summaries) {
@@ -1495,12 +1515,30 @@ fn assignments_in(
         {
             continue;
         }
+        assigning.pending.set(false);
         let ty = ctx.expr(fact.rhs, fact.start, 0);
-        if ty == TypeExpr::Other {
+        if ty == TypeExpr::Other && (assigning.pending.get() || is_plain_value(fact.rhs)) {
             continue;
         }
-        let known = found.remove(&fact.name).unwrap_or(TypeExpr::Other);
-        found.insert(fact.name.clone(), union(vec![known, ty]));
+        let merged = match found.remove(&fact.name) {
+            None => ty,
+            Some(TypeExpr::Other) => TypeExpr::Other,
+            Some(_) if ty == TypeExpr::Other => TypeExpr::Other,
+            Some(known) => union(vec![known, ty]),
+        };
+        found.insert(fact.name.clone(), merged);
+    }
+}
+
+/// A literal or an array: a value that is not an object.
+fn is_plain_value(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::Literal(_)
+        | Expression::CompositeString(_)
+        | Expression::Array(_)
+        | Expression::LegacyArray(_) => true,
+        Expression::Parenthesized(inner) => is_plain_value(inner.expression),
+        _ => false,
     }
 }
 

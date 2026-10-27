@@ -761,6 +761,18 @@ impl Index {
         chain
     }
 
+    /// Whether `class`, a lowercased class name, declares property `name` private.
+    pub(crate) fn has_private_property(&self, class: &str, name: &str) -> bool {
+        self.classes_named(class).iter().any(|c| {
+            c.declaration.class.as_ref().is_some_and(|shape| {
+                shape
+                    .members
+                    .iter()
+                    .any(|m| m.is_private && members::matches(m, MemberKind::Property, name))
+            })
+        })
+    }
+
     /// What the code of `class`, a lowercased class name, assigns to its
     /// properties. `outer` is the computation that asks, if any.
     pub(crate) fn property_types(

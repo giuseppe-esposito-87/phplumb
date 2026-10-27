@@ -9,8 +9,8 @@ Same machine and project. A property's type now adds what its class and the clas
 | Metric                                  | Value                             | Target        |
 | --------------------------------------- | --------------------------------- | ------------- |
 | Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | above 42,452  |
-| Cold index                              | 3.9 to 5.0 s                      | under 10 s    |
-| Peak resident memory                    | 401 to 418 MB                     | under 1024 MB |
+| Cold index                              | 3.9 to 5.3 s                      | under 10 s    |
+| Peak resident memory                    | 401 to 473 MB                     | under 1024 MB |
 | Slowest references case                 | 172 to 305 ms                     | under 1 s     |
 | All cases                               | 60 passed, 0 failed               | all pass      |
 
