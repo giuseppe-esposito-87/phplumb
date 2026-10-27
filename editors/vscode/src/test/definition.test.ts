@@ -49,6 +49,15 @@ suite("definition", () => {
     assert.deepStrictEqual([start.line, start.character], [2, 6]);
   });
 
+  test("go to definition on a docblock class name reaches Target", async () => {
+    const document = await open("src/DocUse.php");
+
+    const targets = await waitForDefinitions(document, new vscode.Position(5, 12));
+
+    assert.strictEqual(targets.length, 1);
+    assert.ok(uriOf(targets[0]).path.endsWith("src/Target.php"), uriOf(targets[0]).toString());
+  });
+
   test("returns nothing for a document with unsaved edits", async () => {
     const document = await open("src/Dirty.php");
     const other = await waitForDefinitions(document, new vscode.Position(2, 18));

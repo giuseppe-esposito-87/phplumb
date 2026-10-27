@@ -2,6 +2,20 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, names in docblocks
+
+Same machine and project. Class names in PHPDoc types, members and functions in `@see`, `@uses` and `@covers`, and annotation names lead to their declarations, and references list them.
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | at least 42,455 |
+| Cold index                              | 6.0 to 6.8 s                      | under 10 s      |
+| Peak resident memory                    | 424 to 434 MB                     | under 1024 MB   |
+| Slowest definition case                 | 35 to 41 ms                       | under 1 s       |
+| All cases                               | 88 passed, 0 failed               | all pass        |
+
+New cases cover a core interface in a `@param`, a core method in a `@see`, an unimported webform handler annotation and a nested `@Translation`. The references case for `EntityStorageInterface::load` gained the `@see` in `EntityDisplayRepositoryInterface`.
+
 ## 2026-10-27, step 4f broken Drupal references
 
 Same machine and project. `phplumb bench --diagnostics <dir>` lists every diagnostic; the Drupal ones are service ids, route names and plugin ids defined nowhere on disk. Every Drupal diagnostic below was checked by hand.

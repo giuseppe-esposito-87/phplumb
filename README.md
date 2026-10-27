@@ -20,7 +20,7 @@ PHPlumb is built for that review loop. It has its own engine, written in Rust, a
 
 ## Features
 
-- **Go to definition** for classes, interfaces, traits, enums, functions, methods, properties, constants and enum cases, through type inference and PHPDoc types.
+- **Go to definition** for classes, interfaces, traits, enums, functions, methods, properties, constants and enum cases, through type inference and PHPDoc types. Names in docblocks work too: classes in PHPDoc types, members and functions in `@see`, and annotation names.
 - **Find implementations** of an interface, an abstract class or a method, transitively.
 - **Find all references**, including calls made through the interface or parent method that a method implements.
 - **Call hierarchy** with incoming and outgoing calls, and **type hierarchy** with supertypes and subtypes.
@@ -37,6 +37,7 @@ PHPlumb starts with Drupal, because its code calls almost everything through int
 - `.module`, `.inc`, `.install`, `.theme`, `.profile` and `.engine` files are indexed as PHP.
 - Inside `vendor`, only the code that Composer's autoloader reaches is indexed, so package tests and leftover copies never show up as targets.
 - Broken reference diagnostics are tested against Drupal core and contrib for false alarms.
+- **Annotations.** `@Block(...)`, `@Translation(...)` and other plugin annotations lead to their annotation class, imported or not, as plugin discovery resolves them.
 - **Services.** `\Drupal::service('id')` and `$container->get('id')` are typed from every `*.services.yml`, so navigation continues on the next call. Cmd+click on a service id opens its definition.
 - **Entities.** `getStorage('node')` is typed as the storage class of that entity type, and `->load()` as the entity class, from entity types declared by attributes or annotations. Cmd+click on an entity type id opens its declaration.
 - **Hooks.** Cmd+click on a hook implementation, a `#[Hook]` method or a procedural `mymodule_form_alter()`, opens the places that invoke the hook and its `hook_*` documentation. Cmd+click on the hook name in `invokeAll('cron')` or `alter('form')` lists every implementation. Hooks invoked under computed names, such as `hook_form_FORM_ID_alter` or `hook_ENTITY_TYPE_presave`, lead to the core code that computes them.
