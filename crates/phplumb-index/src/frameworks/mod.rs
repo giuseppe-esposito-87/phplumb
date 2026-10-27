@@ -73,6 +73,10 @@ pub struct FoundCall {
     pub strings: Vec<Option<String>>,
     /// The string literal elements of positional array arguments, by position.
     pub lists: Vec<Vec<String>>,
+    /// The text shape of each positional argument, by position: a string's text
+    /// with `*` for each part that is not literal, one per element of an array, or
+    /// `*` for any other value.
+    pub shapes: Vec<Vec<String>>,
     /// The method or function holding the call: `Class::method` with the declaring
     /// class's fully qualified name, or the function's fully qualified name.
     pub caller: Option<String>,

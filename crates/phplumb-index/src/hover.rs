@@ -33,7 +33,7 @@ pub(crate) fn hover(index: &mut Index, path: &Path, source: &[u8], offset: u32) 
         });
     }
     let blocks: Vec<String> = index
-        .definition(path, source, offset)
+        .targets(path, source, offset)
         .iter()
         .filter_map(describe)
         .collect();

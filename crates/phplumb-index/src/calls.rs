@@ -100,7 +100,7 @@ pub(crate) fn outgoing(index: &mut Index, item: &CallItem) -> Calls {
 
     let mut calls: Calls = Vec::new();
     for site in sites {
-        for target in index.definition(&item.path, &source, site.0) {
+        for target in index.targets(&item.path, &source, site.0) {
             if let Some(callee) = index.call_item_at(&target) {
                 add(&mut calls, callee, site);
             }

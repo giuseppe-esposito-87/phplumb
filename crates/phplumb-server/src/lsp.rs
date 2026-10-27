@@ -898,7 +898,7 @@ fn prepare_type_hierarchy(
 ) -> Option<Vec<TypeHierarchyItem>> {
     let index = index?;
     let (path, source, offset) = cursor(&params.text_document_position_params)?;
-    let targets = index.definition(&path, &source, offset);
+    let targets = index.targets(&path, &source, offset);
     let items: Vec<TypeHierarchyItem> = targets
         .iter()
         .filter_map(|target| index.class_declared_at(&target.path, target.start))

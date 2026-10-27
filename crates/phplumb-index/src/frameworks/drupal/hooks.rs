@@ -162,7 +162,17 @@ fn invoking_methods() -> Vec<&'static str> {
 /// Hooks Drupal core invokes under computed names, as patterns, with the methods
 /// whose invoking calls compute them. In a pattern, an uppercase run is a
 /// placeholder.
-const COMPUTED: &[(&[&str], &[&str])] = &[
+/// Which entity types an `ENTITY_TYPE` placeholder of a table row stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Storage {
+    Any,
+    /// Entity types whose storage is not a config entity storage.
+    Content,
+    /// Entity types stored by a config entity storage.
+    Config,
+}
+
+const COMPUTED: &[(&[&str], &[&str], Storage)] = &[
     (
         &[
             "ENTITY_TYPE_create",
@@ -176,6 +186,29 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "ENTITY_TYPE_translation_insert",
             "ENTITY_TYPE_translation_delete",
             "ENTITY_TYPE_field_values_init",
+        ],
+        &["Drupal\\Core\\Entity\\EntityStorageBase::invokeHook"],
+        Storage::Content,
+    ),
+    (
+        &[
+            "ENTITY_TYPE_create",
+            "ENTITY_TYPE_presave",
+            "ENTITY_TYPE_insert",
+            "ENTITY_TYPE_update",
+            "ENTITY_TYPE_predelete",
+            "ENTITY_TYPE_delete",
+            "ENTITY_TYPE_revision_delete",
+            "ENTITY_TYPE_translation_create",
+            "ENTITY_TYPE_translation_insert",
+            "ENTITY_TYPE_translation_delete",
+            "ENTITY_TYPE_field_values_init",
+        ],
+        &["Drupal\\Core\\Config\\Entity\\ConfigEntityStorage::invokeHook"],
+        Storage::Config,
+    ),
+    (
+        &[
             "entity_create",
             "entity_presave",
             "entity_insert",
@@ -192,18 +225,22 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "Drupal\\Core\\Entity\\EntityStorageBase::invokeHook",
             "Drupal\\Core\\Config\\Entity\\ConfigEntityStorage::invokeHook",
         ],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_load"],
         &["Drupal\\Core\\Entity\\EntityStorageBase::postLoad"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_storage_load"],
         &["Drupal\\Core\\Entity\\ContentEntityStorageBase::invokeStorageLoadHook"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_revision_create"],
         &["Drupal\\Core\\Entity\\ContentEntityStorageBase::createRevision"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_duplicate"],
@@ -211,34 +248,42 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "Drupal\\Core\\Entity\\EntityBase::createDuplicate",
             "Drupal\\Core\\Entity\\ContentEntityBase::createDuplicate",
         ],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_access"],
         &["Drupal\\Core\\Entity\\EntityAccessControlHandler::access"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_create_access"],
         &["Drupal\\Core\\Entity\\EntityAccessControlHandler::createAccess"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_view", "ENTITY_TYPE_view_alter"],
         &["Drupal\\Core\\Entity\\EntityViewBuilder::buildMultiple"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_build_defaults_alter"],
         &["Drupal\\Core\\Entity\\EntityViewBuilder::viewMultiple"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_view_mode_alter"],
         &["Drupal\\Core\\Entity\\EntityViewBuilder::getBuildDefaults"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_form_mode_alter"],
         &["Drupal\\Core\\Entity\\Entity\\EntityFormDisplay::collectRenderDisplay"],
+        Storage::Any,
     ),
     (
         &["ENTITY_TYPE_prepare_form"],
         &["Drupal\\Core\\Entity\\EntityForm::prepareInvokeAll"],
+        Storage::Any,
     ),
     (
         &[
@@ -247,6 +292,7 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "entity_query_tag__ENTITY_TYPE__TAG_alter",
         ],
         &["Drupal\\Core\\Entity\\Query\\QueryBase::alter"],
+        Storage::Any,
     ),
     (
         &[
@@ -255,6 +301,7 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "form_BASE_FORM_ID_alter",
         ],
         &["Drupal\\Core\\Form\\FormBuilder::prepareForm"],
+        Storage::Any,
     ),
     (
         &["query_alter", "query_TAG_alter"],
@@ -262,22 +309,27 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "Drupal\\Core\\Database\\Query\\Select::preExecute",
             "Drupal\\Core\\Entity\\Plugin\\EntityReferenceSelection\\DefaultSelection::reAlterQuery",
         ],
+        Storage::Any,
     ),
     (
         &["field_widget_single_element_WIDGET_TYPE_form_alter"],
         &["Drupal\\Core\\Field\\WidgetBase::formSingleElement"],
+        Storage::Any,
     ),
     (
         &["field_widget_complete_WIDGET_TYPE_form_alter"],
         &["Drupal\\Core\\Field\\WidgetBase::form"],
+        Storage::Any,
     ),
     (
         &["block_view_BASE_BLOCK_ID_alter"],
         &["Drupal\\block\\BlockViewBuilder::buildPreRenderableBlock"],
+        Storage::Any,
     ),
     (
         &["block_build_BASE_BLOCK_ID_alter"],
         &["Drupal\\block\\BlockViewBuilder::viewMultiple"],
+        Storage::Any,
     ),
     (
         &[
@@ -286,10 +338,12 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "theme_suggestions_HOOK_alter",
         ],
         &["Drupal\\Core\\Theme\\ThemeManager::buildThemeHookSuggestions"],
+        Storage::Any,
     ),
     (
         &["preprocess_HOOK"],
         &["Drupal\\Core\\Theme\\Registry::collectModulePreprocess"],
+        Storage::Any,
     ),
     (
         &[
@@ -297,6 +351,7 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "plugin_filter_TYPE__CONSUMER_alter",
         ],
         &["Drupal\\Core\\Plugin\\FilteredPluginManagerTrait::getFilteredDefinitions"],
+        Storage::Any,
     ),
     (
         &[
@@ -304,14 +359,17 @@ const COMPUTED: &[(&[&str], &[&str])] = &[
             "language_fallback_candidates_OPERATION_alter",
         ],
         &["Drupal\\language\\ConfigurableLanguageManager::getFallbackCandidates"],
+        Storage::Any,
     ),
     (
         &["migrate_MIGRATION_ID_prepare_row"],
         &["Drupal\\migrate\\Plugin\\migrate\\source\\SourcePluginBase::prepareRow"],
+        Storage::Any,
     ),
     (
         &["jsonapi_ENTITY_TYPE_filter_access"],
         &["Drupal\\jsonapi\\Access\\TemporaryQueryGuard::getAccessResultsFromEntityFilterHook"],
+        Storage::Any,
     ),
 ];
 
@@ -361,15 +419,24 @@ fn pieces(pattern: &str) -> Vec<Piece<'_>> {
     pieces
 }
 
-/// Whether `hook` matches `pattern`: `ENTITY_TYPE` stands for an entity type id,
-/// `N` for digits, any other placeholder for a non-empty run of lowercase letters,
-/// digits and underscores.
+/// Whether an id names an entity type of the given storage.
+pub(crate) type EntityTypes<'a> = &'a dyn Fn(&str, Storage) -> bool;
+
+/// Whether `hook` matches `pattern`: `ENTITY_TYPE` stands for an entity type id of
+/// `storage`, `N` for digits, any other placeholder for a non-empty run of
+/// lowercase letters, digits and underscores.
 pub(crate) fn matches_pattern(
     pattern: &str,
     hook: &str,
-    is_entity_type: &dyn Fn(&str) -> bool,
+    entity_types: EntityTypes<'_>,
+    storage: Storage,
 ) -> bool {
-    fn rest(pieces: &[Piece<'_>], hook: &str, is_entity_type: &dyn Fn(&str) -> bool) -> bool {
+    let is_entity_type = |id: &str| entity_types(id, storage);
+    rest(&pieces(pattern), hook, &is_entity_type)
+}
+
+fn rest(pieces: &[Piece<'_>], hook: &str, is_entity_type: &dyn Fn(&str) -> bool) -> bool {
+    {
         let Some((first, others)) = pieces.split_first() else {
             return hook.is_empty();
         };
@@ -377,20 +444,23 @@ pub(crate) fn matches_pattern(
             Piece::Text(text) => hook
                 .strip_prefix(text)
                 .is_some_and(|after| rest(others, after, is_entity_type)),
-            Piece::Placeholder(name) => (1..=hook.len()).any(|length| {
-                let (value, after) = hook.split_at(length);
-                let fits = match *name {
-                    "ENTITY_TYPE" => is_entity_type(value),
-                    "N" => value.bytes().all(|b| b.is_ascii_digit()),
-                    _ => value
-                        .bytes()
-                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
-                };
-                fits && rest(others, after, is_entity_type)
-            }),
+            Piece::Placeholder(name) => {
+                (1..=hook.len())
+                    .filter(|l| hook.is_char_boundary(*l))
+                    .any(|length| {
+                        let (value, after) = hook.split_at(length);
+                        let fits = match *name {
+                            "ENTITY_TYPE" => is_entity_type(value),
+                            "N" => value.bytes().all(|b| b.is_ascii_digit()),
+                            _ => value
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                        };
+                        fits && rest(others, after, is_entity_type)
+                    })
+            }
         }
     }
-    rest(&pieces(pattern), hook, is_entity_type)
 }
 
 /// Every module, profile and theme on disk, outside test modules.
@@ -553,7 +623,7 @@ impl Hooks {
         strings: &[Option<String>],
         argument: usize,
         value: &str,
-        is_entity_type: &dyn Fn(&str) -> bool,
+        entity_types: EntityTypes<'_>,
     ) -> Vec<(Location, String)> {
         let Some((invoker, themes)) = invoker_of(index, targets) else {
             return Vec::new();
@@ -578,31 +648,59 @@ impl Hooks {
                 (location, i.name.clone())
             })
             .collect();
-        found.extend(self.doc_targets(&hook, is_entity_type));
+        found.extend(self.doc_targets(&hook, entity_types));
         found
     }
 
     /// From a hook implementation: the invocations of each hook it implements, then
-    /// their documentation.
+    /// their documentation. A function Drupal does not collect as a hook, such as an
+    /// update function, leads to its documentation only.
     pub(crate) fn implementation_targets(
         &self,
         index: &Index,
         declaration: &FrameworkDeclaration<'_>,
-        is_entity_type: &dyn Fn(&str) -> bool,
+        entity_types: EntityTypes<'_>,
     ) -> Vec<(Location, String)> {
         let implemented = self.declared_hooks(index, declaration);
         if implemented.is_empty() {
-            return Vec::new();
+            return self
+                .uncollected_hook(declaration)
+                .map(|hook| self.doc_targets(&hook, entity_types))
+                .unwrap_or_default();
         }
         let calls = index.calls_named(&invoking_methods());
         let mut sites: Vec<&FoundCall> = calls
             .iter()
-            .filter(|call| {
-                implemented
-                    .iter()
-                    .any(|i| invokes(index, call, i) || computes(index, call, i, is_entity_type))
-            })
+            .filter(|call| implemented.iter().any(|i| invokes(index, call, i)))
             .collect();
+        // Of the calls computing a hook name in one method, the most specific ones.
+        let mut computed: HashMap<&str, (usize, Vec<&FoundCall>)> = HashMap::new();
+        for call in &calls {
+            let Some(caller) = call.caller.as_deref() else {
+                continue;
+            };
+            let Some(score) = implemented
+                .iter()
+                .filter_map(|i| computes(index, call, i, entity_types))
+                .max()
+            else {
+                continue;
+            };
+            let best = computed.entry(caller).or_insert((score, Vec::new()));
+            if score > best.0 {
+                *best = (score, Vec::new());
+            }
+            if score == best.0 {
+                best.1.push(call);
+            }
+        }
+        for (_, calls) in computed.into_values() {
+            for call in calls {
+                if !sites.iter().any(|s| s.location == call.location) {
+                    sites.push(call);
+                }
+            }
+        }
         sites.sort_by(|a, b| {
             (
                 references::rank(&a.location.path),
@@ -626,7 +724,7 @@ impl Hooks {
             })
             .collect();
         for implementation in &implemented {
-            for doc in self.doc_targets(&implementation.hook, is_entity_type) {
+            for doc in self.doc_targets(&implementation.hook, entity_types) {
                 if !found.contains(&doc) {
                     found.push(doc);
                 }
@@ -682,18 +780,46 @@ impl Hooks {
         }
     }
 
+    /// The hook a global function names when Drupal does not collect it: a hook of
+    /// `NOT_COLLECTED`, an update function, or a function of a `.post_update.php`
+    /// file.
+    fn uncollected_hook(&self, declaration: &FrameworkDeclaration<'_>) -> Option<String> {
+        let FrameworkDeclaration::Function {
+            path, declaration, ..
+        } = declaration
+        else {
+            return None;
+        };
+        if declaration.fqn.contains('\\') || has(&declaration.metadata, &LEGACY) {
+            return None;
+        }
+        let (dir, owner, kind) = self.extensions.owner(path)?;
+        let relative = path.strip_prefix(dir).ok()?;
+        let post_update = !kind.is_theme()
+            && relative
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".post_update.php"));
+        if !post_update && !procedural_file(relative, kind) {
+            return None;
+        }
+        let name = declaration.fqn.as_str();
+        let hook = name.strip_prefix(owner)?.strip_prefix('_')?;
+        let uncollected = post_update
+            || NOT_COLLECTED.contains(&hook)
+            || ends_with_update_number(name)
+            || starts_with_update_number(hook);
+        (uncollected && !hook.is_empty()).then(|| hook.to_string())
+    }
+
     /// The documentation of `hook`: its own, or that of every documented pattern it
     /// matches.
-    fn doc_targets(
-        &self,
-        hook: &str,
-        is_entity_type: &dyn Fn(&str) -> bool,
-    ) -> Vec<(Location, String)> {
+    fn doc_targets(&self, hook: &str, entity_types: EntityTypes<'_>) -> Vec<(Location, String)> {
         let exact = self.docs(hook);
         let docs: Vec<&HookDoc> = if exact.is_empty() {
             self.documented_patterns
                 .iter()
-                .filter(|pattern| matches_pattern(pattern, hook, is_entity_type))
+                .filter(|pattern| matches_pattern(pattern, hook, entity_types, Storage::Any))
                 .flat_map(|pattern| self.docs(pattern))
                 .collect()
         } else {
@@ -820,11 +946,11 @@ impl Hooks {
             let Some(hook) = hook_name(attribute) else {
                 return;
             };
-            let named = text_argument(attribute, "method").filter(|m| !m.is_empty());
+            let named = hook_argument(attribute, "method", 1).filter(|m| !m.is_empty());
             let Some(member) = named.or(default_method).and_then(method) else {
                 return;
             };
-            let extension = text_argument(attribute, "module").unwrap_or(owner);
+            let extension = hook_argument(attribute, "module", 2).unwrap_or(owner);
             found.push(HookImplementation {
                 hook: hook.to_string(),
                 extension: extension.to_string(),
@@ -883,26 +1009,53 @@ fn invokes(index: &Index, call: &FoundCall, implementation: &HookImplementation)
         .any(|name| invoked_hook(invoker, &name) == implementation.hook)
 }
 
-/// Whether `call` is an invoking call of the implementation's group inside a method
-/// the table lists for a pattern the implementation's hook matches.
+/// How specifically `call` computes the implementation's hook, when it is an invoking
+/// call of the implementation's group, inside a method the table lists for a
+/// pattern the hook matches, whose hook argument has a computed shape matching the
+/// hook: the number of literal characters of the best such shape. An alter call
+/// computes only `_alter` hooks, any other call only the others.
 fn computes(
     index: &Index,
     call: &FoundCall,
     implementation: &HookImplementation,
-    is_entity_type: &dyn Fn(&str) -> bool,
-) -> bool {
-    let Some(caller) = call.caller.as_deref() else {
+    entity_types: EntityTypes<'_>,
+) -> Option<usize> {
+    let caller = call.caller.as_deref()?;
+    let (invoker, themes) = invoker_of(index, &call.targets)?;
+    let hook = implementation.hook.as_str();
+    if themes != implementation.kind.is_theme() || (!invoker.alter && hook.ends_with("_alter")) {
+        return None;
+    }
+    let listed = COMPUTED.iter().any(|(patterns, sites, storage)| {
+        sites.iter().any(|site| site.eq_ignore_ascii_case(caller))
+            && patterns
+                .iter()
+                .any(|pattern| matches_pattern(pattern, hook, entity_types, *storage))
+    });
+    if !listed {
+        return None;
+    }
+    call.shapes
+        .get(invoker.hook)?
+        .iter()
+        .filter(|shape| shape.contains('*'))
+        .map(|shape| invoked_hook(invoker, shape))
+        .filter(|shape| shape_matches(shape, hook))
+        .map(|shape| shape.len() - shape.matches('*').count())
+        .max()
+}
+
+/// Whether `text` matches `shape`, where each `*` stands for a non-empty run.
+fn shape_matches(shape: &str, text: &str) -> bool {
+    let Some((head, tail)) = shape.split_once('*') else {
+        return shape == text;
+    };
+    let Some(after) = text.strip_prefix(head) else {
         return false;
     };
-    let in_group = invoker_of(index, &call.targets)
-        .is_some_and(|(_, themes)| themes == implementation.kind.is_theme());
-    in_group
-        && COMPUTED.iter().any(|(patterns, sites)| {
-            sites.iter().any(|site| site.eq_ignore_ascii_case(caller))
-                && patterns
-                    .iter()
-                    .any(|pattern| matches_pattern(pattern, &implementation.hook, is_entity_type))
-        })
+    (1..=after.len())
+        .filter(|i| after.is_char_boundary(*i))
+        .any(|i| shape_matches(tail, &after[i..]))
 }
 
 /// Whether a file of an extension, at `relative` to its directory, can hold
@@ -970,8 +1123,20 @@ pub(crate) fn hook_name(attribute: &Metadata) -> Option<&str> {
         })
 }
 
-fn text_argument<'a>(attribute: &'a Metadata, name: &str) -> Option<&'a str> {
-    match attribute.argument(name)? {
+/// The `name` argument of a `Hook` attribute, as a string: named, or at `position`
+/// when the attribute is `Hook` itself, whose constructor takes `hook`, `method` and
+/// `module` in that order.
+fn hook_argument<'a>(attribute: &'a Metadata, name: &str, position: usize) -> Option<&'a str> {
+    let positional = || {
+        attribute
+            .name
+            .eq_ignore_ascii_case(HOOK)
+            .then(|| attribute.arguments.get(position))
+            .flatten()
+            .filter(|(key, _)| key.is_none())
+            .map(|(_, value)| value)
+    };
+    match attribute.argument(name).or_else(positional)? {
         MetaValue::String(text) => Some(text),
         _ => None,
     }

@@ -31,10 +31,10 @@ use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
     Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
     AssignmentOperator, BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector,
-    Closure, DoWhile, Expression, For, Foreach, ForeachTarget, Function, FunctionLikeParameterList,
-    Global, Hint, If, IfBody, Literal, Method, MethodCall, NullSafeMethodCall,
-    NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem, StaticMethodCall, Switch,
-    TriviaKind, Try, TryCatchClause, Variable, While,
+    Closure, CompositeString, DoWhile, Expression, For, Foreach, ForeachTarget, Function,
+    FunctionLikeParameterList, Global, Hint, If, IfBody, Literal, Method, MethodCall,
+    NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem,
+    StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable, While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -189,6 +189,7 @@ pub(crate) fn calls_named(
                 targets: ctx.call_targets(&receiver, &method),
                 strings: ctx.string_arguments(arguments, start),
                 lists: list_arguments(arguments),
+                shapes: argument_shapes(arguments),
                 caller: match caller.kind {
                     CallKind::Method => Some(format!("{}::{}", caller.detail, caller.name)),
                     CallKind::Function if caller.detail.is_empty() => Some(caller.name),
@@ -228,6 +229,65 @@ fn string_literal_at(expression: &Expression<'_>, offset: u32) -> Option<String>
         },
         _ => None,
     })
+}
+
+/// The text shape of each positional argument, by position.
+fn argument_shapes(arguments: &ArgumentList<'_>) -> Vec<Vec<String>> {
+    arguments
+        .arguments
+        .iter()
+        .map(|argument| match argument {
+            Argument::Positional(argument) => match argument.value {
+                Expression::Array(array) => element_shapes(array.elements.iter()),
+                Expression::LegacyArray(array) => element_shapes(array.elements.iter()),
+                value => vec![shape(value)],
+            },
+            Argument::Named(_) => Vec::new(),
+        })
+        .collect()
+}
+
+fn element_shapes<'a>(elements: impl Iterator<Item = &'a ArrayElement<'a>>) -> Vec<String> {
+    elements
+        .filter_map(|element| match element {
+            ArrayElement::Value(element) => Some(shape(element.value)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A string expression's text with `*` for each part that is not literal: a
+/// literal, a concatenation or an interpolated string; `*` for anything else.
+fn shape(expression: &Expression<'_>) -> String {
+    let text = match expression {
+        Expression::Literal(Literal::String(literal)) => literal
+            .value
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .unwrap_or_else(|| "*".to_string()),
+        Expression::Parenthesized(inner) => shape(inner.expression),
+        Expression::Binary(binary) if binary.operator.is_concatenation() => {
+            shape(binary.lhs) + &shape(binary.rhs)
+        }
+        Expression::CompositeString(CompositeString::Interpolated(string)) => string
+            .parts
+            .iter()
+            .map(|part| match part {
+                StringPart::Literal(literal) => literal
+                    .value
+                    .map(|v| String::from_utf8_lossy(v).into_owned())
+                    .unwrap_or_default(),
+                _ => "*".to_string(),
+            })
+            .collect(),
+        _ => "*".to_string(),
+    };
+    let mut collapsed = String::with_capacity(text.len());
+    for c in text.chars() {
+        if !(c == '*' && collapsed.ends_with('*')) {
+            collapsed.push(c);
+        }
+    }
+    collapsed
 }
 
 /// The string literal elements of each positional array argument, by position.

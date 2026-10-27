@@ -30,6 +30,21 @@ class MymoduleHooks
     {
     }
 
+    #[Hook('setting_presave')]
+    public function /*@cursor:setting_presave*/settingPresave(): void
+    {
+    }
+
+    #[Hook('thing_view')]
+    public function /*@cursor:thing_view*/thingView(): void
+    {
+    }
+
+    #[Hook('thing_view_alter')]
+    public function /*@cursor:thing_view_alter*/thingViewAlter(): void
+    {
+    }
+
     #[Hook('report_presave')]
     public function /*@target:report*//*@cursor:report*/reportPresave(): void
     {

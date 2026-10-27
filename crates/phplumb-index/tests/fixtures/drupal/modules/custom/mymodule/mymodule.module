@@ -22,11 +22,11 @@ function /*@target:helper*//*@cursor:helper*/mymodule_helper()
 {
 }
 
-function mymodule_update_10001()
+function /*@cursor:update_n*/mymodule_update_10001()
 {
 }
 
-function mymodule_install()
+function /*@cursor:install*/mymodule_install()
 {
 }
 

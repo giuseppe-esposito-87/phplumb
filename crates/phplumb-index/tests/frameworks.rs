@@ -636,3 +636,158 @@ fn documented_patterns_outside_the_table_are_the_only_targets() {
         vec!["modules/contrib/gadget/gadget.api.php: hook_gadget_widget_TYPE_alter"]
     );
 }
+
+/// The index of the fixture, and the path, source and offset right after `needle`
+/// in `file`.
+fn fixture_at(file: &str, needle: &str) -> (PathBuf, Index, PathBuf, Vec<u8>, u32) {
+    let (root, index) = drupal_fixture();
+    let path = root.join(file);
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8(source.clone())
+        .unwrap()
+        .find(needle)
+        .unwrap()
+        + needle.len();
+    (root, index, path, source, offset as u32)
+}
+
+const MODULE: &str = "modules/custom/mymodule/mymodule.module";
+
+#[test]
+fn references_of_a_hook_implementation_are_its_own() {
+    let (root, mut index, path, source, offset) =
+        fixture_at(MODULE, "function /*@cursor:cron_impl*/mymodule_c");
+
+    let found: Vec<String> = index
+        .references(&path, &source, offset, true)
+        .into_iter()
+        .map(|l| l.path.strip_prefix(&root).unwrap().display().to_string())
+        .collect();
+
+    assert_eq!(found, vec![MODULE.to_string()]);
+}
+
+#[test]
+fn hover_on_a_hook_implementation_shows_the_implementation() {
+    let (_root, mut index, path, source, offset) =
+        fixture_at(MODULE, "function /*@cursor:cron_impl*/mymodule_c");
+
+    let hover = index.hover(&path, &source, offset).unwrap();
+
+    assert!(
+        hover.markdown.contains("mymodule_cron"),
+        "{}",
+        hover.markdown
+    );
+    assert!(!hover.markdown.contains("hook_cron"), "{}", hover.markdown);
+}
+
+#[test]
+fn call_items_on_a_hook_implementation_name_it() {
+    let (_root, mut index, path, source, offset) =
+        fixture_at(MODULE, "function /*@cursor:cron_impl*/mymodule_c");
+
+    let items = index.call_items(&path, &source, offset);
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "mymodule_cron");
+}
+
+const HOOK_STUB: &str = "<?php\nnamespace Drupal\\Core\\Hook\\Attribute;\n#[\\Attribute]\nclass Hook { public function __construct(public string $hook, public string $method = '', public ?string $module = NULL) {} }\n";
+
+#[test]
+fn implementations_of_a_hook_method_are_its_overrides() {
+    let (_dir, root, mut index) = temp_drupal(&[
+        ("core/lib/Hook.php", HOOK_STUB),
+        ("core/core.api.php", "<?php\nfunction hook_cron() {}\n"),
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        (
+            "modules/custom/m/src/Hook/H.php",
+            "<?php\nnamespace Drupal\\m\\Hook;\nuse Drupal\\Core\\Hook\\Attribute\\Hook;\nclass H { #[Hook('cron')] public function cron() {} }\nclass Sub extends H { public function cron() {} }\n",
+        ),
+    ]);
+    let path = root.join("modules/custom/m/src/Hook/H.php");
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+    let offset = text.find("public function cron").unwrap() + "public function c".len();
+
+    let found = index.implementations(&path, &source, offset as u32);
+
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(text[found[0].start as usize..].starts_with("cron() {} }\n"));
+    assert!(found[0].start as usize > text.find("class Sub").unwrap());
+}
+
+#[test]
+fn hook_names_with_non_ascii_letters_do_not_crash() {
+    let (_dir, root, mut index) = temp_drupal(&[
+        (
+            "core/core.api.php",
+            "<?php\nfunction hook_ENTITY_TYPE_presave() {}\n",
+        ),
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        ("modules/custom/m/m.module", "<?php\nfunction m_café() {}\n"),
+    ]);
+    let path = root.join("modules/custom/m/m.module");
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8(source.clone())
+        .unwrap()
+        .find("m_caf")
+        .unwrap()
+        + 2;
+
+    let found = index.definition(&path, &source, offset as u32);
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path, path);
+}
+
+#[test]
+fn positional_method_and_module_arguments_of_hook_are_read() {
+    let (_dir, root, index) = temp_drupal(&[
+        ("core/lib/Hook.php", HOOK_STUB),
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        ("modules/custom/g/g.info.yml", "name: G\ntype: module\n"),
+        (
+            "modules/custom/m/src/Hook/H.php",
+            "<?php\nnamespace Drupal\\m\\Hook;\nuse Drupal\\Core\\Hook\\Attribute\\Hook;\nclass H {\n  #[Hook('mail', 'send')] public function foo() {}\n  public function send() {}\n  #[Hook('mail', '', 'g')] public function bar() {}\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        implementations(&index, &root, "mail"),
+        vec![
+            "modules/custom/m/src/Hook/H.php send m",
+            "modules/custom/m/src/Hook/H.php bar g",
+        ]
+    );
+}
+
+#[test]
+fn names_inside_hook_attributes_keep_their_targets() {
+    let (_dir, root, mut index) = temp_drupal(&[
+        ("core/lib/Hook.php", HOOK_STUB),
+        (
+            "core/lib/Order.php",
+            "<?php\nnamespace Drupal\\Core\\Hook\\Order;\nclass Order { const First = 1; }\n",
+        ),
+        ("core/core.api.php", "<?php\nfunction hook_cron() {}\n"),
+        ("modules/custom/m/m.info.yml", "name: M\ntype: module\n"),
+        (
+            "modules/custom/m/src/Hook/H.php",
+            "<?php\nnamespace Drupal\\m\\Hook;\nuse Drupal\\Core\\Hook\\Attribute\\Hook;\nuse Drupal\\Core\\Hook\\Order\\Order;\nclass H { #[Hook('cron', order: Order::First)] public function cron() {} }\n",
+        ),
+    ]);
+    let path = root.join("modules/custom/m/src/Hook/H.php");
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8(source.clone())
+        .unwrap()
+        .find("Order::Fi")
+        .unwrap()
+        + "Order::F".len();
+
+    let found = index.definition(&path, &source, offset as u32);
+
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, root.join("core/lib/Order.php"));
+}

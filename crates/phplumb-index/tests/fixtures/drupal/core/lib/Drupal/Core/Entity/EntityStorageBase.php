@@ -16,7 +16,7 @@ abstract class EntityStorageBase
 
     protected function invokeHook($hook, EntityInterface $entity)
     {
-        $this->moduleHandler()->/*@target:presave*//*@target:entity_presave*/invokeAll($this->entityTypeId . '_' . $hook, [$entity]);
-        $this->moduleHandler()->/*@target:presave*//*@target:entity_presave*/invokeAll('entity_' . $hook, [$entity]);
+        $this->moduleHandler()->/*@target:presave*/invokeAll($this->entityTypeId . '_' . $hook, [$entity]);
+        $this->moduleHandler()->/*@target:entity_presave*/invokeAll('entity_' . $hook, [$entity]);
     }
 }

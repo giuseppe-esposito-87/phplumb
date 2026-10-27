@@ -9,10 +9,10 @@ Same machine and project. The Drupal module reads extensions from `*.info.yml` f
 | Metric                                  | Value                             | Target          |
 | --------------------------------------- | --------------------------------- | --------------- |
 | Member coverage in `web/modules/custom` | 42,455 of 46,204 accesses (91.9%) | at least 42,455 |
-| Cold index                              | 4.4 to 6.2 s                      | under 10 s      |
-| Peak resident memory                    | 416 to 461 MB                     | under 1024 MB   |
-| Slowest definition case                 | 37 to 68 ms                       | under 1 s       |
-| Slowest references case                 | 173 to 196 ms                     | under 1 s       |
+| Cold index                              | 4.1 to 6.2 s                      | under 10 s      |
+| Peak resident memory                    | 404 to 461 MB                     | under 1024 MB   |
+| Slowest definition case                 | 31 to 68 ms                       | under 1 s       |
+| Slowest references case                 | 152 to 196 ms                     | under 1 s       |
 | All cases                               | 67 passed, 0 failed               | all pass        |
 
 New cases cover a custom `entity_presave`, `node_insert`, `form_node_form_alter` and `toolbar_alter` hook method, a theme's `library_info_alter` and `preprocess_html` functions, and the hook name in `invokeAll('toolbar')`, which lists 14 implementations and the documentation. Every site of the computed-name table exists in Drupal core 11.4.10. The bench now reports the slowest definition case.

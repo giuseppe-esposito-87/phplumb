@@ -14,8 +14,8 @@ use crate::phpdoc::TypeExpr;
 
 pub use entities::EntityType;
 use entities::EntityTypes;
-use hooks::Hooks;
 pub use hooks::{ExtensionKind, HookDoc, HookImplementation};
+use hooks::{Hooks, Storage};
 pub use services::ServiceDefinition;
 use services::Services;
 
@@ -27,6 +27,17 @@ pub struct Drupal {
 }
 
 impl Drupal {
+    /// Whether `id` is an entity type stored as `storage` asks.
+    fn has_entity_type(&self, index: &Index, id: &str, storage: Storage) -> bool {
+        let config = |entity: &EntityType| is_a(index, &entity.storage, &[CONFIG_STORAGE]);
+        let found = self.entities.get(id);
+        match storage {
+            Storage::Any => !found.is_empty(),
+            Storage::Config => found.iter().any(config),
+            Storage::Content => found.iter().any(|entity| !config(entity)),
+        }
+    }
+
     /// Every implementation of `hook`, sorted by path and offset.
     pub fn hook_implementations(&self, hook: &str) -> &[HookImplementation] {
         self.hooks.implementations(hook)
@@ -158,14 +169,14 @@ impl Framework for Drupal {
                 .map(|location| (location, value.to_string()))
                 .collect();
         }
-        let is_entity_type = |id: &str| !self.entities.get(id).is_empty();
+        let entity_types = |id: &str, storage: Storage| self.has_entity_type(index, id, storage);
         self.hooks.invocation_targets(
             index,
             call.targets,
             call.strings,
             argument,
             value,
-            &is_entity_type,
+            &entity_types,
         )
     }
 
@@ -176,15 +187,17 @@ impl Framework for Drupal {
         index: &Index,
         declaration: &FrameworkDeclaration<'_>,
     ) -> Vec<(Location, String)> {
-        let is_entity_type = |id: &str| !self.entities.get(id).is_empty();
+        let entity_types = |id: &str, storage: Storage| self.has_entity_type(index, id, storage);
         self.hooks
-            .implementation_targets(index, declaration, &is_entity_type)
+            .implementation_targets(index, declaration, &entity_types)
     }
 
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
+
+const CONFIG_STORAGE: &str = "Drupal\\Core\\Config\\Entity\\ConfigEntityStorage";
 
 /// The tag a storage carries: this prefix, then the entity type id.
 const ENTITY_TAG: &str = "drupal.entity:";

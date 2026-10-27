@@ -250,7 +250,7 @@ impl Index {
         offset: u32,
         include_declaration: bool,
     ) -> Vec<Location> {
-        let targets = self.definition(path, source, offset);
+        let targets = self.targets(path, source, offset);
         let mut found: Vec<Location> = Vec::new();
         for target in &targets {
             if let Some(symbol) = self.symbol_at(target) {
@@ -381,7 +381,7 @@ impl Index {
 
     /// The functions and methods the cursor resolves to, as call hierarchy items.
     pub fn call_items(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<CallItem> {
-        self.definition(path, source, offset)
+        self.targets(path, source, offset)
             .iter()
             .filter_map(|target| self.call_item_at(target))
             .collect()
@@ -915,8 +915,28 @@ impl Index {
     ///
     /// A target file that no longer holds the declared name at the indexed range
     /// changed since it was indexed: it is indexed again and the query runs once more.
+    ///
+    /// On a declaration, the frameworks may answer instead of the declaration itself,
+    /// as for a hook implementation and its invocations.
     pub fn definition(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
-        let found = self.resolve(path, source, offset);
+        self.definition_with(path, source, offset, true)
+    }
+
+    /// What the cursor names, for the features built on it (references, hover, call
+    /// and type hierarchies, implementations): definitions, with a declaration
+    /// standing for itself.
+    pub fn targets(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
+        self.definition_with(path, source, offset, false)
+    }
+
+    fn definition_with(
+        &mut self,
+        path: &Path,
+        source: &[u8],
+        offset: u32,
+        declarations: bool,
+    ) -> Vec<Location> {
+        let found = self.resolve(path, source, offset, declarations);
         let mut stale: Vec<PathBuf> = found
             .iter()
             .filter(|(location, name)| !holds_name(location, name))
@@ -928,7 +948,7 @@ impl Index {
             return found.into_iter().map(|(location, _)| location).collect();
         }
         self.update(&stale, &[]);
-        self.resolve(path, source, offset)
+        self.resolve(path, source, offset, declarations)
             .into_iter()
             .map(|(location, _)| location)
             .collect()
@@ -948,7 +968,7 @@ impl Index {
         let call = self.call_site(source, offset);
         let targets = match call {
             Some(_) => Vec::new(),
-            None => self.definition(path, source, offset),
+            None => self.targets(path, source, offset),
         };
         let compute = |index: &Index| match &call {
             Some((classes, name)) => index.call_site_targets(classes, name),
@@ -1131,10 +1151,11 @@ impl Index {
             return None;
         }
         let covers = |(start, end): (u32, u32)| start <= offset && offset <= end;
-        let on_class =
-            name_at(&summary.names, offset).is_some_and(|n| n.kind == NameKind::ClassLike);
+        let on_name = name_at(&summary.names, offset).is_some()
+            || summary.static_refs.iter().any(|r| covers((r.start, r.end)))
+            || summary.keywords.iter().any(|k| covers((k.start, k.end)));
         let in_attributes = |metadata: &[Metadata]| {
-            !on_class && metadata.iter().any(|m| !m.annotation && covers(m.span))
+            !on_name && metadata.iter().any(|m| !m.annotation && covers(m.span))
         };
         let declaration = summary.declarations.iter().find_map(|d| {
             if d.kind == SymbolKind::Function
@@ -1160,7 +1181,7 @@ impl Index {
             let metadata = shape
                 .metadata
                 .iter()
-                .find(|m| !on_class && !m.annotation && covers(m.span))?;
+                .find(|m| !on_name && !m.annotation && covers(m.span))?;
             Some(FrameworkDeclaration::Class {
                 path,
                 class: d,
@@ -1176,10 +1197,17 @@ impl Index {
     }
 
     /// Each target with the lowercased short name the index expects at its range.
-    fn resolve(&self, path: &Path, source: &[u8], offset: u32) -> Vec<(Location, String)> {
+    /// With `declarations`, the frameworks answer for the declaration under the cursor.
+    fn resolve(
+        &self,
+        path: &Path,
+        source: &[u8],
+        offset: u32,
+        declarations: bool,
+    ) -> Vec<(Location, String)> {
         let summary = summarize(source);
 
-        if let Some(found) = self.framework_declaration(path, &summary, offset) {
+        if declarations && let Some(found) = self.framework_declaration(path, &summary, offset) {
             return found;
         }
 
