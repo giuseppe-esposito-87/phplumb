@@ -14,7 +14,7 @@ use Drupal\Core\Entity\ContentEntityBase;
  */
 class Gadget extends ContentEntityBase
 {
-    public function gadgetName()
+    public function /*@target:gadgetName*/gadgetName()
     {
     }
 }

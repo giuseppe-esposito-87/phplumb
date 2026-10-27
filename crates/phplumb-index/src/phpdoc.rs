@@ -17,6 +17,12 @@ pub enum TypeExpr {
     ArrayOf(Box<TypeExpr>),
     /// Unions and intersections: navigation treats both as "any of these".
     Union(Vec<TypeExpr>),
+    /// A class carrying a framework tag, such as a storage that knows its entity
+    /// type. Everything that reads classes from a type treats it as its class.
+    Tagged {
+        class: String,
+        tag: String,
+    },
     /// Scalars, `mixed`, `null`, shapes, callables and anything unknown.
     Other,
 }

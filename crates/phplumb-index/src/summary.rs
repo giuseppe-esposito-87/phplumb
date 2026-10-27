@@ -563,9 +563,11 @@ pub(crate) fn pick_type(doc: Option<TypeExpr>, declared: Option<TypeExpr>) -> Op
 
 fn names_a_class(ty: &TypeExpr) -> bool {
     match ty {
-        TypeExpr::Named(_) | TypeExpr::SelfType | TypeExpr::StaticType | TypeExpr::ParentType => {
-            true
-        }
+        TypeExpr::Named(_)
+        | TypeExpr::Tagged { .. }
+        | TypeExpr::SelfType
+        | TypeExpr::StaticType
+        | TypeExpr::ParentType => true,
         TypeExpr::ArrayOf(element) => names_a_class(element),
         TypeExpr::Union(members) => members.iter().any(names_a_class),
         TypeExpr::Other => false,

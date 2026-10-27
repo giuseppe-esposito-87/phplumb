@@ -75,6 +75,7 @@ pub(crate) fn member_at(
 pub(crate) struct StringArgument {
     pub targets: Vec<CallTarget>,
     pub strings: Vec<Option<String>>,
+    pub receiver: TypeExpr,
     pub position: usize,
     pub value: String,
 }
@@ -935,6 +936,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         let call = FrameworkCall {
             targets: &targets,
             strings: &strings,
+            receiver: Some(receiver),
         };
         self.index
             .frameworks()
@@ -995,6 +997,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         Some(StringArgument {
             targets: self.call_targets(&receiver, &String::from_utf8_lossy(name.value)),
             strings: self.string_arguments(arguments, start),
+            receiver,
             position,
             value,
         })
@@ -1346,7 +1349,7 @@ fn bind(ty: &TypeExpr, static_class: &str, self_class: &str, parent: Option<&str
 /// The class names a type can be: named classes alone or in a union.
 pub(crate) fn class_names(ty: &TypeExpr) -> Vec<String> {
     match ty {
-        TypeExpr::Named(name) => vec![name.clone()],
+        TypeExpr::Named(name) | TypeExpr::Tagged { class: name, .. } => vec![name.clone()],
         TypeExpr::Union(members) => members.iter().flat_map(class_names).collect(),
         _ => Vec::new(),
     }

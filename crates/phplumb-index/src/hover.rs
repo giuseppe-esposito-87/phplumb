@@ -112,7 +112,7 @@ fn code(text: &str) -> String {
 
 fn display(ty: &TypeExpr) -> String {
     match ty {
-        TypeExpr::Named(name) => format!("\\{name}"),
+        TypeExpr::Named(name) | TypeExpr::Tagged { class: name, .. } => format!("\\{name}"),
         TypeExpr::SelfType => "self".to_string(),
         TypeExpr::StaticType => "static".to_string(),
         TypeExpr::ParentType => "parent".to_string(),

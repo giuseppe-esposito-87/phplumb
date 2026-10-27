@@ -3,7 +3,7 @@ namespace Drupal\mymodule;
 
 class ThingStorage extends \Drupal\Core\Entity\Sql\SqlContentEntityStorage
 {
-    public function thingCount()
+    public function /*@target:thingCount*/thingCount()
     {
     }
 }

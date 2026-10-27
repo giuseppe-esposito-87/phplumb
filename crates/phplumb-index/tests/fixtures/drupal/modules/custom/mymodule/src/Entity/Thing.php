@@ -14,7 +14,7 @@ use Drupal\mymodule\ThingStorage;
 )]
 class Thing extends ContentEntityBase
 {
-    public function thingName()
+    public function /*@target:thingName*/thingName()
     {
     }
 }

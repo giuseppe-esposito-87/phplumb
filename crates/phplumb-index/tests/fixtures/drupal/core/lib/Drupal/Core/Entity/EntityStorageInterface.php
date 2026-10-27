@@ -15,7 +15,7 @@ interface EntityStorageInterface
 
 interface EntityInterface
 {
-    public function id();
+    public function /*@target:id*/id();
 }
 
 interface EntityTypeManagerInterface

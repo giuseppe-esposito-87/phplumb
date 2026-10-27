@@ -962,6 +962,7 @@ impl Index {
         let call = FrameworkCall {
             targets: &argument.targets,
             strings: &argument.strings,
+            receiver: Some(&argument.receiver),
         };
         let found: Vec<(Location, String)> = self
             .frameworks

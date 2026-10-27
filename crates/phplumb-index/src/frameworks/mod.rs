@@ -35,6 +35,8 @@ pub struct FrameworkCall<'a> {
     pub targets: &'a [CallTarget],
     /// Positional arguments that are string literals or `X::class`, by position.
     pub strings: &'a [Option<String>],
+    /// The receiver's type, for method calls.
+    pub receiver: Option<&'a TypeExpr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

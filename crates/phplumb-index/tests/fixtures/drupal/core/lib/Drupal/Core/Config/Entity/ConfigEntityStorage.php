@@ -3,7 +3,7 @@ namespace Drupal\Core\Config\Entity;
 
 class ConfigEntityStorage extends \Drupal\Core\Entity\EntityStorageBase
 {
-    public function configPrefix()
+    public function /*@target:configPrefix*/configPrefix()
     {
     }
 }

@@ -71,17 +71,38 @@ impl Framework for Drupal {
         self.entities = EntityTypes::read(index);
     }
 
-    /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes.
+    /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes;
+    /// `getStorage(id)` gives the entity type's storage, tagged with the entity type,
+    /// and that storage's loading methods give the entity class.
     fn call_type(&self, index: &Index, call: &FrameworkCall<'_>) -> Option<TypeExpr> {
-        let id = service_call(index, call)?;
-        let classes = self.services.classes(index, id);
-        match classes.len() {
-            0 => None,
-            1 => classes.into_iter().next().map(TypeExpr::Named),
-            _ => Some(TypeExpr::Union(
-                classes.into_iter().map(TypeExpr::Named).collect(),
-            )),
+        if let Some(id) = service_call(index, call) {
+            let classes = self.services.classes(index, id);
+            return one_of(classes.into_iter().map(TypeExpr::Named).collect());
         }
+        if let Some(id) = storage_call(index, call) {
+            return one_of(
+                self.entities
+                    .get(id)
+                    .iter()
+                    .map(|entity| TypeExpr::Tagged {
+                        class: entity.storage.clone(),
+                        tag: format!("{ENTITY_TAG}{id}"),
+                    })
+                    .collect(),
+            );
+        }
+        let (ids, many) = entity_call(index, call)?;
+        let entities: Vec<TypeExpr> = ids
+            .iter()
+            .flat_map(|id| self.entities.get(id))
+            .map(|entity| TypeExpr::Named(entity.class.clone()))
+            .collect();
+        let entity = one_of(entities)?;
+        Some(if many {
+            TypeExpr::ArrayOf(Box::new(entity))
+        } else {
+            entity
+        })
     }
 
     /// The id of a service call leads to every definition of the service.
@@ -111,6 +132,84 @@ impl Framework for Drupal {
     }
 }
 
+/// The tag a storage carries: this prefix, then the entity type id.
+const ENTITY_TAG: &str = "drupal.entity:";
+
+/// Storage methods that return one entity, and those that return several.
+const LOAD_ONE: [&str; 4] = ["load", "loadUnchanged", "loadRevision", "create"];
+const LOAD_MANY: [&str; 2] = ["loadMultiple", "loadByProperties"];
+
+/// One type, or their union; nothing when there is none.
+fn one_of(mut types: Vec<TypeExpr>) -> Option<TypeExpr> {
+    match types.len() {
+        0 => None,
+        1 => types.pop(),
+        _ => Some(TypeExpr::Union(types)),
+    }
+}
+
+/// The entity type id `call` asks for, when it is `getStorage(id)` on an entity type
+/// manager with a literal id.
+fn storage_call<'a>(index: &Index, call: &'a FrameworkCall<'_>) -> Option<&'a str> {
+    let id = call.strings.first()?.as_deref()?;
+    let asks_for_storage = call.targets.iter().any(|target| match target {
+        CallTarget::Method { class, name } => {
+            name.eq_ignore_ascii_case("getStorage")
+                && is_a(
+                    index,
+                    class,
+                    &["Drupal\\Core\\Entity\\EntityTypeManagerInterface"],
+                )
+        }
+        CallTarget::Function(_) => false,
+    });
+    asks_for_storage.then_some(id)
+}
+
+/// The entity type ids of a loading call on a tagged storage, and whether it loads
+/// several entities.
+fn entity_call(index: &Index, call: &FrameworkCall<'_>) -> Option<(Vec<String>, bool)> {
+    let mut ids = Vec::new();
+    collect_tags(call.receiver?, &mut ids);
+    if ids.is_empty() {
+        return None;
+    }
+    let mut many = None;
+    for target in call.targets {
+        let CallTarget::Method { class, name } = target else {
+            continue;
+        };
+        if !is_a(
+            index,
+            class,
+            &["Drupal\\Core\\Entity\\EntityStorageInterface"],
+        ) {
+            continue;
+        }
+        if LOAD_ONE.iter().any(|m| m.eq_ignore_ascii_case(name)) {
+            many = Some(false);
+        } else if LOAD_MANY.iter().any(|m| m.eq_ignore_ascii_case(name)) {
+            many = Some(true);
+        }
+    }
+    Some((ids, many?))
+}
+
+/// The entity type ids tagged anywhere in `ty`.
+fn collect_tags(ty: &TypeExpr, ids: &mut Vec<String>) {
+    match ty {
+        TypeExpr::Tagged { tag, .. } => {
+            if let Some(id) = tag.strip_prefix(ENTITY_TAG)
+                && !ids.iter().any(|known| known == id)
+            {
+                ids.push(id.to_string());
+            }
+        }
+        TypeExpr::Union(members) => members.iter().for_each(|m| collect_tags(m, ids)),
+        _ => {}
+    }
+}
+
 /// Container interfaces whose `get(id)` returns a service.
 const CONTAINERS: [&str; 2] = [
     "Symfony\\Component\\DependencyInjection\\ContainerInterface",
@@ -124,19 +223,19 @@ fn service_call<'a>(index: &Index, call: &'a FrameworkCall<'_>) -> Option<&'a st
     let asks_for_service = call.targets.iter().any(|target| match target {
         CallTarget::Method { class, name } => {
             (class.eq_ignore_ascii_case("Drupal") && name.eq_ignore_ascii_case("service"))
-                || (name.eq_ignore_ascii_case("get") && is_container(index, class))
+                || (name.eq_ignore_ascii_case("get") && is_a(index, class, &CONTAINERS))
         }
         CallTarget::Function(_) => false,
     });
     asks_for_service.then_some(id)
 }
 
-/// Whether `class` is or implements one of the `CONTAINERS`.
-fn is_container(index: &Index, class: &str) -> bool {
+/// Whether `class` is, extends or implements one of `ancestors`.
+fn is_a(index: &Index, class: &str, ancestors: &[&str]) -> bool {
     let mut seen: HashSet<String> = HashSet::new();
     let mut pending = vec![class.to_string()];
     while let Some(next) = pending.pop() {
-        if CONTAINERS.iter().any(|c| c.eq_ignore_ascii_case(&next)) {
+        if ancestors.iter().any(|c| c.eq_ignore_ascii_case(&next)) {
             return true;
         }
         if !seen.insert(next.to_ascii_lowercase()) {
