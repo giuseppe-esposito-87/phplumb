@@ -1,7 +1,7 @@
 //! References: candidate files from the key table, kept only where an occurrence
 //! resolves to the symbol.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
@@ -279,20 +279,4 @@ pub(crate) fn same_name(found: &str, wanted: &str, kind: MemberKind) -> bool {
         MemberKind::Method => found.eq_ignore_ascii_case(wanted),
         _ => found == wanted,
     }
-}
-
-/// Project code first, then contrib, then core, then `vendor`.
-pub(crate) fn rank(path: &Path) -> u8 {
-    let mut rank = 0;
-    for component in path.components() {
-        if let Component::Normal(name) = component {
-            rank = rank.max(match name.to_str() {
-                Some("vendor") => 3,
-                Some("core") => 2,
-                Some("contrib") => 1,
-                _ => 0,
-            });
-        }
-    }
-    rank
 }

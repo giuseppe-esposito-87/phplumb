@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use phplumb_index::Index;
 use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::frameworks::{Activation, FrameworkSettings};
 use phplumb_index::summary::{MemberKind, SymbolKind};
 use phplumb_index::symbols::{Kind, OutlineSymbol, outline};
 use tempfile::TempDir;
@@ -103,6 +104,10 @@ fn outline_survives_syntax_errors() {
 }
 
 fn workspace(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {
+    workspace_with(files, Activation::Auto)
+}
+
+fn workspace_with(files: &[(&str, &str)], drupal: Activation) -> (TempDir, PathBuf, Index) {
     let dir = TempDir::new().unwrap();
     let root = dir.path().canonicalize().unwrap();
     for (path, content) in files {
@@ -110,7 +115,11 @@ fn workspace(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, format!("<?php\n{content}")).unwrap();
     }
-    let index = Index::build(&root, &DiscoverOptions::default()).unwrap().0;
+    let opts = DiscoverOptions {
+        frameworks: FrameworkSettings { drupal },
+        ..DiscoverOptions::default()
+    };
+    let index = Index::build(&root, &opts).unwrap().0;
     (dir, root, index)
 }
 
@@ -185,15 +194,31 @@ fn symbols_with_a_backslash_match_qualified_names() {
 }
 
 #[test]
-fn symbols_list_project_code_before_core() {
+fn symbols_list_project_code_before_drupal_core() {
+    let (_dir, root, index) = workspace_with(
+        &[
+            ("core/lib/Node.php", "namespace Core; class Node {}"),
+            ("src/Node.php", "namespace App; class Node {}"),
+        ],
+        Activation::On,
+    );
+
+    assert_eq!(
+        search(&index, &root, "Node", 10),
+        vec!["Node App src/Node.php", "Node Core core/lib/Node.php"]
+    );
+}
+
+#[test]
+fn symbols_treat_core_as_project_code_without_drupal() {
     let (_dir, root, index) = workspace(&[
-        ("web/core/lib/Node.php", "namespace Core; class Node {}"),
+        ("core/lib/Node.php", "namespace Core; class Node {}"),
         ("src/Node.php", "namespace App; class Node {}"),
     ]);
 
     assert_eq!(
         search(&index, &root, "Node", 10),
-        vec!["Node App src/Node.php", "Node Core web/core/lib/Node.php"]
+        vec!["Node Core core/lib/Node.php", "Node App src/Node.php"]
     );
 }
 

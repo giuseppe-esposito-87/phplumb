@@ -1,7 +1,7 @@
 //! Workspace-wide symbol table and the definition query.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Instant, UNIX_EPOCH};
 
@@ -269,11 +269,7 @@ impl Index {
             found.extend(targets);
         }
         found.sort_by(|a, b| {
-            (references::rank(&a.path), &a.path, a.start).cmp(&(
-                references::rank(&b.path),
-                &b.path,
-                b.start,
-            ))
+            (self.rank(&a.path), &a.path, a.start).cmp(&(self.rank(&b.path), &b.path, b.start))
         });
         found.dedup();
         found
@@ -364,6 +360,40 @@ impl Index {
         self.frameworks.iter().map(|f| f.name()).collect()
     }
 
+    /// How far `path` is from project code, for sorting: 0 for project code, then
+    /// one step for each directory the active frameworks install code in, nearest
+    /// first, then `vendor`. Only the part of the path below the root counts.
+    pub(crate) fn rank(&self, path: &Path) -> u8 {
+        let relative = path.strip_prefix(self.filter.root()).unwrap_or(path);
+        let directories = || {
+            self.frameworks
+                .iter()
+                .flat_map(|framework| framework.dependency_directories())
+        };
+        let vendor = directories().count() + 1;
+        let rank = relative
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(name) => name.to_str(),
+                _ => None,
+            })
+            .map(|name| match name {
+                "vendor" => vendor,
+                _ => directories()
+                    .position(|directory| *directory == name)
+                    .map_or(0, |i| i + 1),
+            })
+            .max()
+            .unwrap_or(0);
+        u8::try_from(rank).unwrap_or(u8::MAX)
+    }
+
+    /// Whether `path` is the project's own code: below the root, and outside
+    /// `vendor` and the directories the active frameworks install code in.
+    pub fn is_project_code(&self, path: &Path) -> bool {
+        path.starts_with(self.filter.root()) && self.rank(path) == 0
+    }
+
     /// Broken references in `source`, the content of the file at `path`, sorted by
     /// offset. Every rule must prove the target missing; uncertainty stays silent.
     pub fn diagnostics(&self, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
@@ -430,6 +460,7 @@ impl Index {
             files.map(|f| (f.path.as_path(), f.declarations.as_slice())),
             query,
             limit,
+            |path| self.rank(path),
         )
     }
 

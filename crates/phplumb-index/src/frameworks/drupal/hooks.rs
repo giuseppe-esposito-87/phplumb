@@ -11,7 +11,6 @@ use super::services::{Tests, is_drupal_file};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
 use crate::metadata::{MetaValue, Metadata};
-use crate::references;
 use crate::summary::{Declaration, MemberKind, SymbolKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -633,12 +632,12 @@ impl Hooks {
         }
         sites.sort_by(|a, b| {
             (
-                references::rank(&a.location.path),
+                index.rank(&a.location.path),
                 &a.location.path,
                 a.location.start,
             )
                 .cmp(&(
-                    references::rank(&b.location.path),
+                    index.rank(&b.location.path),
                     &b.location.path,
                     b.location.start,
                 ))

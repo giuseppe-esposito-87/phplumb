@@ -99,6 +99,9 @@ pub trait Framework: Send + Sync {
     fn name(&self) -> &'static str;
     /// Whether the framework applies to the project at `root`.
     fn detect(&self, root: &Path) -> bool;
+    /// Names of the directories holding code the framework installs rather than the
+    /// project's own, nearest to project code first.
+    fn dependency_directories(&self) -> &'static [&'static str];
     /// Reads what the framework needs from the index and its own files, after the
     /// index is built. While `rebuild` and `update` run, `index.frameworks()` is
     /// empty, so a framework cannot query the others.

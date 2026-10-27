@@ -51,7 +51,7 @@
         "phplumb.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Reports classes, functions, methods and constants that do not exist, in project code (outside vendor, core and contrib)."
+          "description": "Reports classes, functions, methods and constants that do not exist, in project code. Dependencies, such as vendor, are skipped."
         },
         "phplumb.frameworks.drupal": {
           "type": "string",

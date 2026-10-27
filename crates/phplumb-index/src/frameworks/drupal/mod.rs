@@ -159,6 +159,11 @@ impl Framework for Drupal {
         })
     }
 
+    /// Contributed extensions, then core itself.
+    fn dependency_directories(&self) -> &'static [&'static str] {
+        &["contrib", "core"]
+    }
+
     fn rebuild(&mut self, index: &Index) {
         self.services = Services::read(index.filter());
         self.entities = EntityTypes::read(index);

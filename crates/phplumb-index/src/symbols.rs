@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use crate::index::Location;
-use crate::references;
 use crate::summary::{Declaration, MemberKind, SymbolKind, summarize};
 
 /// What a symbol is: a top-level declaration or a member of a class-like.
@@ -99,12 +98,13 @@ pub struct SymbolMatch {
 /// the first letter (`gEnt` for `getEntity`), prefixes, the same pieces from a
 /// later word, substrings and subsequences. When the query has a capital letter,
 /// names whose first letter has the query's case come first within a tier. Then
-/// declarations before members, project code before contrib, core and `vendor`,
-/// and shorter names first.
+/// declarations before members, lower `rank` of the path first, and shorter names
+/// first.
 pub(crate) fn search<'a>(
     files: impl Iterator<Item = (&'a Path, &'a [Declaration])>,
     query: &str,
     limit: usize,
+    rank: impl Fn(&Path) -> u8,
 ) -> Vec<SymbolMatch> {
     let query = query.trim();
     let qualified = query.contains('\\');
@@ -125,7 +125,7 @@ pub(crate) fn search<'a>(
 
     let mut hits: Vec<Hit<'a>> = Vec::new();
     for (path, declarations) in files {
-        let rank = references::rank(path);
+        let rank = rank(path);
         for declaration in declarations {
             let (namespace, short) = split(&declaration.fqn);
             let text = if qualified {

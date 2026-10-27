@@ -87,12 +87,26 @@ fn diagnostics_over_stdio() {
 }
 
 #[test]
-fn diagnostics_skip_core_and_contrib() {
+fn diagnostics_skip_vendor() {
+    let ws = Workspace::new(&[("vendor/acme/tool/src/Use.php", BROKEN)]);
+    let mut client = ws.start(json!({}));
+
+    assert_eq!(
+        pull(&mut client, 2, &ws.uri("vendor/acme/tool/src/Use.php")),
+        Vec::<Value>::new()
+    );
+    client.shutdown();
+}
+
+#[test]
+fn diagnostics_skip_drupal_core_and_contrib() {
     let ws = Workspace::new(&[
         ("web/core/lib/Use.php", BROKEN),
         ("web/modules/contrib/tool/src/Use.php", BROKEN),
     ]);
-    let mut client = ws.start(json!({}));
+    let mut client = ws.start(json!({
+        "initializationOptions": {"frameworks": {"drupal": "on"}},
+    }));
 
     assert_eq!(
         pull(&mut client, 2, &ws.uri("web/core/lib/Use.php")),
@@ -105,6 +119,24 @@ fn diagnostics_skip_core_and_contrib() {
             &ws.uri("web/modules/contrib/tool/src/Use.php")
         ),
         Vec::<Value>::new()
+    );
+    client.shutdown();
+}
+
+#[test]
+fn diagnostics_cover_core_and_contrib_without_drupal() {
+    let ws = Workspace::new(&[
+        ("src/core/Use.php", BROKEN),
+        ("lib/contrib/Use.php", BROKEN),
+    ]);
+    let mut client = ws.start(json!({
+        "initializationOptions": {"frameworks": {"drupal": "off"}},
+    }));
+
+    assert_eq!(pull(&mut client, 2, &ws.uri("src/core/Use.php")).len(), 1);
+    assert_eq!(
+        pull(&mut client, 3, &ws.uri("lib/contrib/Use.php")).len(),
+        1
     );
     client.shutdown();
 }

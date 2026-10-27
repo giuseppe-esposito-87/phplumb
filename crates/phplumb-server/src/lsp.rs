@@ -314,7 +314,7 @@ impl Server<'_> {
                 match serde_json::from_value::<DocumentDiagnosticParams>(request.params) {
                     Ok(params) => {
                         let items = if self.diagnostics {
-                            document_diagnostics(self.index.as_ref(), self.root.as_deref(), params)
+                            document_diagnostics(self.index.as_ref(), params)
                         } else {
                             Vec::new()
                         };
@@ -742,25 +742,15 @@ fn ranges_in(path: &Path, ranges: &[(u32, u32)]) -> Option<Vec<Range>> {
     )
 }
 
-/// Broken references in the file, when it is project code: no `vendor`, `core` or
-/// `contrib` directory on its path below the workspace root.
+/// Broken references in the file, when it is project code.
 fn document_diagnostics(
     index: Option<&Index>,
-    root: Option<&Path>,
     params: DocumentDiagnosticParams,
 ) -> Vec<lsp_types::Diagnostic> {
-    let (Some(index), Some(root), Some(path)) =
-        (index, root, uri_to_path(&params.text_document.uri))
-    else {
+    let (Some(index), Some(path)) = (index, uri_to_path(&params.text_document.uri)) else {
         return Vec::new();
     };
-    let Ok(relative) = path.strip_prefix(root) else {
-        return Vec::new();
-    };
-    let outside_project = relative
-        .components()
-        .any(|c| matches!(c.as_os_str().to_str(), Some("vendor" | "core" | "contrib")));
-    if outside_project {
+    if !index.is_project_code(&path) {
         return Vec::new();
     }
     let Ok(source) = std::fs::read(&path) else {
