@@ -27,13 +27,18 @@
           "default": "",
           "description": "Path of the phplumb binary. Empty uses the bundled binary."
         },
+        "phplumb.root": {
+          "type": "string",
+          "default": "",
+          "description": "Folder of the PHP project, relative to the workspace folder, such as src/drupal. Only this folder is indexed. Empty uses the workspace folder."
+        },
         "phplumb.exclude": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "description": "Glob patterns, relative to the workspace folder, of paths not to index."
+          "description": "Glob patterns, relative to the project folder (phplumb.root), of paths not to index."
         },
         "phplumb.diagnostics.enabled": {
           "type": "boolean",
@@ -48,7 +53,7 @@
             "off"
           ],
           "default": "auto",
-          "description": "Drupal support, such as types for services. auto turns it on when a composer.lock in the workspace or up to three directories below it requires drupal/core."
+          "description": "Drupal support, such as types for services. auto turns it on when a composer.lock in the project folder or up to three directories below it requires drupal/core."
         },
         "phplumb.trace.server": {
           "type": "string",

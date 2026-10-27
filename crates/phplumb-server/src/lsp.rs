@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
-use lsp_types::notification::{DidChangeWatchedFiles, LogMessage, Notification as _, Progress};
+use lsp_types::notification::{
+    DidChangeWatchedFiles, LogMessage, Notification as _, Progress, ShowMessage,
+};
 use lsp_types::request::{
     CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
     DocumentSymbolRequest, GotoDefinition, GotoImplementation, GotoImplementationParams,
@@ -22,11 +24,11 @@ use lsp_types::{
     GotoDefinitionParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
     ImplementationProviderCapability, InitializeParams, Location, LogMessageParams, MarkupContent,
     MarkupKind, MessageType, NumberOrString, OneOf, Position, ProgressParams, ProgressParamsValue,
-    Range, ReferenceParams, Registration, RegistrationParams, ServerCapabilities, SymbolKind,
-    TypeHierarchyItem, TypeHierarchyPrepareParams, TypeHierarchySubtypesParams,
-    TypeHierarchySupertypesParams, WatchKind, WorkDoneProgress, WorkDoneProgressBegin,
-    WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkspaceSymbol, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    Range, ReferenceParams, Registration, RegistrationParams, ServerCapabilities,
+    ShowMessageParams, SymbolKind, TypeHierarchyItem, TypeHierarchyPrepareParams,
+    TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, WatchKind, WorkDoneProgress,
+    WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkspaceSymbol,
+    WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use lsp_types::{
     DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity, DocumentDiagnosticParams,
@@ -55,11 +57,15 @@ const CACHE_FILE: &str = "index-v1.bin";
 const DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// Parsed from `initializationOptions`:
-/// `{ "exclude": ["vendor/rector/rector/**"], "cacheDir": "/path/to/storage",
-/// "diagnostics": true, "frameworks": {"drupal": "auto"} }`.
+/// `{ "root": "src/drupal", "exclude": ["vendor/rector/rector/**"],
+/// "cacheDir": "/path/to/storage", "diagnostics": true, "frameworks": {"drupal": "auto"} }`.
 #[derive(Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ServerSettings {
+    /// The project folder, relative to the workspace folder; empty for the workspace
+    /// folder itself.
+    pub root: PathBuf,
+    /// Globs relative to the project folder.
     pub exclude: Vec<String>,
     pub cache_dir: Option<PathBuf>,
     /// Whether broken references are reported.
@@ -71,6 +77,7 @@ pub struct ServerSettings {
 impl Default for ServerSettings {
     fn default() -> Self {
         ServerSettings {
+            root: PathBuf::new(),
             exclude: Vec::new(),
             cache_dir: None,
             diagnostics: true,
@@ -140,9 +147,10 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         .and_then(|watched| watched.dynamic_registration)
         .unwrap_or(false);
 
+    let (root, root_warning) = project_root(workspace_root(&params), &settings.root);
     let mut server = Server {
         connection: &connection,
-        root: workspace_root(&params),
+        root,
         opts: DiscoverOptions {
             exclude: settings.exclude,
             frameworks: settings.frameworks,
@@ -155,6 +163,9 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         refreshes_diagnostics,
         refreshes_sent: 0,
     };
+    if let Some(warning) = root_warning {
+        server.show(MessageType::WARNING, warning)?;
+    }
     let php_extensions = server.php_extensions();
     if watches_files {
         server.register_watchers(&php_extensions)?;
@@ -173,6 +184,27 @@ fn workspace_root(params: &InitializeParams) -> Option<PathBuf> {
     }
     #[allow(deprecated)]
     params.root_uri.as_ref().and_then(uri_to_path)
+}
+
+/// The folder to index: `setting` below `workspace`, or `workspace` itself when
+/// `setting` is empty. A setting that names no folder falls back to `workspace`, with
+/// a warning for the user.
+fn project_root(workspace: Option<PathBuf>, setting: &Path) -> (Option<PathBuf>, Option<String>) {
+    let Some(workspace) = workspace else {
+        return (None, None);
+    };
+    if setting.as_os_str().is_empty() {
+        return (Some(workspace), None);
+    }
+    let root = workspace.join(setting);
+    if root.is_dir() {
+        return (Some(root), None);
+    }
+    let warning = format!(
+        "phplumb.root \"{}\" is not a folder of the workspace; indexing the whole workspace.",
+        setting.display()
+    );
+    (Some(workspace), Some(warning))
 }
 
 struct Server<'a> {
@@ -550,6 +582,17 @@ impl Server<'_> {
 
     fn log_info(&self, message: String) -> anyhow::Result<()> {
         self.log(MessageType::INFO, message)
+    }
+
+    /// Shows a message to the user.
+    fn show(&self, typ: MessageType, message: String) -> anyhow::Result<()> {
+        self.connection
+            .sender
+            .send(Message::Notification(Notification::new(
+                ShowMessage::METHOD.to_string(),
+                ShowMessageParams { typ, message },
+            )))?;
+        Ok(())
     }
 
     /// Sends a message to the client's log.

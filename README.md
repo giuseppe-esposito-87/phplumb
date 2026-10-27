@@ -75,13 +75,14 @@ PHPlumb runs on macOS (Apple silicon) and Linux (x64), in VS Code 1.140 or later
 
 ## Settings
 
-| Setting                       | Default  | Description                                                                                                                                                     |
-| ----------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `phplumb.exclude`             | `[]`     | Glob patterns, relative to the workspace folder, of paths not to index.                                                                                         |
-| `phplumb.diagnostics.enabled` | `true`   | Reports names that do not exist, in project code. Dependencies, such as `vendor`, are skipped.                                                                  |
-| `phplumb.frameworks.drupal`   | `"auto"` | Drupal support: `auto` turns it on when a `composer.lock` in the workspace or up to three directories below it requires `drupal/core`; `on` or `off` forces it. |
-| `phplumb.server.path`         | `""`     | Path of the `phplumb` binary. Empty uses the bundled binary.                                                                                                    |
-| `phplumb.trace.server`        | `"off"`  | Traces the communication between VS Code and the engine: `off`, `messages` or `verbose`.                                                                        |
+| Setting                       | Default  | Description                                                                                                                                                          |
+| ----------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `phplumb.root`                | `""`     | Folder of the PHP project, relative to the workspace folder, such as `src/drupal`. Only this folder is indexed. Empty uses the workspace folder.                     |
+| `phplumb.exclude`             | `[]`     | Glob patterns, relative to the project folder (`phplumb.root`), of paths not to index.                                                                               |
+| `phplumb.diagnostics.enabled` | `true`   | Reports names that do not exist, in project code. Dependencies, such as `vendor`, are skipped.                                                                       |
+| `phplumb.frameworks.drupal`   | `"auto"` | Drupal support: `auto` turns it on when a `composer.lock` in the project folder or up to three directories below it requires `drupal/core`; `on` or `off` forces it. |
+| `phplumb.server.path`         | `""`     | Path of the `phplumb` binary. Empty uses the bundled binary.                                                                                                         |
+| `phplumb.trace.server`        | `"off"`  | Traces the communication between VS Code and the engine: `off`, `messages` or `verbose`.                                                                             |
 
 The **PHPlumb: Restart Server** command restarts the engine. The **PHPlumb** output channel shows its log.
 

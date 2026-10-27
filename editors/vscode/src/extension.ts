@@ -17,7 +17,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Phplum
   context.subscriptions.push(
     vscode.commands.registerCommand("phplumb.restartServer", () => restart(context)),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      const restarts = ["phplumb.exclude", "phplumb.server.path", "phplumb.diagnostics.enabled", "phplumb.frameworks.drupal"];
+      const restarts = ["phplumb.root", "phplumb.exclude", "phplumb.server.path", "phplumb.diagnostics.enabled", "phplumb.frameworks.drupal"];
       if (restarts.some((section) => event.affectsConfiguration(section))) {
         void restart(context);
       }
@@ -64,6 +64,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
       { scheme: "file", language: "yaml" },
     ],
     initializationOptions: {
+      root: config.get<string>("root", ""),
       exclude: config.get<string[]>("exclude", []),
       cacheDir: cacheDir(context),
       diagnostics: config.get<boolean>("diagnostics.enabled", true),

@@ -24,4 +24,11 @@ suite("manifest", () => {
 
     assert.deepStrictEqual([setting?.enum, setting?.default], [["auto", "on", "off"], "auto"]);
   });
+
+  test("contributes the project folder setting", () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, "package.json"), "utf8"));
+    const setting = manifest.contributes.configuration.properties["phplumb.root"];
+
+    assert.deepStrictEqual([setting?.type, setting?.default], ["string", ""]);
+  });
 });
