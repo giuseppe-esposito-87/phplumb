@@ -12,6 +12,7 @@ use lsp_types::request::{
     HoverRequest, References, RegisterCapability, Request as _, Shutdown, TypeHierarchyPrepare,
     TypeHierarchySubtypes, TypeHierarchySupertypes, WorkDoneProgressCreate, WorkspaceSymbolRequest,
 };
+use lsp_types::request::{DocumentDiagnosticRequest, WorkspaceDiagnosticRefresh};
 use lsp_types::{
     CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
     CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
@@ -27,6 +28,12 @@ use lsp_types::{
     WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkspaceSymbol, WorkspaceSymbolParams,
     WorkspaceSymbolResponse,
 };
+use lsp_types::{
+    DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, FullDocumentDiagnosticReport,
+    RelatedFullDocumentDiagnosticReport,
+};
+use phplumb_index::diagnostics::Severity;
 use phplumb_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
 use phplumb_index::line_index::LineIndex;
 use phplumb_index::summary::{MemberKind, SymbolKind as IndexSymbolKind};
@@ -45,12 +52,24 @@ const CACHE_FILE: &str = "index-v1.bin";
 const DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// Parsed from `initializationOptions`:
-/// `{ "exclude": ["vendor/rector/rector/**"], "cacheDir": "/path/to/storage" }`.
-#[derive(Debug, Default, Deserialize)]
+/// `{ "exclude": ["vendor/rector/rector/**"], "cacheDir": "/path/to/storage", "diagnostics": true }`.
+#[derive(Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ServerSettings {
     pub exclude: Vec<String>,
     pub cache_dir: Option<PathBuf>,
+    /// Whether broken references are reported.
+    pub diagnostics: bool,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self {
+        ServerSettings {
+            exclude: Vec::new(),
+            cache_dir: None,
+            diagnostics: true,
+        }
+    }
 }
 
 /// Serves LSP over stdin and stdout until the client sends `exit`.
@@ -62,14 +81,24 @@ pub fn serve() -> anyhow::Result<()> {
 }
 
 pub fn run(connection: Connection) -> anyhow::Result<()> {
-    let (id, params) = connection.initialize_start()?;
-    let params: InitializeParams = serde_json::from_value(params)?;
+    let (id, raw_params) = connection.initialize_start()?;
+    // lsp-types 0.97 reads `workspace.diagnostic`; the protocol names it `diagnostics`.
+    let refreshes_diagnostics = ["diagnostics", "diagnostic"].iter().any(|key| {
+        raw_params["capabilities"]["workspace"][key]["refreshSupport"].as_bool() == Some(true)
+    });
+    let params: InitializeParams = serde_json::from_value(raw_params)?;
     let capabilities = ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
         call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
+        diagnostic_provider: Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
+            identifier: Some("phplumb".to_string()),
+            inter_file_dependencies: true,
+            workspace_diagnostics: false,
+            work_done_progress_options: Default::default(),
+        })),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
@@ -114,6 +143,9 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         cache: settings.cache_dir.map(|dir| dir.join(CACHE_FILE)),
         index: None,
         pending: VecDeque::new(),
+        diagnostics: settings.diagnostics,
+        refreshes_diagnostics,
+        refreshes_sent: 0,
     };
     if watches_files {
         server.register_watchers()?;
@@ -141,6 +173,11 @@ struct Server<'a> {
     index: Option<Index>,
     /// Messages read while collecting file events, handled before the queue.
     pending: VecDeque<Message>,
+    /// Whether broken references are reported.
+    diagnostics: bool,
+    /// Whether the client re-pulls diagnostics when asked.
+    refreshes_diagnostics: bool,
+    refreshes_sent: u64,
 }
 
 impl Server<'_> {
@@ -267,6 +304,30 @@ impl Server<'_> {
                     Err(err) => invalid(request.id, err),
                 }
             }
+            DocumentDiagnosticRequest::METHOD => {
+                match serde_json::from_value::<DocumentDiagnosticParams>(request.params) {
+                    Ok(params) => {
+                        let items = if self.diagnostics {
+                            document_diagnostics(self.index.as_ref(), self.root.as_deref(), params)
+                        } else {
+                            Vec::new()
+                        };
+                        Response::new_ok(
+                            request.id,
+                            DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(
+                                RelatedFullDocumentDiagnosticReport {
+                                    related_documents: None,
+                                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                                        result_id: None,
+                                        items,
+                                    },
+                                },
+                            )),
+                        )
+                    }
+                    Err(err) => invalid(request.id, err),
+                }
+            }
             HoverRequest::METHOD => match serde_json::from_value::<HoverParams>(request.params) {
                 Ok(params) => Response::new_ok(request.id, hover(self.index.as_mut(), params)),
                 Err(err) => {
@@ -334,7 +395,25 @@ impl Server<'_> {
         self.log_info(format!(
             "Reindexed {} files, removed {} in {} ms",
             stats.reparsed, stats.removed, stats.elapsed_ms
-        ))
+        ))?;
+        self.refresh_diagnostics()
+    }
+
+    /// Asks the client to pull diagnostics again, after the index changed.
+    fn refresh_diagnostics(&mut self) -> anyhow::Result<()> {
+        if !(self.diagnostics && self.refreshes_diagnostics) {
+            return Ok(());
+        }
+        self.refreshes_sent += 1;
+        self.connection.sender.send(Message::Request(Request::new(
+            RequestId::from(format!(
+                "phplumb/diagnostics-refresh-{}",
+                self.refreshes_sent
+            )),
+            WorkspaceDiagnosticRefresh::METHOD.to_string(),
+            (),
+        )))?;
+        Ok(())
     }
 
     fn register_watchers(&self) -> anyhow::Result<()> {
@@ -408,7 +487,7 @@ impl Server<'_> {
                 }),
             )?;
         }
-        Ok(())
+        self.refresh_diagnostics()
     }
 
     /// Writes the cache when there is one. A failure is logged, not fatal: the next
@@ -648,6 +727,54 @@ fn ranges_in(path: &Path, ranges: &[(u32, u32)]) -> Option<Vec<Range>> {
             })
             .collect(),
     )
+}
+
+/// Broken references in the file, when it is project code: no `vendor`, `core` or
+/// `contrib` directory on its path below the workspace root.
+fn document_diagnostics(
+    index: Option<&Index>,
+    root: Option<&Path>,
+    params: DocumentDiagnosticParams,
+) -> Vec<lsp_types::Diagnostic> {
+    let (Some(index), Some(root), Some(path)) =
+        (index, root, uri_to_path(&params.text_document.uri))
+    else {
+        return Vec::new();
+    };
+    let Ok(relative) = path.strip_prefix(root) else {
+        return Vec::new();
+    };
+    let outside_project = relative
+        .components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some("vendor" | "core" | "contrib")));
+    if outside_project {
+        return Vec::new();
+    }
+    let Ok(source) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    let lines = LineIndex::new(&source);
+    index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|found| {
+            let (start_line, start_col) = lines.position(&source, found.start);
+            let (end_line, end_col) = lines.position(&source, found.end);
+            lsp_types::Diagnostic {
+                range: Range::new(
+                    Position::new(start_line, start_col),
+                    Position::new(end_line, end_col),
+                ),
+                severity: Some(match found.severity {
+                    Severity::Error => DiagnosticSeverity::ERROR,
+                    Severity::Warning => DiagnosticSeverity::WARNING,
+                }),
+                source: Some("phplumb".to_string()),
+                message: found.message,
+                ..lsp_types::Diagnostic::default()
+            }
+        })
+        .collect()
 }
 
 /// How many workspace symbols a query returns.

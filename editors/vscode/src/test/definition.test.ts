@@ -158,4 +158,22 @@ suite("definition", () => {
 
     assert.ok(symbols.some((s) => s.name === "Square" && s.location.uri.path.endsWith("src/Square.php")), JSON.stringify(symbols));
   });
+
+  test("broken references are reported", async () => {
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+    const document = await open("src/Broken.php");
+    await vscode.window.showTextDocument(document);
+
+    const deadline = Date.now() + 10_000;
+    let messages: string[] = [];
+    while (Date.now() < deadline) {
+      messages = vscode.languages.getDiagnostics(document.uri).map((d) => d.message);
+      if (messages.includes("Undefined class 'App\\Ghost'")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    assert.ok(messages.includes("Undefined class 'App\\Ghost'"), JSON.stringify(messages));
+  });
 });

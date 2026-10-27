@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as vscode from "vscode";
-import { LanguageClient, type LanguageClientOptions, type ServerOptions } from "vscode-languageclient/node";
+import { LanguageClient, type LanguageClientOptions, type ServerOptions, type vsdiag } from "vscode-languageclient/node";
 import { resolveServerPath } from "./serverPath";
 
 let client: LanguageClient | undefined;
@@ -14,7 +14,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Phplum
   context.subscriptions.push(
     vscode.commands.registerCommand("phplumb.restartServer", () => restart(context)),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("phplumb.exclude") || event.affectsConfiguration("phplumb.server.path")) {
+      const restarts = ["phplumb.exclude", "phplumb.server.path", "phplumb.diagnostics.enabled"];
+      if (restarts.some((section) => event.affectsConfiguration(section))) {
         void restart(context);
       }
     }),
@@ -55,7 +56,12 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   const serverOptions: ServerOptions = { command, args: ["serve"] };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "php" }],
-    initializationOptions: { exclude: config.get<string[]>("exclude", []), cacheDir: cacheDir(context) },
+    initializationOptions: {
+      exclude: config.get<string[]>("exclude", []),
+      cacheDir: cacheDir(context),
+      diagnostics: config.get<boolean>("diagnostics.enabled", true),
+    },
+    diagnosticPullOptions: { onChange: true, onSave: true },
     middleware: {
       // The server reads files from disk; with unsaved edits a position would map to
       // different code there, so returning nothing beats a wrong target.
@@ -73,10 +79,22 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
         document.isDirty ? undefined : next(document, position, token),
       provideDocumentSymbols: (document, token, next) =>
         document.isDirty ? undefined : next(document, token),
+      provideDiagnostics: (document, previousResultId, token, next) =>
+        isDirty(document) ? noDiagnostics : next(document, previousResultId, token),
     },
   };
   client = new LanguageClient("phplumb", "PHPlumb", serverOptions, clientOptions);
   await client.start();
+}
+
+/** The report for a document whose unsaved edits the server cannot see. */
+const noDiagnostics = { kind: "full", items: [] } as unknown as vsdiag.DocumentDiagnosticReport;
+
+function isDirty(document: vscode.TextDocument | vscode.Uri): boolean {
+  if (!(document instanceof vscode.Uri)) {
+    return document.isDirty;
+  }
+  return vscode.workspace.textDocuments.some((open) => open.uri.toString() === document.toString() && open.isDirty);
 }
 
 async function stop(): Promise<void> {

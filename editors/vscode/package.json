@@ -46,6 +46,11 @@
           "default": [],
           "description": "Glob patterns, relative to the workspace folder, of paths not to index."
         },
+        "phplumb.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reports classes, functions, methods and constants that do not exist, in project code (outside vendor, core and contrib)."
+        },
         "phplumb.trace.server": {
           "type": "string",
           "enum": [
