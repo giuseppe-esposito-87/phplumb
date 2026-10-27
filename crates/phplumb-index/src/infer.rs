@@ -25,7 +25,8 @@ use mago_syntax::cst::{
     BinaryOperator, Call, ClassLikeConstantSelector, ClassLikeMemberSelector, Closure, DoWhile,
     Expression, For, Foreach, ForeachTarget, Function, FunctionLikeParameterList, Global, Hint, If,
     IfBody, Literal, Method, MethodCall, NullSafeMethodCall, NullSafePropertyAccess, Program,
-    PropertyAccess, Static, StaticItem, Switch, TriviaKind, Try, TryCatchClause, Variable, While,
+    PropertyAccess, Static, StaticItem, StaticMethodCall, Switch, TriviaKind, Try, TryCatchClause,
+    Variable, While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
@@ -67,6 +68,71 @@ pub(crate) fn member_at(
         None => Receiver::Classes(class_names(&ctx.expr(access.object, access.start, 0))),
     };
     Some((receiver, access.kind, access.name.clone()))
+}
+
+/// A call whose string literal argument covers an offset: what the call targets,
+/// its string arguments, the argument's position and its value.
+pub(crate) struct StringArgument {
+    pub targets: Vec<CallTarget>,
+    pub strings: Vec<Option<String>>,
+    pub position: usize,
+    pub value: String,
+}
+
+/// The innermost method or static call with a string literal argument covering
+/// `offset`.
+pub(crate) fn string_argument_at(
+    index: &Index,
+    summary: &FileSummary,
+    source: &[u8],
+    offset: u32,
+) -> Option<StringArgument> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut calls: Vec<CallRef<'_, '_>> = Vec::new();
+    CallsWithArguments.walk_program(program, &mut calls);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    let ctx = Ctx::new(index, summary, program, source, &facts);
+    calls
+        .iter()
+        .rev()
+        .find_map(|call| ctx.string_argument(call, offset))
+}
+
+/// A call that can carry framework string arguments.
+enum CallRef<'ast, 'arena> {
+    Method(&'ast MethodCall<'arena>),
+    NullSafe(&'ast NullSafeMethodCall<'arena>),
+    Static(&'ast StaticMethodCall<'arena>),
+}
+
+struct CallsWithArguments;
+
+impl<'ast, 'arena> Walker<'ast, 'arena, Vec<CallRef<'ast, 'arena>>> for CallsWithArguments {
+    fn walk_in_method_call(
+        &self,
+        call: &'ast MethodCall<'arena>,
+        calls: &mut Vec<CallRef<'ast, 'arena>>,
+    ) {
+        calls.push(CallRef::Method(call));
+    }
+
+    fn walk_in_null_safe_method_call(
+        &self,
+        call: &'ast NullSafeMethodCall<'arena>,
+        calls: &mut Vec<CallRef<'ast, 'arena>>,
+    ) {
+        calls.push(CallRef::NullSafe(call));
+    }
+
+    fn walk_in_static_method_call(
+        &self,
+        call: &'ast StaticMethodCall<'arena>,
+        calls: &mut Vec<CallRef<'ast, 'arena>>,
+    ) {
+        calls.push(CallRef::Static(call));
+    }
 }
 
 /// The variable whose name covers `offset` and its inferred type.
@@ -861,15 +927,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         let ClassLikeMemberSelector::Identifier(name) = selector else {
             return None;
         };
-        let name = String::from_utf8_lossy(name.value);
-        let targets: Vec<CallTarget> = class_names(receiver)
-            .iter()
-            .flat_map(|class| self.index.find_member(class, MemberKind::Method, &name))
-            .map(|(declaring, member)| CallTarget::Method {
-                class: declaring.declaration.fqn.clone(),
-                name: member.name.clone(),
-            })
-            .collect();
+        let targets = self.call_targets(receiver, &String::from_utf8_lossy(name.value));
         if targets.is_empty() {
             return None;
         }
@@ -882,6 +940,64 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             .frameworks()
             .iter()
             .find_map(|framework| framework.call_type(self.index, &call))
+    }
+
+    /// `Class::method` for every declaration method `name` resolves to on `receiver`.
+    fn call_targets(&self, receiver: &TypeExpr, name: &str) -> Vec<CallTarget> {
+        class_names(receiver)
+            .iter()
+            .flat_map(|class| self.index.find_member(class, MemberKind::Method, name))
+            .map(|(declaring, member)| CallTarget::Method {
+                class: declaring.declaration.fqn.clone(),
+                name: member.name.clone(),
+            })
+            .collect()
+    }
+
+    /// `call`'s string literal argument covering `offset`, with what the call targets.
+    fn string_argument(&self, call: &CallRef<'_, '_>, offset: u32) -> Option<StringArgument> {
+        let (arguments, start) = match call {
+            CallRef::Method(c) => (&c.argument_list, c.span().start.offset),
+            CallRef::NullSafe(c) => (&c.argument_list, c.span().start.offset),
+            CallRef::Static(c) => (&c.argument_list, c.span().start.offset),
+        };
+        let (position, value) =
+            arguments
+                .arguments
+                .iter()
+                .enumerate()
+                .find_map(|(i, argument)| {
+                    let Argument::Positional(argument) = argument else {
+                        return None;
+                    };
+                    let Expression::Literal(Literal::String(literal)) = argument.value else {
+                        return None;
+                    };
+                    let span = literal.span();
+                    let inside = span.start.offset < offset && offset < span.end.offset;
+                    let value = literal
+                        .value
+                        .map(|v| String::from_utf8_lossy(v).into_owned())?;
+                    inside.then_some((i, value))
+                })?;
+        let (receiver, selector) = match call {
+            CallRef::Method(c) => (self.expr(c.object, start, 0), &c.method),
+            CallRef::NullSafe(c) => (self.expr(c.object, start, 0), &c.method),
+            CallRef::Static(c) => (
+                self.class_of(c.class, start)
+                    .map_or(TypeExpr::Other, TypeExpr::Named),
+                &c.method,
+            ),
+        };
+        let ClassLikeMemberSelector::Identifier(name) = selector else {
+            return None;
+        };
+        Some(StringArgument {
+            targets: self.call_targets(&receiver, &String::from_utf8_lossy(name.value)),
+            strings: self.string_arguments(arguments, start),
+            position,
+            value,
+        })
     }
 
     /// Positional arguments that are string literals or `X::class`, by position.

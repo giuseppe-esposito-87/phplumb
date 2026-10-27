@@ -12,15 +12,15 @@ use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::PathFilter;
 use crate::frameworks::drupal::Drupal;
-use crate::frameworks::{self, Framework};
+use crate::frameworks::{self, Framework, FrameworkCall};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Receiver};
 use crate::members;
 use crate::phpdoc::TypeExpr;
 use crate::references::{self, Symbol};
 use crate::summary::{
-    ClassRange, ClassSel, Declaration, Member, MemberKind, NameKind, NameRef, RefKey, SymbolKind,
-    summarize,
+    ClassRange, ClassSel, Declaration, FileSummary, Member, MemberKind, NameKind, NameRef, RefKey,
+    SymbolKind, summarize,
 };
 use crate::symbols::{self, SymbolMatch};
 
@@ -211,8 +211,9 @@ impl Index {
         for file in read_files(&fresh) {
             self.insert(file);
         }
+        let changed: Vec<PathBuf> = changed.iter().map(|p| self.filter.under_root(p)).collect();
         for framework in &mut self.frameworks {
-            framework.update(&self.filter, changed, removed);
+            framework.update(&self.filter, &changed, &deleted);
         }
         stats.elapsed_ms = started.elapsed().as_millis();
         stats
@@ -931,6 +932,30 @@ impl Index {
     }
 
     /// Each target with the lowercased short name the index expects at its range.
+    /// What the active frameworks resolve a string argument at `offset` to.
+    fn framework_strings(
+        &self,
+        summary: &FileSummary,
+        source: &[u8],
+        offset: u32,
+    ) -> Option<Vec<(Location, String)>> {
+        if self.frameworks.is_empty() {
+            return None;
+        }
+        let argument = infer::string_argument_at(self, summary, source, offset)?;
+        let call = FrameworkCall {
+            targets: &argument.targets,
+            strings: &argument.strings,
+        };
+        let found: Vec<(Location, String)> = self
+            .frameworks
+            .iter()
+            .flat_map(|f| f.string_targets(self, &call, argument.position, &argument.value))
+            .map(|location| (location, argument.value.clone()))
+            .collect();
+        (!found.is_empty()).then_some(found)
+    }
+
     fn resolve(&self, path: &Path, source: &[u8], offset: u32) -> Vec<(Location, String)> {
         let summary = summarize(source);
 
@@ -994,6 +1019,10 @@ impl Index {
                     self.anonymous_member_targets(path, &summary.class_ranges[i], kind, &name)
                 }
             };
+        }
+
+        if let Some(found) = self.framework_strings(&summary, source, offset) {
+            return found;
         }
 
         let Some(name) = name_at(&summary.names, offset) else {

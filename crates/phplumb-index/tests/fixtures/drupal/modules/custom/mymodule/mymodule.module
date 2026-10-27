@@ -11,4 +11,5 @@ function mymodule_examples(ContainerInterface $container, Container $drupal_cont
     \Drupal::getContainer()->get('entity_type.manager.alias')->/*@cursor:storage*/getStorage('node');
     $container->get(\Drupal\Core\Named::class)->/*@cursor:named*/named();
     \Drupal::service('unknown.service')->/*@cursor:none*/greet();
+    \Drupal::service('shared.id');
 }

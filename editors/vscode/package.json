@@ -51,6 +51,16 @@
           "default": true,
           "description": "Reports classes, functions, methods and constants that do not exist, in project code (outside vendor, core and contrib)."
         },
+        "phplumb.frameworks.drupal": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "default": "auto",
+          "description": "Drupal support: services, entities, hooks, plugins and routes. auto turns it on when composer.lock requires drupal/core."
+        },
         "phplumb.trace.server": {
           "type": "string",
           "enum": [

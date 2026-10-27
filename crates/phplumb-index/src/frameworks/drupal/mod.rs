@@ -74,14 +74,26 @@ impl Framework for Drupal {
         }
     }
 
+    /// The id of a service call leads to every definition of the service.
     fn string_targets(
         &self,
-        _index: &Index,
-        _call: &FrameworkCall<'_>,
-        _argument: usize,
-        _value: &str,
+        index: &Index,
+        call: &FrameworkCall<'_>,
+        argument: usize,
+        value: &str,
     ) -> Vec<Location> {
-        Vec::new()
+        if argument != 0 || service_call(index, call) != Some(value) {
+            return Vec::new();
+        }
+        self.services
+            .definitions(value)
+            .iter()
+            .map(|definition| Location {
+                path: definition.path.clone(),
+                start: definition.start,
+                end: definition.end,
+            })
+            .collect()
     }
 
     fn as_any(&self) -> &dyn Any {

@@ -105,10 +105,10 @@ fn registers_file_watchers() {
             .as_array()
             .unwrap()
             .len(),
-        3
+        4
     );
     // The catch-all watcher reports created and deleted directories: Create | Delete.
-    assert_eq!(registration["registerOptions"]["watchers"][2]["kind"], 5);
+    assert_eq!(registration["registerOptions"]["watchers"][3]["kind"], 5);
     client.reply_null(&request);
     client.shutdown();
 }

@@ -17,4 +17,11 @@ suite("manifest", () => {
 
     assert.ok(!/^#\s*syntax=(?!\S*@sha256:)/m.test(dockerfile), "unpinned # syntax= directive");
   });
+
+  test("contributes the Drupal activation setting", () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, "package.json"), "utf8"));
+    const setting = manifest.contributes.configuration.properties["phplumb.frameworks.drupal"];
+
+    assert.deepStrictEqual([setting?.enum, setting?.default], [["auto", "on", "off"], "auto"]);
+  });
 });

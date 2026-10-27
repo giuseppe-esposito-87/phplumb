@@ -151,3 +151,52 @@ fn services_in_tests_and_vendor_are_ignored() {
         assert!(drupal.services(id).is_empty(), "{id}");
     }
 }
+
+/// Definitions of the cursor right after `needle` in the fixture's module file,
+/// as `relative path: text at the location`.
+fn definitions_after(needle: &str) -> Vec<String> {
+    let (root, mut index) = drupal_fixture();
+    let path = root.join("modules/custom/mymodule/mymodule.module");
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+    let offset = text.find(needle).unwrap() + needle.len();
+    let mut found: Vec<String> = index
+        .definition(&path, &source, offset as u32)
+        .into_iter()
+        .map(|l| {
+            let content = fs::read_to_string(&l.path).unwrap();
+            let name = l.path.strip_prefix(&root).unwrap().display().to_string();
+            format!("{name}: {}", &content[l.start as usize..l.end as usize])
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn service_ids_lead_to_their_yaml_keys() {
+    assert_eq!(
+        definitions_after("\\Drupal::service('mymodule.gre"),
+        vec!["modules/custom/mymodule/mymodule.services.yml: mymodule.greeter"]
+    );
+    assert_eq!(
+        definitions_after("$container->get('entity_type.man"),
+        vec!["core/core.services.yml: entity_type.manager"]
+    );
+}
+
+#[test]
+fn service_ids_defined_twice_lead_to_both_keys() {
+    assert_eq!(
+        definitions_after("\\Drupal::service('shared."),
+        vec![
+            "core/core.services.yml: shared.id",
+            "modules/custom/mymodule/mymodule.services.yml: shared.id",
+        ]
+    );
+}
+
+#[test]
+fn other_strings_lead_nowhere() {
+    assert_eq!(definitions_after("getStorage('no"), Vec::<String>::new());
+}

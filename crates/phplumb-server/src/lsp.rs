@@ -35,6 +35,7 @@ use lsp_types::{
 };
 use phplumb_index::diagnostics::Severity;
 use phplumb_index::discover::{DiscoverOptions, PHP_EXTENSIONS};
+use phplumb_index::frameworks::FrameworkSettings;
 use phplumb_index::line_index::LineIndex;
 use phplumb_index::summary::{MemberKind, SymbolKind as IndexSymbolKind};
 use phplumb_index::symbols::{self, Kind, OutlineSymbol};
@@ -52,7 +53,8 @@ const CACHE_FILE: &str = "index-v1.bin";
 const DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// Parsed from `initializationOptions`:
-/// `{ "exclude": ["vendor/rector/rector/**"], "cacheDir": "/path/to/storage", "diagnostics": true }`.
+/// `{ "exclude": ["vendor/rector/rector/**"], "cacheDir": "/path/to/storage",
+/// "diagnostics": true, "frameworks": {"drupal": "auto"} }`.
 #[derive(Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ServerSettings {
@@ -60,6 +62,8 @@ pub struct ServerSettings {
     pub cache_dir: Option<PathBuf>,
     /// Whether broken references are reported.
     pub diagnostics: bool,
+    /// Which framework modules run.
+    pub frameworks: FrameworkSettings,
 }
 
 impl Default for ServerSettings {
@@ -68,6 +72,7 @@ impl Default for ServerSettings {
             exclude: Vec::new(),
             cache_dir: None,
             diagnostics: true,
+            frameworks: FrameworkSettings::default(),
         }
     }
 }
@@ -138,6 +143,7 @@ pub fn run(connection: Connection) -> anyhow::Result<()> {
         root: workspace_root(&params),
         opts: DiscoverOptions {
             exclude: settings.exclude,
+            frameworks: settings.frameworks,
             ..DiscoverOptions::default()
         },
         cache: settings.cache_dir.map(|dir| dir.join(CACHE_FILE)),
@@ -425,6 +431,8 @@ impl Server<'_> {
             watchers: vec![
                 watcher(format!("**/*.{{{}}}", PHP_EXTENSIONS.join(",")), None),
                 watcher("**/vendor/composer/installed.json".to_string(), None),
+                // Framework modules read YAML files, such as Drupal's services.
+                watcher("**/*.yml".to_string(), None),
                 // Creating, moving or deleting a directory reports only the directory.
                 watcher(
                     "**/*".to_string(),
@@ -472,10 +480,15 @@ impl Server<'_> {
         }
 
         let (index, stats) = build_index(&root, &self.opts, self.cache.as_deref())?;
+        let frameworks = index.active_frameworks();
         self.index = Some(index);
         let summary = summary_message(&stats);
+        let frameworks = match frameworks.is_empty() {
+            true => String::new(),
+            false => format!("; frameworks: {}", frameworks.join(", ")),
+        };
         self.log_info(format!(
-            "{summary} ({} declarations, {} files from cache)",
+            "{summary} ({} declarations, {} files from cache{frameworks})",
             stats.declarations, stats.reused
         ))?;
 

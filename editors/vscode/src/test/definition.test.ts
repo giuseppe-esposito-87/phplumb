@@ -176,4 +176,14 @@ suite("definition", () => {
 
     assert.ok(messages.includes("Undefined class 'App\\Ghost'"), JSON.stringify(messages));
   });
+
+  test("Cmd+click on a service id opens its YAML", async () => {
+    await waitForDefinitions(await open("src/Use.php"), new vscode.Position(2, 14));
+    const document = await open("src/Services.php");
+
+    const targets = await vscode.commands.executeCommand<Target[]>("vscode.executeDefinitionProvider", document.uri, new vscode.Position(2, 22));
+
+    assert.strictEqual(targets.length, 1, JSON.stringify(targets));
+    assert.ok(uriOf(targets[0]).path.endsWith("basic.services.yml"), uriOf(targets[0]).toString());
+  });
 });
