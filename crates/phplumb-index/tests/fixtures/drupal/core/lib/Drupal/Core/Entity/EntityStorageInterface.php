@@ -15,7 +15,7 @@ interface EntityStorageInterface
 
 interface EntityInterface
 {
-    public function /*@target:id*/id();
+    public function /*@target:id*/ /*@target:mixed*/id();
 }
 
 interface EntityTypeManagerInterface
@@ -41,7 +41,7 @@ abstract class EntityStorageBase implements EntityStorageInterface
 
 abstract class ContentEntityBase implements EntityInterface
 {
-    public function id()
+    public function /*@target:mixed*/id()
     {
     }
 }

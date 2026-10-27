@@ -850,17 +850,11 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             ]),
             Expression::Call(Call::Method(call)) => {
                 let receiver = self.expr(call.object, at, depth);
-                self.framework_type(&receiver, &call.method, &call.argument_list, at)
-                    .unwrap_or_else(|| {
-                        self.member_on(&receiver, &call.method, MemberKind::Method, None)
-                    })
+                self.method_call(&receiver, &call.method, &call.argument_list, at, None)
             }
             Expression::Call(Call::NullSafeMethod(call)) => {
                 let receiver = self.expr(call.object, at, depth);
-                self.framework_type(&receiver, &call.method, &call.argument_list, at)
-                    .unwrap_or_else(|| {
-                        self.member_on(&receiver, &call.method, MemberKind::Method, None)
-                    })
+                self.method_call(&receiver, &call.method, &call.argument_list, at, None)
             }
             Expression::Call(Call::StaticMethod(call)) => {
                 let Some(class) = self.class_of(call.class, at) else {
@@ -875,15 +869,13 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     _ => None,
                 };
                 let receiver = TypeExpr::Named(class);
-                self.framework_type(&receiver, &call.method, &call.argument_list, at)
-                    .unwrap_or_else(|| {
-                        self.member_on(
-                            &receiver,
-                            &call.method,
-                            MemberKind::Method,
-                            forwarded.as_deref(),
-                        )
-                    })
+                self.method_call(
+                    &receiver,
+                    &call.method,
+                    &call.argument_list,
+                    at,
+                    forwarded.as_deref(),
+                )
             }
             Expression::Call(Call::Function(call)) => self.function_returns(call.function),
             Expression::Access(Access::Property(access)) => self.member_on(
@@ -911,6 +903,31 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             }
             _ => TypeExpr::Other,
         }
+    }
+
+    /// The type a method call on `receiver` returns: what the active frameworks give,
+    /// or the declared return type. Each member of a union is answered on its own, so
+    /// a framework answer for one member never hides the others.
+    fn method_call(
+        &self,
+        receiver: &TypeExpr,
+        selector: &ClassLikeMemberSelector<'_>,
+        arguments: &ArgumentList<'_>,
+        at: u32,
+        static_class: Option<&str>,
+    ) -> TypeExpr {
+        if let TypeExpr::Union(members) = receiver
+            && !self.index.frameworks().is_empty()
+        {
+            return union(
+                members
+                    .iter()
+                    .map(|member| self.method_call(member, selector, arguments, at, static_class))
+                    .collect(),
+            );
+        }
+        self.framework_type(receiver, selector, arguments, at)
+            .unwrap_or_else(|| self.member_on(receiver, selector, MemberKind::Method, static_class))
     }
 
     /// The type the active frameworks give a method call on `receiver`, when one of

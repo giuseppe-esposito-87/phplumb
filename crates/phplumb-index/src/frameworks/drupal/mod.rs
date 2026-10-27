@@ -80,10 +80,12 @@ impl Framework for Drupal {
             return one_of(classes.into_iter().map(TypeExpr::Named).collect());
         }
         if let Some(id) = storage_call(index, call) {
+            // A storage class the index lacks would hide the declared return type.
             return one_of(
                 self.entities
                     .get(id)
                     .iter()
+                    .filter(|entity| index.has_class(&entity.storage))
                     .map(|entity| TypeExpr::Tagged {
                         class: entity.storage.clone(),
                         tag: format!("{ENTITY_TAG}{id}"),

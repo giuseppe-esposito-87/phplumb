@@ -51,7 +51,8 @@ pub trait Framework: Send + Sync {
     /// Whether the framework applies to the project at `root`.
     fn detect(&self, root: &Path) -> bool;
     /// Reads what the framework needs from the index and its own files, after the
-    /// index is built.
+    /// index is built. While `rebuild` and `update` run, `index.frameworks()` is
+    /// empty, so a framework cannot query the others.
     fn rebuild(&mut self, index: &Index);
     /// Applies changed and removed paths (files or directories, any extension),
     /// after the index applied them.

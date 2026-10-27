@@ -24,5 +24,8 @@ class Entities
         $etm->getStorage('setting')->/*@cursor:configPrefix*/configPrefix();
         $plain->load(1)->/*@cursor:id*/id();
         $etm->getStorage('dual');
+        $mixed = $flag ? $plain : $etm->getStorage('thing');
+        $mixed->load(1)->/*@cursor:mixed*/id();
+        $etm->getStorage('gone')->load(1)->/*@cursor:id*/id();
     }
 }

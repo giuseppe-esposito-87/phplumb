@@ -72,12 +72,14 @@ pub(crate) fn annotations(doc: &str, offset: u32, names: &dyn NameContext) -> Ve
     if !doc.contains("@") || !doc.contains('(') {
         return Vec::new();
     }
-    let text = blank_margins(doc);
+    let mut text = blank_margins(doc);
+    blank_code_examples(&mut text);
     let mut parser = Annotations {
         text: &text,
         pos: 0,
         offset,
         names,
+        depth: 0,
     };
     let mut found = Vec::new();
     while let Some(at) = parser.next_top_level() {
@@ -88,6 +90,25 @@ pub(crate) fn annotations(doc: &str, offset: u32, names: &dyn NameContext) -> Ve
         }
     }
     found
+}
+
+/// Turns `@code` ... `@endcode` examples into spaces: annotations written there
+/// document something, they declare nothing.
+fn blank_code_examples(text: &mut [u8]) {
+    let mut from = 0;
+    while let Some(start) = find(&text[from..], b"@code").map(|i| from + i) {
+        let end =
+            find(&text[start..], b"@endcode").map_or(text.len(), |i| start + i + b"@endcode".len());
+        text[start..end]
+            .iter_mut()
+            .filter(|b| **b != b'\n')
+            .for_each(|b| *b = b' ');
+        from = end;
+    }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// The comment with its delimiters and the `*` margin of each line turned into
@@ -121,7 +142,12 @@ struct Annotations<'a> {
     /// Where the comment starts in the file.
     offset: u32,
     names: &'a dyn NameContext,
+    /// How many maps and annotations enclose the current position.
+    depth: usize,
 }
+
+/// Deeper nesting is treated as a broken annotation.
+const MAX_DEPTH: usize = 32;
 
 impl Annotations<'_> {
     /// The next `@Name(` that starts a line.
@@ -171,6 +197,16 @@ impl Annotations<'_> {
     /// Entries up to and including `close`: `key = value`, `key: value` or `value`,
     /// separated by commas, with an optional trailing comma.
     fn entries(&mut self, close: u8) -> Option<Vec<(Option<String>, MetaValue)>> {
+        if self.depth >= MAX_DEPTH {
+            return None;
+        }
+        self.depth += 1;
+        let entries = self.entries_inside(close);
+        self.depth -= 1;
+        entries
+    }
+
+    fn entries_inside(&mut self, close: u8) -> Option<Vec<(Option<String>, MetaValue)>> {
         let mut entries = Vec::new();
         loop {
             self.skip_space();

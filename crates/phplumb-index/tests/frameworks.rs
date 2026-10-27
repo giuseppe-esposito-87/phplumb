@@ -434,3 +434,45 @@ fn entity_type_ids_declared_twice_lead_to_both() {
         ]
     );
 }
+
+const ENTITY_BASE: &str =
+    "<?php\nnamespace Drupal\\Core\\Entity;\nabstract class ContentEntityBase {}\n";
+
+#[test]
+fn entity_types_follow_updates() {
+    let (_dir, root, mut index) = temp_drupal(&[("core/lib/Base.php", ENTITY_BASE)]);
+    let thing = "modules/custom/m/src/Entity/Thing.php";
+
+    write(
+        &root,
+        thing,
+        "<?php\nnamespace M;\nuse Drupal\\Core\\Entity\\Attribute\\ContentEntityType;\n#[ContentEntityType(id: 'new_thing')]\nclass Thing extends \\Drupal\\Core\\Entity\\ContentEntityBase {}\n",
+    );
+    index.update(&[root.join(thing)], &[]);
+    assert_eq!(index.drupal().unwrap().entity_types("new_thing").len(), 1);
+
+    fs::remove_file(root.join(thing)).unwrap();
+    index.update(&[], &[root.join(thing)]);
+    assert!(index.drupal().unwrap().entity_types("new_thing").is_empty());
+}
+
+#[test]
+fn entity_type_ids_point_at_the_id_key() {
+    let (_dir, _root, index) = temp_drupal(&[
+        ("core/lib/Base.php", ENTITY_BASE),
+        (
+            "modules/contrib/w/src/Entity/Widget.php",
+            "<?php\nnamespace W;\n/**\n * @ContentEntityType(\n *   base_table = \"widget\",\n *   id = \"widget\",\n * )\n */\nclass Widget extends \\Drupal\\Core\\Entity\\ContentEntityBase {}\n",
+        ),
+    ]);
+    let widget = &index.drupal().unwrap().entity_types("widget")[0];
+
+    let location = widget.id_location().unwrap();
+
+    let text = fs::read_to_string(&location.path).unwrap();
+    let before = &text[..location.start as usize];
+    assert!(
+        before.trim_end_matches('"').trim_end().ends_with("id ="),
+        "{before:?}"
+    );
+}

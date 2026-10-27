@@ -493,3 +493,22 @@ fn broken_annotations_give_nothing() {
 
     assert_eq!(metadata_of(&summary, "Broken"), &[]);
 }
+
+#[test]
+fn annotations_in_code_examples_are_ignored() {
+    let summary = summarize(&php(
+        "/**\n * How to declare one:\n *\n * @code\n * @ContentEntityType(id = \"example\")\n * @endcode\n */\nclass HowTo {}",
+    ));
+
+    assert_eq!(metadata_of(&summary, "HowTo"), &[]);
+}
+
+#[test]
+fn deeply_nested_annotations_give_nothing() {
+    let nested = "{".repeat(20_000);
+    let summary = summarize(&php(&format!(
+        "/**\n * @Deep(a = {nested})\n */\nclass Deep {{}}"
+    )));
+
+    assert_eq!(metadata_of(&summary, "Deep"), &[]);
+}

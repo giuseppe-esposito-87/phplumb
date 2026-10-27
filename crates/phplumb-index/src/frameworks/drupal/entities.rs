@@ -31,26 +31,58 @@ const KINDS: [(&str, Option<&str>); 3] = [
 ];
 
 impl EntityType {
-    /// Where the id is written in the declaration: inside the first quoted string
-    /// that holds exactly the id.
+    /// Where the id is written in the declaration: the quoted value of the `id` key,
+    /// or else the first quoted string that holds exactly the id.
     pub fn id_location(&self) -> Option<Location> {
         let text = std::fs::read(&self.path).ok()?;
         let (start, end) = (self.span.0 as usize, self.span.1 as usize);
         let declaration = text.get(start..end)?;
         let id = self.id.as_bytes();
+        let mut first = None;
         for &quote in b"'\"" {
             let needle: Vec<u8> = [&[quote][..], id, &[quote][..]].concat();
-            if let Some(at) = declaration.windows(needle.len()).position(|w| w == needle) {
-                let id_start = (start + at + 1) as u32;
-                return Some(Location {
-                    path: self.path.clone(),
-                    start: id_start,
-                    end: id_start + id.len() as u32,
-                });
+            let mut from = 0;
+            while let Some(at) = declaration[from..]
+                .windows(needle.len())
+                .position(|w| w == needle)
+                .map(|i| from + i)
+            {
+                from = at + 1;
+                first = Some(first.map_or(at, |f: usize| f.min(at)));
+                if follows_id_key(&declaration[..at]) {
+                    return Some(self.location_at(start + at + 1));
+                }
             }
         }
-        None
+        first.map(|at| self.location_at(start + at + 1))
     }
+
+    fn location_at(&self, start: usize) -> Location {
+        Location {
+            path: self.path.clone(),
+            start: start as u32,
+            end: (start + self.id.len()) as u32,
+        }
+    }
+}
+
+/// Whether `before` ends with the `id` key: `id:` in attributes, `id =` in
+/// annotations.
+fn follows_id_key(before: &[u8]) -> bool {
+    let before = before.trim_ascii_end();
+    let Some(before) = before
+        .strip_suffix(b":")
+        .or_else(|| before.strip_suffix(b"="))
+    else {
+        return false;
+    };
+    let before = before.trim_ascii_end();
+    before.ends_with(b"id")
+        && before
+            .len()
+            .checked_sub(3)
+            .and_then(|i| before.get(i))
+            .is_none_or(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
 }
 
 #[derive(Default)]
