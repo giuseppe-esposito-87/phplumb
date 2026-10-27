@@ -95,7 +95,10 @@ pub struct SymbolMatch {
 /// The declarations and members of `files` matching `query`, best first, at most
 /// `limit`. Matching ignores ASCII case. A query with a backslash matches the fully
 /// qualified names of declarations; any other query matches short names. Exact
-/// matches come first, then prefixes, substrings and subsequences; then
+/// matches come first, then names whose words start with the query's pieces from
+/// the first letter (`gEnt` for `getEntity`), prefixes, the same pieces from a
+/// later word, substrings and subsequences. When the query has a capital letter,
+/// names whose first letter has the query's case come first within a tier. Then
 /// declarations before members, project code before contrib, core and `vendor`,
 /// and shorter names first.
 pub(crate) fn search<'a>(
@@ -105,11 +108,20 @@ pub(crate) fn search<'a>(
 ) -> Vec<SymbolMatch> {
     let query = query.trim();
     let qualified = query.contains('\\');
-    let query = query.trim_start_matches('\\').to_ascii_lowercase();
-    if query.is_empty() || limit == 0 {
+    let original = query.trim_start_matches('\\');
+    if original.is_empty() || limit == 0 {
         return Vec::new();
     }
-    let query = query.as_bytes();
+    let lower = original.to_ascii_lowercase();
+    let query = Query {
+        lower: lower.as_bytes(),
+        segments: segments(original.as_bytes()),
+        first: original
+            .bytes()
+            .any(|b| b.is_ascii_uppercase())
+            .then(|| original.as_bytes()[0]),
+    };
+    let query = &query;
 
     let mut hits: Vec<Hit<'a>> = Vec::new();
     for (path, declarations) in files {
@@ -123,7 +135,13 @@ pub(crate) fn search<'a>(
             };
             if let Some(tier) = tier(text.as_bytes(), query) {
                 hits.push(Hit {
-                    key: (tier, false, rank, short.len()),
+                    key: (
+                        tier,
+                        query.case_mismatch(short.as_bytes()),
+                        false,
+                        rank,
+                        short.len(),
+                    ),
                     name: short,
                     path,
                     start: declaration.name_start,
@@ -143,7 +161,13 @@ pub(crate) fn search<'a>(
             {
                 if let Some(tier) = tier(member.name.as_bytes(), query) {
                     hits.push(Hit {
-                        key: (tier, true, rank, member.name.len()),
+                        key: (
+                            tier,
+                            query.case_mismatch(member.name.as_bytes()),
+                            true,
+                            rank,
+                            member.name.len(),
+                        ),
                         name: &member.name,
                         path,
                         start: member.name_start,
@@ -166,8 +190,8 @@ pub(crate) fn search<'a>(
 }
 
 struct Hit<'a> {
-    /// Tier, member or not, path rank, name length.
-    key: (u8, bool, u8, usize),
+    /// Tier, first-letter case mismatch, member or not, path rank, name length.
+    key: (u8, u8, bool, u8, usize),
     name: &'a str,
     path: &'a Path,
     start: u32,
@@ -204,25 +228,79 @@ impl Hit<'_> {
     }
 }
 
-/// How `name` matches the lowercase `query`: 0 exact, 1 prefix, 2 substring,
-/// 3 subsequence, ignoring ASCII case.
-fn tier(name: &[u8], query: &[u8]) -> Option<u8> {
-    if name.len() < query.len() {
+/// A search query: lowercased, and split into the pieces that match the starts
+/// of words in a name (`gEnt` into `g` and `Ent`, `ESI` into `E`, `S` and `I`).
+struct Query<'a> {
+    lower: &'a [u8],
+    segments: Vec<&'a [u8]>,
+    /// The first character, when the query's case is meaningful.
+    first: Option<u8>,
+}
+
+impl Query<'_> {
+    /// 1 when the query's case is meaningful and `name` starts with the other case.
+    fn case_mismatch(&self, name: &[u8]) -> u8 {
+        match (self.first, name.first()) {
+            (Some(q), Some(&n)) if q.is_ascii_alphabetic() && n.is_ascii_alphabetic() => {
+                u8::from(q.is_ascii_uppercase() != n.is_ascii_uppercase())
+            }
+            _ => 0,
+        }
+    }
+}
+
+/// The pieces of `query`: a new piece starts at each uppercase letter and after
+/// each `_` or `\\`, which are dropped.
+fn segments(query: &[u8]) -> Vec<&[u8]> {
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    for (i, &byte) in query.iter().enumerate() {
+        if byte == b'_' || byte == b'\\' {
+            if start < i {
+                pieces.push(&query[start..i]);
+            }
+            start = i + 1;
+        } else if byte.is_ascii_uppercase() && start < i {
+            pieces.push(&query[start..i]);
+            start = i;
+        }
+    }
+    if start < query.len() {
+        pieces.push(&query[start..]);
+    }
+    pieces
+}
+
+/// How `name` matches `query`, ignoring ASCII case: 0 exact, 1 every piece at the
+/// start of a word, in order, from the first letter, 2 prefix, 3 every piece at
+/// the start of a word from a later word, 4 substring, 5 subsequence.
+fn tier(name: &[u8], query: &Query) -> Option<u8> {
+    let lower = query.lower;
+    if name.len() < lower.len() {
         return None;
     }
-    if name.len() == query.len() && name.eq_ignore_ascii_case(query) {
+    if name.len() == lower.len() && name.eq_ignore_ascii_case(lower) {
         return Some(0);
     }
-    if name[..query.len()].eq_ignore_ascii_case(query) {
+    if let Some((first, rest)) = query.segments.split_first()
+        && name[..first.len()].eq_ignore_ascii_case(first)
+        && humps(name, rest, first.len())
+    {
         return Some(1);
     }
-    if name
-        .windows(query.len())
-        .any(|w| w.eq_ignore_ascii_case(query))
-    {
+    if name[..lower.len()].eq_ignore_ascii_case(lower) {
         return Some(2);
     }
-    let mut wanted = query.iter().peekable();
+    if humps(name, &query.segments, 0) {
+        return Some(3);
+    }
+    if name
+        .windows(lower.len())
+        .any(|w| w.eq_ignore_ascii_case(lower))
+    {
+        return Some(4);
+    }
+    let mut wanted = lower.iter().peekable();
     for byte in name {
         if wanted
             .peek()
@@ -231,7 +309,41 @@ fn tier(name: &[u8], query: &[u8]) -> Option<u8> {
             wanted.next();
         }
     }
-    wanted.peek().is_none().then_some(3)
+    wanted.peek().is_none().then_some(5)
+}
+
+/// Whether each of `pieces` starts a word of `name`, in order, from `from` on.
+fn humps(name: &[u8], pieces: &[&[u8]], from: usize) -> bool {
+    let Some((piece, rest)) = pieces.split_first() else {
+        return true;
+    };
+    (from..name.len()).any(|i| {
+        word_start(name, i)
+            && name[i..].len() >= piece.len()
+            && name[i..i + piece.len()].eq_ignore_ascii_case(piece)
+            && humps(name, rest, i + piece.len())
+    })
+}
+
+/// Whether a word starts at `i`: the first character, a character after `_` or
+/// `\\`, an uppercase letter after a lowercase letter or digit, or the last
+/// uppercase letter of a run followed by a lowercase one (`P` in `HTMLParser`).
+fn word_start(name: &[u8], i: usize) -> bool {
+    let Some(&current) = name.get(i) else {
+        return false;
+    };
+    if i == 0 {
+        return true;
+    }
+    let previous = name[i - 1];
+    if previous == b'_' || previous == b'\\' {
+        return current != b'_' && current != b'\\';
+    }
+    current.is_ascii_uppercase()
+        && (previous.is_ascii_lowercase()
+            || previous.is_ascii_digit()
+            || (previous.is_ascii_uppercase()
+                && name.get(i + 1).is_some_and(|n| n.is_ascii_lowercase())))
 }
 
 /// A fully qualified name split into its namespace and its short name.

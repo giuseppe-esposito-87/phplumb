@@ -207,3 +207,31 @@ fn symbols_respect_the_limit_and_ignore_blank_queries() {
     assert_eq!(search(&index, &root, "node", 2).len(), 2);
     assert_eq!(search(&index, &root, "  ", 10), Vec::<String>::new());
 }
+
+#[test]
+fn camel_hump_queries_rank_above_plain_substrings() {
+    let (_dir, root, index) = workspace(&[(
+        "src/All.php",
+        "namespace App;
+class UserAgent {} class AgentRunner {} const USER_AGENT = 1;
+class ResizeImage {} interface EntityStorageInterface {} class GdaEntityImporter {}
+class Repo { public function getEntity() {} public function getMap() {} public function getEntityTypeManager() {} }",
+    )]);
+
+    assert_eq!(
+        search(&index, &root, "gEnt", 1),
+        vec!["getEntity App\\Repo src/All.php"]
+    );
+    assert_eq!(
+        search(&index, &root, "ESI", 1),
+        vec!["EntityStorageInterface App src/All.php"]
+    );
+    assert_eq!(
+        search(&index, &root, "gETM", 1),
+        vec!["getEntityTypeManager App\\Repo src/All.php"]
+    );
+    assert_eq!(
+        search(&index, &root, "storage", 1),
+        vec!["EntityStorageInterface App src/All.php"]
+    );
+}

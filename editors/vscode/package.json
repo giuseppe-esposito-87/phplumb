@@ -12,7 +12,8 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:php"
+    "onLanguage:php",
+    "workspaceContains:**/*.php"
   ],
   "main": "./dist/extension.js",
   "contributes": {

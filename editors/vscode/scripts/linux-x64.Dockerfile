@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Builds the static Linux x64 phplumb binary. `npm run package -- linux-x64`
 # runs it with `--platform linux/amd64` and exports the `artifact` stage.
 
