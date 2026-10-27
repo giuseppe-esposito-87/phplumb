@@ -2,8 +2,9 @@
   "name": "phplumb",
   "displayName": "PHPlumb",
   "description": "Fast code navigation for large PHP and Drupal codebases.",
-  "publisher": "sparkfabrik",
+  "publisher": "lussoluca",
   "version": "0.1.0",
+  "license": "MIT",
   "icon": "icon.png",
   "private": true,
   "engines": {

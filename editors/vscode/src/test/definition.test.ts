@@ -67,7 +67,7 @@ suite("definition", () => {
   });
 
   test("keeps the index cache in workspace storage", async () => {
-    const api = (await vscode.extensions.getExtension("sparkfabrik.phplumb")!.activate()) as
+    const api = (await vscode.extensions.getExtension("lussoluca.phplumb")!.activate()) as
       | { cacheDir: string | undefined }
       | undefined;
     assert.ok(api?.cacheDir, "activate returns the cache directory");
