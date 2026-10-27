@@ -2,6 +2,19 @@
 
 Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
 
+## 2026-10-27, step 4a Drupal services
+
+Same machine and project. The Drupal module reads 252 services files (test modules and `vendor` excluded) and types `\Drupal::service()` and container `get()` calls.
+
+| Metric                                  | Value                             | Target        |
+| --------------------------------------- | --------------------------------- | ------------- |
+| Member coverage in `web/modules/custom` | 42,303 of 46,204 accesses (91.6%) | above 90.7%   |
+| Cold index                              | 3.4 to 4.5 s                      | under 10 s    |
+| Peak resident memory                    | 382 to 402 MB                     | under 1024 MB |
+| All cases                               | 52 passed, 0 failed               | all pass      |
+
+New cases cover a method after `\Drupal::service()`, after `$container->get()` in `create()`, through an alias, a service id leading to its YAML key, and an id defined nowhere on disk. A service another module decorates resolves to both classes: `entity_type.manager` gives the core class and the webprofiler wrapper. Two earlier cases changed because more calls are now typed: a method on a service result that used to expect nothing, and the references of `EntityStorageInterface::load`, which grew from 1,033 to 1,104 with calls on storages taken from the container.
+
 ## 2026-10-27, step 3 broken reference diagnostics
 
 Same machine and project. `phplumb bench --diagnostics <dir>` checks every file below a directory, whatever the editor's project-code scope, and lists each diagnostic.
