@@ -200,6 +200,8 @@ fn twig_without_a_literal_route_gives_nothing() {
     let mut index = build();
     assert!(definition(&mut index, TWIG, "name)").is_empty());
     assert!(definition(&mut index, TWIG, "\"home\"").is_empty());
+    assert!(definition(&mut index, TWIG, "'home' ~").is_empty());
+    assert!(definition(&mut index, TWIG, "'home'|").is_empty());
 }
 
 #[test]
@@ -210,4 +212,23 @@ fn twig_files_get_no_php_answers() {
     let offset = String::from_utf8_lossy(&source).find("path").unwrap() as u32;
     assert!(index.hover(&path, &source, offset).is_none());
     assert!(index.diagnostics(&path, &source).is_empty());
+}
+
+#[test]
+fn abstract_controllers_define_no_routes() {
+    let index = build();
+    assert!(routes(&index, "index").is_empty());
+    assert!(routes(&index, "app_crud_list").is_empty());
+}
+
+#[test]
+fn inherited_route_methods_belong_to_the_subclass() {
+    let index = build();
+    let crud = "src/Controller/CrudController.php";
+    assert_eq!(routes(&index, "post_index"), [pair(crud, "index")]);
+    assert_eq!(routes(&index, "post_app_post_list"), [pair(crud, "list")]);
+    assert_eq!(
+        routes(&index, "App\\Controller\\PostController::index"),
+        [pair(crud, "index")]
+    );
 }

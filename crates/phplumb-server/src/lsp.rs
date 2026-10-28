@@ -493,8 +493,9 @@ impl Server<'_> {
             watchers: vec![
                 watcher(php, None),
                 watcher("**/vendor/composer/installed.json".to_string(), None),
-                // Framework modules read YAML files, such as Drupal's services.
-                watcher("**/*.yml".to_string(), None),
+                // Framework modules read YAML files, such as Drupal's services and
+                // Symfony's routes.
+                watcher("**/*.{yml,yaml}".to_string(), None),
                 // Creating, moving or deleting a directory reports only the directory.
                 watcher(
                     "**/*".to_string(),

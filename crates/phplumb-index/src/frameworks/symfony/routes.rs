@@ -33,7 +33,7 @@ impl Routes {
                 && filter.in_scope(path)
                 && index.is_project_code(path)
             {
-                routes.read_class(path, declaration);
+                routes.read_class(index, path, declaration);
             }
         }
         for file in route_files(&project.dir.join("config"), filter) {
@@ -53,11 +53,15 @@ impl Routes {
         }
     }
 
-    /// The routes of one class, named as `AttributeClassLoader::load` names them.
-    fn read_class(&mut self, path: &Path, class: &Declaration) {
+    /// The routes of one class, named as `AttributeClassLoader::load` names them:
+    /// abstract classes have none, and inherited methods route on the class.
+    fn read_class(&mut self, index: &Index, path: &Path, class: &Declaration) {
         let Some(shape) = &class.class else {
             return;
         };
+        if shape.is_abstract {
+            return;
+        }
         let fqn = &class.fqn;
         let class_routes = route_names(&shape.metadata);
         let prefix = match class_routes.first() {
@@ -65,22 +69,19 @@ impl Routes {
             Some(RouteName::Unreadable) => return,
             Some(RouteName::Missing) | None => String::new(),
         };
-        let target = |member: &Member| RouteTarget {
+        let target = |(path, member): &(PathBuf, &Member)| RouteTarget {
             location: Location {
-                path: path.to_path_buf(),
+                path: path.clone(),
                 start: member.name_start,
                 end: member.name_end,
             },
             text: member.name.clone(),
         };
-        let methods: Vec<&Member> = shape
-            .members
-            .iter()
-            .filter(|m| m.kind == MemberKind::Method)
-            .collect();
+        let methods = methods_of(index, path, class);
         let mut count = 0;
         let mut invoke_routes: Vec<String> = Vec::new();
-        for method in &methods {
+        for entry in &methods {
+            let method = entry.1;
             let attributes = route_names(&method.metadata);
             let mut defaults = 0;
             let mut names = Vec::new();
@@ -102,15 +103,15 @@ impl Routes {
                 invoke_routes.extend(names.iter().cloned());
             }
             if attributes.len() == 1 && names.len() == 1 {
-                self.add(format!("{fqn}::{}", method.name), target(method));
+                self.add(format!("{fqn}::{}", method.name), target(entry));
             }
             for name in names {
-                self.add(name, target(method));
+                self.add(name, target(entry));
             }
         }
         let invoke = methods
             .iter()
-            .find(|m| m.name.eq_ignore_ascii_case("__invoke"));
+            .find(|(_, m)| m.name.eq_ignore_ascii_case("__invoke"));
         if count == 0
             && let Some(invoke) = invoke
         {
@@ -121,7 +122,7 @@ impl Routes {
                     RouteName::Literal(name) => name.clone(),
                     RouteName::Missing => {
                         defaults += 1;
-                        default_name(fqn, &invoke.name, defaults - 1)
+                        default_name(fqn, &invoke.1.name, defaults - 1)
                     }
                     RouteName::Unreadable => continue,
                 };
@@ -190,6 +191,47 @@ impl Routes {
             }
         }
     }
+}
+
+/// The methods of `class` as reflection lists them: its own, then those of its
+/// traits and parents that it does not redeclare, each with its file.
+fn methods_of<'a>(
+    index: &'a Index,
+    path: &Path,
+    class: &'a Declaration,
+) -> Vec<(PathBuf, &'a Member)> {
+    let mut found: Vec<(PathBuf, &Member)> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let mut pending: Vec<(PathBuf, &Declaration)> = vec![(path.to_path_buf(), class)];
+    let mut visited = 0;
+    while let Some((path, declaration)) = pending.pop() {
+        visited += 1;
+        if visited > 16 {
+            break;
+        }
+        let Some(shape) = &declaration.class else {
+            continue;
+        };
+        for member in shape
+            .members
+            .iter()
+            .filter(|m| m.kind == MemberKind::Method)
+        {
+            let name = member.name.to_ascii_lowercase();
+            if !seen.contains(&name) {
+                seen.push(name);
+                found.push((path.clone(), member));
+            }
+        }
+        // Traits first, so the parent comes off the stack last.
+        let ancestors = shape.parent.iter().chain(shape.traits.iter().rev());
+        for name in ancestors {
+            if let Some(ancestor) = index.classes_named(name).into_iter().next() {
+                pending.push((ancestor.path.to_path_buf(), ancestor.declaration));
+            }
+        }
+    }
+    found
 }
 
 /// The method a route's `controller` names: `Class::method`, or `Class` for an

@@ -3,3 +3,5 @@
 {% if path('app_blog_show') %}{% endif %}
 {{ path(name) }}
 {{ 'path("home")' }}
+{{ path('home' ~ suffix) }}
+{{ path('home'|lower) }}

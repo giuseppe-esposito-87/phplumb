@@ -133,7 +133,9 @@ fn registers_a_yaml_watcher() {
         .unwrap()
         .clone();
     assert!(
-        watchers.iter().any(|w| w["globPattern"] == "**/*.yml"),
+        watchers
+            .iter()
+            .any(|w| w["globPattern"] == "**/*.{yml,yaml}"),
         "{watchers:?}"
     );
     client.reply_null(&request);

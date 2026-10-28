@@ -25,7 +25,13 @@ fn first_argument_at(source: &[u8], offset: u32, functions: &[&str]) -> Option<(
         }
         let close = j.min(end);
         if content <= offset && offset <= close {
-            if !called_with(source, start, i, functions) {
+            // The literal must be the whole argument: `'a' ~ b` or `'a'|lower` is not.
+            let mut after = close + 1;
+            while after < end && source[after].is_ascii_whitespace() {
+                after += 1;
+            }
+            let whole = after < end && matches!(source[after], b',' | b')');
+            if !whole || !called_with(source, start, i, functions) {
                 return None;
             }
             let value = String::from_utf8_lossy(&source[content..close]).into_owned();
