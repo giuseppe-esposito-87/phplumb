@@ -1,0 +1,4 @@
+when@dev:
+    dev_tools:
+        path: /dev
+        controller: App\Controller\LegacyController

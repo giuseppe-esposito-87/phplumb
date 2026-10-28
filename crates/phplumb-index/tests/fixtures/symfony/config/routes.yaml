@@ -1,0 +1,6 @@
+controllers:
+    resource: routing.controllers
+
+legacy_page:
+    path: /legacy
+    controller: App\Controller\LegacyController::show

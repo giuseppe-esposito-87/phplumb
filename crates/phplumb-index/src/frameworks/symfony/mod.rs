@@ -1,5 +1,7 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
+mod routes;
+
 use std::any::Any;
 use std::path::{Path, PathBuf};
 
@@ -9,9 +11,26 @@ use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
 
+pub use routes::RouteTarget;
+use routes::Routes;
+
 #[derive(Default)]
 pub struct Symfony {
     project: Project,
+    routes: Routes,
+}
+
+impl Symfony {
+    /// Where the route `name` is defined: an attribute route's controller method, or
+    /// a YAML route's key and controller method.
+    pub fn route_targets(&self, name: &str) -> &[RouteTarget] {
+        self.routes.targets(name)
+    }
+
+    fn read(&mut self, index: &Index) {
+        let filter = index.filter().scoped(&self.project);
+        self.routes = Routes::read(index, &filter, &self.project);
+    }
 }
 
 impl Framework for Symfony {
@@ -39,9 +58,23 @@ impl Framework for Symfony {
         &[]
     }
 
-    fn rebuild(&mut self, _index: &Index) {}
+    fn rebuild(&mut self, index: &Index) {
+        self.read(index);
+    }
 
-    fn update(&mut self, _index: &Index, _changed: &[PathBuf], _removed: &[PathBuf]) {}
+    /// Reads the routes again when a PHP or YAML file of the project, or a
+    /// directory, changed.
+    fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
+        let relevant = changed.iter().chain(removed).any(|path| {
+            let path = index.filter().under_root(path);
+            let kind = path.extension().and_then(|e| e.to_str());
+            (self.project.contains(&path) || self.project.dir.starts_with(&path))
+                && (path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml")))
+        });
+        if relevant {
+            self.read(index);
+        }
+    }
 
     fn call_type(&self, _index: &Index, _call: &FrameworkCall<'_>) -> Option<TypeExpr> {
         None
