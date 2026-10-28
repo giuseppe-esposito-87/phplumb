@@ -328,3 +328,22 @@ fn without_stubs_built_ins_resolve_to_nothing() {
         [pair("lib/Stringable.php", "Stringable")]
     );
 }
+
+#[test]
+fn references_of_a_built_in_are_empty() {
+    let mut index = build(&DiscoverOptions::default());
+    let (path, source, offset) = at("app/Uses.php", "getMessage", 0);
+    assert!(index.references(&path, &source, offset, false).is_empty());
+    assert!(index.references(&path, &source, offset, true).is_empty());
+}
+
+#[test]
+fn implementations_leave_stubs_out() {
+    let mut index = build(&DiscoverOptions::default());
+    let (path, source, offset) = at("app/Uses.php", "RuntimeException", 1);
+    let found = index.implementations(&path, &source, offset);
+    assert!(
+        found.iter().all(|location| !under_stubs(&index, location)),
+        "{found:?}"
+    );
+}

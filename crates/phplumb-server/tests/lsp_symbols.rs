@@ -85,3 +85,26 @@ fn workspace_symbols_over_stdio() {
     assert_eq!(symbols[1]["containerName"], "App");
     client.shutdown();
 }
+
+#[test]
+fn workspace_symbols_leave_stubs_out() {
+    let (_dir, root_uri, mut client) = start(&[(
+        "src/AppException.php",
+        "<?php\nnamespace App;\nclass AppException extends \\RuntimeException {}\n",
+    )]);
+
+    let symbols = client.request(2, "workspace/symbol", json!({"query": "RuntimeException"}));
+
+    assert!(
+        symbols
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|symbol| symbol["location"]["uri"]
+                .as_str()
+                .unwrap()
+                .starts_with(&root_uri)),
+        "{symbols}"
+    );
+    client.shutdown();
+}

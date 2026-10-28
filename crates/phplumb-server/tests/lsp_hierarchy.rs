@@ -83,3 +83,60 @@ fn type_hierarchy_over_stdio() {
     assert_eq!(subtypes[0]["name"], "Square", "{subtypes}");
     client.shutdown();
 }
+
+/// A project class extending a built-in one, whose method calls a built-in method.
+fn start_with_built_in_parent() -> (TempDir, String, Client) {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/AppException.php"),
+        "<?php\nnamespace App;\nclass AppException extends \\RuntimeException\n{\n    public function describe(): string { return $this->getMessage(); }\n}\n",
+    )
+    .unwrap();
+    let root_uri = format!("file://{}", root.display());
+    let mut client = Client::start();
+    client.initialize(json!({
+        "processId": null,
+        "capabilities": {},
+        "workspaceFolders": [{"uri": root_uri, "name": "test"}],
+    }));
+    (dir, root_uri, client)
+}
+
+/// Every `uri` in `items`, at `field` when given, is in the project.
+fn all_in_project(items: &Value, field: Option<&str>, root_uri: &str) -> bool {
+    items.as_array().unwrap().iter().all(|item| {
+        let item = field.map_or(item, |field| &item[field]);
+        item["uri"].as_str().unwrap().starts_with(root_uri)
+    })
+}
+
+#[test]
+fn type_hierarchy_leaves_stubs_out() {
+    let (_dir, root_uri, mut client) = start_with_built_in_parent();
+    let uri = format!("{root_uri}/src/AppException.php");
+
+    let item = client.request(2, "textDocument/prepareTypeHierarchy", at(&uri, 2, 6));
+    let supertypes = client.request(3, "typeHierarchy/supertypes", json!({"item": item[0]}));
+
+    assert_eq!(item[0]["name"], "AppException", "{item}");
+    assert!(all_in_project(&supertypes, None, &root_uri), "{supertypes}");
+    client.shutdown();
+}
+
+#[test]
+fn outgoing_calls_leave_stubs_out() {
+    let (_dir, root_uri, mut client) = start_with_built_in_parent();
+    let uri = format!("{root_uri}/src/AppException.php");
+
+    let item = client.request(2, "textDocument/prepareCallHierarchy", at(&uri, 4, 20));
+    let outgoing = client.request(3, "callHierarchy/outgoingCalls", json!({"item": item[0]}));
+
+    assert_eq!(item[0]["name"], "describe", "{item}");
+    assert!(
+        all_in_project(&outgoing, Some("to"), &root_uri),
+        "{outgoing}"
+    );
+    client.shutdown();
+}

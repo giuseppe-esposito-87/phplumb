@@ -989,7 +989,13 @@ fn hierarchy_items(
         Direction::Up => index.supertypes(fqn),
         Direction::Down => index.subtypes(fqn),
     };
-    Some(classes.iter().filter_map(hierarchy_item).collect())
+    Some(
+        classes
+            .iter()
+            .filter(|class| !index.is_stub(class.path))
+            .filter_map(hierarchy_item)
+            .collect(),
+    )
 }
 
 fn hierarchy_item(class: &ClassRef<'_>) -> Option<TypeHierarchyItem> {

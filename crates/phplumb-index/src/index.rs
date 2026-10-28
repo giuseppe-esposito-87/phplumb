@@ -306,7 +306,7 @@ impl Index {
 
     /// References of what the cursor is on: every occurrence across the index that
     /// resolves to it, project code first. With `include_declaration`, the
-    /// declarations themselves are listed too.
+    /// declarations themselves are listed too. Stub declarations have none.
     pub fn references(
         &mut self,
         path: &Path,
@@ -314,7 +314,8 @@ impl Index {
         offset: u32,
         include_declaration: bool,
     ) -> Vec<Location> {
-        let targets = self.targets(path, source, offset);
+        let mut targets = self.targets(path, source, offset);
+        targets.retain(|target| !self.is_stub(&target.path));
         let mut found: Vec<Location> = Vec::new();
         for target in &targets {
             if let Some(symbol) = self.symbol_at(target) {
