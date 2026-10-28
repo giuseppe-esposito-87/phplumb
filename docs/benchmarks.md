@@ -2,6 +2,40 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 5b enums
+
+Same machine. Every enum implements `UnitEnum`, and a backed enum `BackedEnum` too, so `from()`, `tryFrom()`, `cases()`, `->value` and `->name` lead to their stubs. An enum case has its enum's type, so `Role::PlatformAdmin->label()` and `Status::from($x)->label()` resolve.
+
+The Drupal reference project is on another branch than in step 5a, so both projects were measured with this branch and with the build before it, on the same checkouts.
+
+Drupal reference project:
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,514 of 45,837 accesses (92.8%) | at least 42,481 |
+| Cold index                              | 6.7 s                             | under 10 s      |
+| Warm start from the cache               | 4.7 s                             | under 2 s       |
+| Update of one file                      | 91 ms                             | under 0.5 s     |
+| Update of 1,000 files                   | 6.8 s                             | under 5 s       |
+| Peak resident memory                    | 547 MB                            | under 1024 MB   |
+| Slowest query case                      | 155 ms                            | under 1 s       |
+| All cases                               | 86 passed, 7 failed               | all pass        |
+| Diagnostics in `web/modules/custom`     | 94, the same as before            | no new ones     |
+
+The build before this step resolves 42,481 accesses on the same checkout. The 7 failing cases point into files this branch of the project does not have, and they fail the same way before this step. The warm start and the update of 1,000 files still miss their targets, as before this step. New cases cover `tryFrom()` and `->value` on an enum case.
+
+Symfony reference project, 16,931 PHP files:
+
+| Metric                   | Value                             | Target        |
+| ------------------------ | --------------------------------- | ------------- |
+| Member coverage in `src` | 13,001 of 13,211 accesses (98.4%) | above 12,801  |
+| Cold index               | 2.3 s                             | under 10 s    |
+| Peak resident memory     | 187 MB                            | under 1024 MB |
+| All cases                | 8 passed, 0 failed                | all pass      |
+| Diagnostics in `src`     | 0, the same as before             | no new ones   |
+
+New cases cover `from()` on a backed enum, `->value` on an enum-typed property, a method called on an enum case, and a method called after `from()`. Of the 210 accesses left, the enum ones are on values read from arrays or loops, which step 5c covers.
+
 ## 2026-10-28, step 5a built-in class members
 
 Same machine. Built-in classes, functions, constants and their members lead to their declaration in the phpstorm stubs, and their return types carry navigation on.
