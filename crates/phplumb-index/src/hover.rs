@@ -117,6 +117,10 @@ fn display(ty: &TypeExpr) -> String {
         TypeExpr::StaticType => "static".to_string(),
         TypeExpr::ParentType => "parent".to_string(),
         TypeExpr::ArrayOf(element) => format!("{}[]", display(element)),
+        TypeExpr::Generic { class, args } => format!(
+            "\\{class}<{}>",
+            args.iter().map(display).collect::<Vec<_>>().join(", ")
+        ),
         TypeExpr::Union(members) => members.iter().map(display).collect::<Vec<_>>().join("|"),
         TypeExpr::Other => "mixed".to_string(),
     }

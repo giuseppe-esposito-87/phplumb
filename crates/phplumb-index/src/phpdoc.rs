@@ -15,6 +15,12 @@ pub enum TypeExpr {
     ParentType,
     /// `X[]`, `array<X>`, `array<K, X>`, `iterable<X>`, `list<X>`
     ArrayOf(Box<TypeExpr>),
+    /// A class written with arguments, such as `Collection<int, Item>`: the
+    /// arguments in order, `Other` for scalars and `null`.
+    Generic {
+        class: String,
+        args: Vec<TypeExpr>,
+    },
     /// Unions and intersections: navigation treats both as "any of these".
     Union(Vec<TypeExpr>),
     /// A class carrying a framework tag, such as a storage that knows its entity
@@ -47,6 +53,11 @@ pub struct DocBlock {
     pub params: Vec<(String, TypeExpr)>,
     /// `@return Type`
     pub returns: Option<TypeExpr>,
+    /// `@template` names, resolved like class names so that they equal the
+    /// `Named` types the class's members carry.
+    pub templates: Vec<String>,
+    /// The generic types of `@extends` and `@implements`, as class and arguments.
+    pub generic_supertypes: Vec<(String, Vec<TypeExpr>)>,
 }
 
 const NON_CLASS: &[&str] = &[
@@ -286,7 +297,13 @@ impl TypeParser<'_> {
                     None => self.names.resolve_class(&word),
                 };
                 self.found.push((start, end, fqn.clone()));
-                TypeExpr::Named(fqn)
+                match args {
+                    Some(args) => TypeExpr::Generic {
+                        class: fqn,
+                        args: args.into_iter().map(finish).collect(),
+                    },
+                    None => TypeExpr::Named(fqn),
+                }
             }
         })
     }
@@ -702,6 +719,16 @@ pub fn parse_docblock(text: &str, names: &dyn NameContext) -> DocBlock {
                 }
             }
             "return" => target.returns = Some(parse_type(type_text, names)),
+            "template" | "template-covariant" | "template-contravariant" => {
+                if !type_text.is_empty() {
+                    target.templates.push(names.resolve_class(type_text));
+                }
+            }
+            "extends" | "implements" | "template-extends" | "template-implements" => {
+                if let TypeExpr::Generic { class, args } = parse_type(type_text, names) {
+                    target.generic_supertypes.push((class, args));
+                }
+            }
             _ => {}
         }
     }
@@ -720,6 +747,16 @@ pub fn parse_docblock(text: &str, names: &dyn NameContext) -> DocBlock {
         },
         params,
         returns: specific.returns.or(plain.returns),
+        templates: if specific.templates.is_empty() {
+            plain.templates
+        } else {
+            specific.templates
+        },
+        generic_supertypes: if specific.generic_supertypes.is_empty() {
+            plain.generic_supertypes
+        } else {
+            specific.generic_supertypes
+        },
     }
 }
 
@@ -808,9 +845,21 @@ mod tests {
     }
 
     #[test]
-    fn generics_keep_the_base() {
-        assert_eq!(ty("Collection<Foo>"), named("App\\Collection"));
-        assert_eq!(ty("\\Lib\\Map<string, Foo>"), named("Lib\\Map"));
+    fn generics_keep_their_arguments() {
+        assert_eq!(
+            ty("Collection<Foo>"),
+            TypeExpr::Generic {
+                class: "App\\Collection".to_string(),
+                args: vec![named("App\\Foo")],
+            }
+        );
+        assert_eq!(
+            ty("\\Lib\\Map<string, Foo>"),
+            TypeExpr::Generic {
+                class: "Lib\\Map".to_string(),
+                args: vec![TypeExpr::Other, named("App\\Foo")],
+            }
+        );
     }
 
     #[test]
@@ -830,6 +879,7 @@ mod tests {
                     ("b".to_string(), TypeExpr::Other)
                 ],
                 returns: Some(TypeExpr::StaticType),
+                ..DocBlock::default()
             }
         );
     }

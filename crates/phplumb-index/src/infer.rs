@@ -2175,6 +2175,13 @@ fn bind(ty: &TypeExpr, static_class: &str, self_class: &str, parent: Option<&str
         TypeExpr::ArrayOf(element) => {
             TypeExpr::ArrayOf(Box::new(bind(element, static_class, self_class, parent)))
         }
+        TypeExpr::Generic { class, args } => TypeExpr::Generic {
+            class: class.clone(),
+            args: args
+                .iter()
+                .map(|arg| bind(arg, static_class, self_class, parent))
+                .collect(),
+        },
         TypeExpr::Union(members) => union(
             members
                 .iter()
@@ -2188,7 +2195,9 @@ fn bind(ty: &TypeExpr, static_class: &str, self_class: &str, parent: Option<&str
 /// The class names a type can be: named classes alone or in a union.
 pub(crate) fn class_names(ty: &TypeExpr) -> Vec<String> {
     match ty {
-        TypeExpr::Named(name) | TypeExpr::Tagged { class: name, .. } => vec![name.clone()],
+        TypeExpr::Named(name)
+        | TypeExpr::Tagged { class: name, .. }
+        | TypeExpr::Generic { class: name, .. } => vec![name.clone()],
         TypeExpr::Union(members) => members.iter().flat_map(class_names).collect(),
         _ => Vec::new(),
     }

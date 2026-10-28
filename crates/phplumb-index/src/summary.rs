@@ -136,6 +136,13 @@ pub struct ClassShape {
     /// The class-like's attributes, then its docblock annotations.
     #[serde(default)]
     pub metadata: Vec<Metadata>,
+    /// `@template` names, as the class's member types write them.
+    #[serde(default)]
+    pub templates: Vec<String>,
+    /// The arguments the class-like gives generic parents and interfaces through
+    /// `@extends` and `@implements`.
+    #[serde(default)]
+    pub generic_supertypes: Vec<(String, Vec<TypeExpr>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -607,6 +614,8 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                         .filter_map(|meta| meta.resolve(&fqn_at))
                         .chain(shape.annotations)
                         .collect(),
+                    templates: shape.templates,
+                    generic_supertypes: shape.generic_supertypes,
                 }
             });
             Some(Declaration {
@@ -782,6 +791,7 @@ fn names_a_class(ty: &TypeExpr) -> bool {
     match ty {
         TypeExpr::Named(_)
         | TypeExpr::Tagged { .. }
+        | TypeExpr::Generic { .. }
         | TypeExpr::SelfType
         | TypeExpr::StaticType
         | TypeExpr::ParentType => true,
@@ -833,6 +843,8 @@ struct PendingShape {
     annotations: Vec<Metadata>,
     /// Method attributes, by the offset of the method name.
     member_attributes: Vec<(u32, Vec<PendingMeta>)>,
+    templates: Vec<String>,
+    generic_supertypes: Vec<(String, Vec<TypeExpr>)>,
 }
 
 /// An attribute before names are resolved: offsets of the names the resolver knows.
@@ -1255,6 +1267,8 @@ impl Collector<'_> {
                     metadata::annotations(&doc, offset, &self.names.at(offset))
                 })
                 .unwrap_or_default();
+        let doc = self.doc(head.node_start);
+        let tags = self.doc_tags(doc.as_deref(), head.node_start);
         self.pending.push(Pending {
             attributes: Vec::new(),
             kind: head.kind,
@@ -1264,7 +1278,7 @@ impl Collector<'_> {
             span: (head.node_start, head.node_end),
             fqn: None,
             signature: self.text(head.head_start, head.left_brace),
-            doc: self.doc(head.node_start),
+            doc,
             returns: None,
             shape: Some(PendingShape {
                 parent: head.parent,
@@ -1277,6 +1291,8 @@ impl Collector<'_> {
                 attributes: head.attributes,
                 annotations,
                 member_attributes,
+                templates: tags.templates,
+                generic_supertypes: tags.generic_supertypes,
             }),
         });
     }
