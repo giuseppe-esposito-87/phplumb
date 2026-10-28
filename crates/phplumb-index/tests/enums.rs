@@ -117,3 +117,37 @@ fn pure_enums_have_no_backed_members() {
     let mut index = build();
     assert!(definition(&mut index, "app/Uses.php", "from('x')", 0).is_empty());
 }
+
+/// The `label` method declared in `app/Severity.php`.
+fn label() -> [(String, String); 1] {
+    [pair("app/Severity.php", "label")]
+}
+
+#[test]
+fn enum_cases_have_their_enum_type() {
+    let mut index = build();
+    let found = definition(&mut index, "app/Uses.php", "label();", 0);
+    assert_eq!(described(&index, &found), label());
+}
+
+#[test]
+fn from_returns_the_enum() {
+    let mut index = build();
+    for nth in [1, 2] {
+        let found = definition(&mut index, "app/Uses.php", "label();", nth);
+        assert_eq!(described(&index, &found), label(), "label {nth}");
+    }
+}
+
+#[test]
+fn self_cases_resolve_inside_the_enum() {
+    let mut index = build();
+    let found = definition(&mut index, "app/Severity.php", "label();", 0);
+    assert_eq!(described(&index, &found), label());
+}
+
+#[test]
+fn class_constants_get_no_enum_type() {
+    let mut index = build();
+    assert!(definition(&mut index, "app/Uses.php", "label();", 3).is_empty());
+}

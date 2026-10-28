@@ -1552,8 +1552,29 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     _ => TypeExpr::Other,
                 }
             }
+            Expression::Access(Access::ClassConstant(access)) => {
+                match (self.class_of(access.class, at), &access.constant) {
+                    (Some(class), ClassLikeConstantSelector::Identifier(name)) => {
+                        self.enum_case(&class, &String::from_utf8_lossy(name.value))
+                    }
+                    _ => TypeExpr::Other,
+                }
+            }
             _ => TypeExpr::Other,
         }
+    }
+
+    /// The enum that declares case `name` reached from `class`; any other constant
+    /// has no type.
+    fn enum_case(&self, class: &str, name: &str) -> TypeExpr {
+        union(
+            self.index
+                .find_member(class, MemberKind::Constant, name)
+                .into_iter()
+                .filter(|(_, member)| member.kind == MemberKind::EnumCase)
+                .map(|(found, _)| TypeExpr::Named(found.declaration.fqn.clone()))
+                .collect(),
+        )
     }
 
     /// The type a method call on `receiver` returns: what the active frameworks give,

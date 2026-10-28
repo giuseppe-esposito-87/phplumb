@@ -10,4 +10,8 @@ function uses(Severity $severity, Plain $plain): void
     $severity->value;
     $plain->name;
     Plain::from('x');
+    Severity::Low->label();
+    Severity::from('low')->label();
+    Severity::tryFrom('low')?->label();
+    Severity::LIMIT->label();
 }

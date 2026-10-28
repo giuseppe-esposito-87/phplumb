@@ -43,6 +43,7 @@ class Members extends NoConstructor
         echo Content::TYPE;
         echo Content::/*@broken*/KIND;
         echo Suit::Hearts->value;
+        Suit::Hearts->/*@broken*/invented();
         echo Suit::/*@broken*/Spades;
         Suit::cases();
         Suit::from('h');
