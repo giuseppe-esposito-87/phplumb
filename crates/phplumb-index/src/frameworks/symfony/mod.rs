@@ -6,13 +6,38 @@ use std::any::Any;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Diagnostic;
-use crate::frameworks::{Framework, FrameworkCall, FrameworkDeclaration, Project};
+use crate::frameworks::ancestry::is_a;
+use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration, Project};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
 
 pub use routes::RouteTarget;
 use routes::Routes;
+
+/// Methods whose argument 0 is a route name, by the class that declares them.
+const ROUTE_METHODS: [(&str, &[&str]); 2] = [
+    (
+        "Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController",
+        &["redirectToRoute", "generateUrl"],
+    ),
+    (
+        "Symfony\\Component\\Routing\\Generator\\UrlGeneratorInterface",
+        &["generate"],
+    ),
+];
+
+/// Whether `call` passes a route name as its argument 0.
+fn route_call(index: &Index, call: &FrameworkCall<'_>) -> bool {
+    call.targets.iter().any(|target| {
+        let CallTarget::Method { class, name } = target else {
+            return false;
+        };
+        ROUTE_METHODS.iter().any(|(owner, methods)| {
+            methods.iter().any(|m| m.eq_ignore_ascii_case(name)) && is_a(index, class, &[owner])
+        })
+    })
+}
 
 #[derive(Default)]
 pub struct Symfony {
@@ -80,14 +105,21 @@ impl Framework for Symfony {
         None
     }
 
+    /// A route name given to a route method leads to the route's definitions.
     fn string_targets(
         &self,
-        _index: &Index,
-        _call: &FrameworkCall<'_>,
-        _argument: usize,
-        _value: &str,
+        index: &Index,
+        call: &FrameworkCall<'_>,
+        argument: usize,
+        value: &str,
     ) -> Vec<(Location, String)> {
-        Vec::new()
+        if argument != 0 || !route_call(index, call) {
+            return Vec::new();
+        }
+        self.route_targets(value)
+            .iter()
+            .map(|target| (target.location.clone(), target.text.clone()))
+            .collect()
     }
 
     fn keyed_string_targets(

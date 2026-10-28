@@ -247,3 +247,23 @@ fn updating_a_directory_that_holds_the_drupal_project_keeps_it() {
         );
     }
 }
+
+#[test]
+fn symfony_sees_no_drupal_routes() {
+    let mut index = auto(&nested());
+    let path = nested().join("src/Controller/LinkController.php");
+    let source = fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&source).into_owned();
+    let at = |needle: &str| text.find(needle).unwrap() as u32 + 1;
+    assert!(
+        index
+            .definition(&path, &source, at("'demo.attr'"))
+            .is_empty()
+    );
+    let home: Vec<PathBuf> = index
+        .definition(&path, &source, at("'symfony_home'"))
+        .into_iter()
+        .map(|location| location.path)
+        .collect();
+    assert_eq!(home, [nested().join("src/Controller/HomeController.php")]);
+}

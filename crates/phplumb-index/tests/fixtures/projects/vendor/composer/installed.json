@@ -1,0 +1,11 @@
+{
+    "packages": [
+        {
+            "name": "symfony/framework-bundle",
+            "install-path": "../symfony/framework-bundle",
+            "autoload": {
+                "psr-4": {"Symfony\\Bundle\\FrameworkBundle\\": ""}
+            }
+        }
+    ]
+}

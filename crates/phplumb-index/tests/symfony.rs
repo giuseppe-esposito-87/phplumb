@@ -122,3 +122,56 @@ fn vendor_attribute_routes_give_nothing() {
     let index = build();
     assert!(routes(&index, "vendor_page").is_empty());
 }
+
+/// Go to definition inside the `nth` occurrence of `needle` in `file`, one byte in.
+fn definition(index: &mut Index, file: &str, needle: &str) -> Vec<(String, String)> {
+    let path = fixture().join(file);
+    let source = std::fs::read(&path).unwrap();
+    let offset = String::from_utf8_lossy(&source)
+        .find(needle)
+        .unwrap_or_else(|| panic!("no {needle} in {file}")) as u32
+        + 1;
+    index
+        .definition(&path, &source, offset)
+        .into_iter()
+        .map(|location| {
+            let text = std::fs::read(&location.path).unwrap();
+            let range = &text[location.start as usize..location.end as usize];
+            (
+                location
+                    .path
+                    .strip_prefix(fixture())
+                    .unwrap()
+                    .display()
+                    .to_string(),
+                String::from_utf8_lossy(range).into_owned(),
+            )
+        })
+        .collect()
+}
+
+const LINKS: &str = "src/Controller/LinksController.php";
+
+#[test]
+fn route_names_in_php_lead_to_their_routes() {
+    let mut index = build();
+    assert_eq!(
+        definition(&mut index, LINKS, "'home'"),
+        [pair("src/Controller/HomeController.php", "index")]
+    );
+    assert_eq!(
+        definition(&mut index, LINKS, "'admin_users'"),
+        [pair("src/Controller/AdminController.php", "users")]
+    );
+    assert_eq!(
+        definition(&mut index, LINKS, "'app_blog_show'"),
+        [pair("src/Controller/BlogController.php", "show")]
+    );
+}
+
+#[test]
+fn unknown_and_dynamic_route_names_give_nothing() {
+    let mut index = build();
+    assert!(definition(&mut index, LINKS, "'missing'").is_empty());
+    assert!(definition(&mut index, LINKS, "$name);").is_empty());
+}
