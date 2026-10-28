@@ -49,7 +49,7 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 
 ### Symfony
 
-- **Route names given by class constants are not read.** `#[Route('/dev/login', name: DevLoginAuthenticator::ROUTE)]` makes no route, so 2 of 383 route names in the Symfony reference project resolve to nothing. Found in step 6b.
+- **Route names given by class constants are not read.** `#[Route('/dev/login', name: DevLoginAuthenticator::ROUTE)]` makes no route, so 2 of 383 route names in the Symfony reference project resolve to nothing, and every route diagnostic of that project stays silent. Found in step 6b.
 - **Route imports with `name_prefix` are not read.** Attribute routes under a YAML import that sets `name_prefix` keep their plain names. Found in step 6b.
 - **Some route definitions are not read.** The `alias` argument of `#[Route]` and YAML `alias:` routes, localized routes such as `loc.en`, `config/routes.php` and `config/routes/*.php`, and YAML files imported from outside `config/routes` define no route. A localized method also gets a `Class::method` alias that Symfony does not create. Found in the step 6b review.
 - **A class-level `#[Route]` with `name: null` drops the whole class.** Symfony reads it as no prefix. Found in the step 6b review.
@@ -80,6 +80,10 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Some mapping attributes do not navigate.** `class` of `discriminator-mapping`, `entity-listener` and `custom-id-generator`, and `name` of `order-by-field`, give nothing. Found in the step 6f review.
 - **A deleted directory with a dot in its name leaves its mappings listed.** The module walks for mapping files again only when a directory, an extension-less path or a mapping file changes, so removing `config/doctrine.old` keeps its files until the next rebuild; reading a missing file gives nothing. Found in the step 6f review.
 - **Some step 6f behaviour has no test.** `Symfony::update` after a mapping file is added or removed, a mapping file with a BOM or a different encoding declaration, and `getRepository()` through `ManagerRegistry` are untested. Found in the step 6f review.
+
+- **Many sources silence every Symfony diagnostic of a kind.** Any route import the module does not read (an unknown bundle, a YAML file outside `config/routes`, `name_prefix`), PHP or XML route files, route aliases and a kernel with `configureRoutes()` silence all route names; PHP configuration, environment directories below `config/packages`, `imports:` and `ContainerConfigurator` in project code silence all parameters; `phplumb.exclude` silences everything. Reading bundle route files and the parameters bundle extensions set would let more names be checked. Found in step 6g.
+- **Some broken Symfony names are never flagged.** Names starting with `_` when Symfony's bundle routes are imported, `x.y` when a route `x` exists (localized routes), template names in a list or with `ignore missing`, and names in a file that mentions `RouteNotFoundException`, `LoaderError` or `ParameterNotFoundException` stay silent. Found in step 6g.
+- **A `setParameter()` call can be missed.** Only project files that mention a container class are read for `setParameter()`, so a container held in an untyped variable in another file sets a parameter the module does not see, and a use of that parameter is flagged. Found in step 6g.
 
 ## Accepted for now
 
