@@ -15,7 +15,7 @@ Same machine and checkouts as step 6f. Route, template and parameter names defin
 | All cases            | 87 passed, 7 failed, as before  | 31 passed, 0 failed        |
 | Diagnostics          | 94 in custom modules, as before | 0                          |
 
-The Symfony sweep covers `src`, `templates`, `config` and `tests` (1,047 files, slowest 5 ms) and finds no broken name. Its templates and parameters are certain: names injected into a template and into `services.yaml` were flagged in a probe. Its route names stay silent, because two routes are named by a class constant the module cannot read. The Drupal sweep now also reads 1,256 YAML and Twig files of the custom modules, which get no diagnostic. A first run found no parameter diagnostic at all: the compiled container under `var/cache` counted as PHP configuration, and the module now leaves `var` out.
+The Symfony sweep covers `src`, `templates`, `config` and `tests` (1,047 files, slowest 5 ms) and finds no broken name. Its templates and parameters are certain: names injected into a template and into `services.yaml` were flagged in a probe. Its route names stay silent, because two routes are named by a class constant the module cannot read; a review copy with those two names written as literals found no route diagnostic either, and flagged an injected one. The Drupal sweep now also reads 1,256 YAML and Twig files of the custom modules, which get no diagnostic. A first run found no parameter diagnostic at all: the compiled container under `var/cache` counted as PHP configuration, and the module now leaves `var` out.
 
 ## 2026-10-28, step 6f Doctrine mapping
 
