@@ -16,6 +16,13 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Hover on built-in members shows raw attributes.** Parameter attributes such as `#[LanguageLevelTypeAware(...)]` appear verbatim. A return type that only the attribute gives is missing, as in `DateTimeImmutable::modify`.
 - **Stub loading has two fragile paths.** `stubs::load` keeps a failed build for the life of the process, and one unreadable directory below the stubs fails the whole stub index.
 
+### Enums
+
+- **Diagnostics on `\UnitEnum` and `\BackedEnum` receivers have no test.** Since step 5b, `$u->nowhere()` on a `\UnitEnum $u`, on a `\BackedEnum`, or on a project interface that extends one, is flagged when no class declares the method. The doc comment of `diagnostics::fully_known` does not mention the exception for these two interfaces. Add a flagged and a silent call to the diagnostics fixture. Found in the step 5b review.
+- **Two step 5b behaviours have no test.** `static::Low->label()` inside the enum resolves, and `->value` on a case of a pure enum gives nothing. Add both to the `enums` fixture. Found in the step 5b review.
+- **Stub enums list `UnitEnum` twice.** Stubs such as `enum RoundingMode implements \UnitEnum` already name it, and the implicit interface is appended again. Lookups skip names already visited, so nothing breaks today. Skip an implicit name already in `interfaces`. Found in the step 5b review.
+- **Some case accesses get no type.** `$this::Low->label()` and `$severity::from('low')->label()` resolve to nothing, because a variable class gives no class. `self::Low->label()` in a trait the enum uses resolves `self` to the trait. Found in the step 5b review.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.
@@ -23,3 +30,6 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Stub files are read again after every update.** Property-assignment inference on a class that extends a built-in class re-reads the stub file once the per-update cache is cleared. The files are at most 300 KB.
 - **Stub duplicates keep the first file in path order.** `ds` wins over `ds_v2` and `couchbase` over `couchbase_v2`, so users of Ds 2.x or the Couchbase 2 SDK see the other version.
 - **Members of built-in classes are never certain for diagnostics.** A typo such as `$date->whatever()` on a `DateTime` stays unflagged, because the stubs give one PHP version and the project may run another.
+- **`from()` and `tryFrom()` on a pure enum are not flagged.** Diagnostics count `cases`, `from` and `tryFrom` on every enum. Navigation gives no target for them on a pure enum.
+- **Typed class constants get no type.** `const Severity DEFAULT = Severity::Low` gives nothing after `Severity::DEFAULT->`, because only enum cases get a type.
+- **Hover on `->value` shows `int|string`.** The type comes from the `BackedEnum` stub, not from the enum's backing type.
