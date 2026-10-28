@@ -1,6 +1,7 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
 mod routes;
+mod twig;
 
 use std::any::Any;
 use std::path::{Path, PathBuf};
@@ -149,14 +150,24 @@ impl Framework for Symfony {
         None
     }
 
+    /// A route name in `path()` or `url()` of a Twig template leads to the route.
     fn file_targets(
         &self,
         _index: &Index,
-        _path: &Path,
-        _source: &[u8],
-        _offset: u32,
+        path: &Path,
+        source: &[u8],
+        offset: u32,
     ) -> Vec<(Location, String)> {
-        Vec::new()
+        if !crate::filter::is_twig(path) {
+            return Vec::new();
+        }
+        let Some((name, _, _)) = twig::route_name_at(source, offset) else {
+            return Vec::new();
+        };
+        self.route_targets(&name)
+            .iter()
+            .map(|target| (target.location.clone(), target.text.clone()))
+            .collect()
     }
 
     fn declaration_targets(

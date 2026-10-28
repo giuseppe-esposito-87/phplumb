@@ -318,6 +318,9 @@ impl Framework for Drupal {
         source: &[u8],
         offset: u32,
     ) -> Vec<(Location, String)> {
+        if !crate::filter::is_yaml(path) {
+            return Vec::new();
+        }
         navigation::targets(self, index, path, source, offset)
     }
 

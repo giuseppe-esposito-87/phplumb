@@ -175,3 +175,39 @@ fn unknown_and_dynamic_route_names_give_nothing() {
     assert!(definition(&mut index, LINKS, "'missing'").is_empty());
     assert!(definition(&mut index, LINKS, "$name);").is_empty());
 }
+
+const TWIG: &str = "templates/base.html.twig";
+
+#[test]
+fn route_names_in_twig_lead_to_their_routes() {
+    let mut index = build();
+    assert_eq!(
+        definition(&mut index, TWIG, "'home'"),
+        [pair("src/Controller/HomeController.php", "index")]
+    );
+    assert_eq!(
+        definition(&mut index, TWIG, "'admin_users'"),
+        [pair("src/Controller/AdminController.php", "users")]
+    );
+    assert_eq!(
+        definition(&mut index, TWIG, "'app_blog_show'"),
+        [pair("src/Controller/BlogController.php", "show")]
+    );
+}
+
+#[test]
+fn twig_without_a_literal_route_gives_nothing() {
+    let mut index = build();
+    assert!(definition(&mut index, TWIG, "name)").is_empty());
+    assert!(definition(&mut index, TWIG, "\"home\"").is_empty());
+}
+
+#[test]
+fn twig_files_get_no_php_answers() {
+    let mut index = build();
+    let path = fixture().join(TWIG);
+    let source = std::fs::read(&path).unwrap();
+    let offset = String::from_utf8_lossy(&source).find("path").unwrap() as u32;
+    assert!(index.hover(&path, &source, offset).is_none());
+    assert!(index.diagnostics(&path, &source).is_empty());
+}

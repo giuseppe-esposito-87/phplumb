@@ -1898,3 +1898,12 @@ fn unimported_annotation_names_ignore_classes_of_the_same_namespace() {
         "{found:?}"
     );
 }
+
+#[test]
+fn drupal_answers_nothing_in_twig() {
+    let (_root, mut index, path, source, offset) = fixture_at(
+        "modules/custom/mymodule/templates/link.html.twig",
+        "'mymodule.page'",
+    );
+    assert!(index.definition(&path, &source, offset - 2).is_empty());
+}

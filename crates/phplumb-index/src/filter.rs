@@ -20,6 +20,19 @@ pub fn is_yaml(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("yml") || e.eq_ignore_ascii_case("yaml"))
 }
 
+/// Whether `path` is a Twig template.
+pub fn is_twig(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("twig"))
+}
+
+/// Whether `path` is a file the engine does not read as PHP, where only the
+/// frameworks answer: YAML and Twig.
+pub fn is_framework_file(path: &Path) -> bool {
+    is_yaml(path) || is_twig(path)
+}
+
 /// Directories never indexed, whatever the exclusions say.
 pub(crate) const SKIPPED_DIR_NAMES: &[&str] = &["node_modules"];
 

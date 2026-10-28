@@ -858,7 +858,7 @@ const WORKSPACE_SYMBOL_LIMIT: usize = 100;
 
 fn document_symbols(params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
     let path = uri_to_path(&params.text_document.uri)?;
-    if phplumb_index::filter::is_yaml(&path) {
+    if phplumb_index::filter::is_framework_file(&path) {
         return None;
     }
     let source = std::fs::read(&path).ok()?;

@@ -2,6 +2,8 @@ import * as assert from "node:assert";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { DOCUMENT_SELECTOR } from "../extension";
+
 // Compiled to out/test, two levels below the extension folder.
 const extensionDir = path.resolve(__dirname, "..", "..");
 
@@ -30,6 +32,13 @@ suite("manifest", () => {
     const setting = manifest.contributes.configuration.properties["phplumb.frameworks.symfony"];
 
     assert.deepStrictEqual([setting?.enum, setting?.default], [["auto", "on", "off"], "auto"]);
+  });
+
+  test("sends Twig files to the engine", () => {
+    assert.ok(
+      DOCUMENT_SELECTOR.some((filter) => filter.pattern === "**/*.twig"),
+      JSON.stringify(DOCUMENT_SELECTOR),
+    );
   });
 
   test("contributes the project folder setting", () => {

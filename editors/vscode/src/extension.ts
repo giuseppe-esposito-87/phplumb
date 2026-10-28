@@ -13,6 +13,15 @@ export interface PhplumbApi {
   cacheDir: string | undefined;
 }
 
+/** The files the engine answers in: PHP, and the YAML and Twig files framework modules read. */
+export const DOCUMENT_SELECTOR: { scheme: string; language?: string; pattern?: string }[] = [
+  { scheme: "file", language: "php" },
+  // Framework modules answer in YAML files, such as Drupal's services.
+  { scheme: "file", language: "yaml" },
+  // Twig templates hold route and template names; no Twig extension is needed.
+  { scheme: "file", pattern: "**/*.twig" },
+];
+
 export async function activate(context: vscode.ExtensionContext): Promise<PhplumbApi> {
   context.subscriptions.push(
     vscode.commands.registerCommand("phplumb.restartServer", () => restart(context)),
@@ -58,11 +67,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 
   const serverOptions: ServerOptions = { command, args: ["serve"] };
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [
-      { scheme: "file", language: "php" },
-      // Framework modules answer in YAML files, such as Drupal's services.
-      { scheme: "file", language: "yaml" },
-    ],
+    documentSelector: DOCUMENT_SELECTOR,
     initializationOptions: {
       root: config.get<string>("root", ""),
       exclude: config.get<string[]>("exclude", []),

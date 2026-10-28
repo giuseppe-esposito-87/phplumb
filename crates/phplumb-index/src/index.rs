@@ -12,7 +12,7 @@ use crate::cache::{self, CachedFile};
 use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
-use crate::filter::{PHP_EXTENSION, PathFilter, is_yaml};
+use crate::filter::{PHP_EXTENSION, PathFilter, is_framework_file};
 use crate::frameworks::{self, FoundCall, Framework, FrameworkCall, FrameworkDeclaration, Project};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Assigning, PropertyTypes, Receiver};
@@ -309,7 +309,7 @@ impl Index {
     /// `source`: the inferred type of a variable, or the signatures and docblock
     /// summaries of what the word refers to.
     pub fn hover(&mut self, path: &Path, source: &[u8], offset: u32) -> Option<Hover> {
-        if is_yaml(path) {
+        if is_framework_file(path) {
             return None;
         }
         hover::hover(self, path, source, offset)
@@ -503,7 +503,7 @@ impl Index {
     /// Broken references in `source`, the content of the file at `path`, sorted by
     /// offset. Every rule must prove the target missing; uncertainty stays silent.
     pub fn diagnostics(&self, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
-        if is_yaml(path) {
+        if is_framework_file(path) {
             return Vec::new();
         }
         let mut found = diagnostics::find(self, path, source);
@@ -1211,7 +1211,7 @@ impl Index {
     /// subtype uses, when it is not the original. Sorted and deduplicated; stale
     /// targets are re-indexed like definitions.
     pub fn implementations(&mut self, path: &Path, source: &[u8], offset: u32) -> Vec<Location> {
-        if is_yaml(path) {
+        if is_framework_file(path) {
             return Vec::new();
         }
         // What the cursor is on is read from the index, so the cursor file must be current.
@@ -1504,7 +1504,7 @@ impl Index {
         offset: u32,
         declarations: bool,
     ) -> Vec<(Location, String)> {
-        if is_yaml(path) {
+        if is_framework_file(path) {
             if !declarations {
                 return Vec::new();
             }
