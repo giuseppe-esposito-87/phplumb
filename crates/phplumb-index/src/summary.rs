@@ -138,7 +138,7 @@ pub struct ClassShape {
     pub metadata: Vec<Metadata>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MemberKind {
     Method,
     Property,

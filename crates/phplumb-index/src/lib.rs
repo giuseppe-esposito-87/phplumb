@@ -16,6 +16,7 @@ mod members;
 pub mod metadata;
 pub mod phpdoc;
 mod references;
+pub mod stubs;
 pub mod summary;
 pub mod symbols;
 
