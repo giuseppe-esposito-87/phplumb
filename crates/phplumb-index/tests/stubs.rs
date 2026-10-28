@@ -1,5 +1,9 @@
+use std::path::{Path, PathBuf};
+
+use phplumb_index::discover::DiscoverOptions;
 use phplumb_index::stubs::summarize_stub;
 use phplumb_index::summary::{Declaration, Member, MemberKind, SymbolKind, summarize};
+use phplumb_index::{Index, Location};
 
 const HEADER: &str = "<?php\n\
 use JetBrains\\PhpStorm\\Internal\\LanguageLevelTypeAware;\n\
@@ -142,4 +146,185 @@ fn unmarked_stub_declarations_stay() {
             .collect()
     };
     assert_eq!(shape(&stubbed.declarations), shape(&plain.declarations));
+}
+
+fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/stubs")
+        .canonicalize()
+        .unwrap()
+}
+
+fn build(opts: &DiscoverOptions) -> Index {
+    Index::build(&fixture(), opts).unwrap().0
+}
+
+/// The file `file` of the fixture, its content, and the offset of the `nth`
+/// occurrence of `needle` in it.
+fn at(file: &str, needle: &str, nth: usize) -> (PathBuf, Vec<u8>, u32) {
+    let path = fixture().join(file);
+    let source = std::fs::read(&path).unwrap();
+    let text = String::from_utf8(source.clone()).unwrap();
+    let offset = text
+        .match_indices(needle)
+        .nth(nth)
+        .unwrap_or_else(|| panic!("no occurrence {nth} of {needle} in {file}"))
+        .0;
+    (path, source, offset as u32)
+}
+
+fn definition(index: &mut Index, file: &str, needle: &str, nth: usize) -> Vec<Location> {
+    let (path, source, offset) = at(file, needle, nth);
+    index.definition(&path, &source, offset)
+}
+
+/// Each location as its path, relative to the stubs directory when it is a stub and
+/// to the fixture otherwise, and the text at its range.
+fn described(index: &Index, locations: &[Location]) -> Vec<(String, String)> {
+    let stubs = index.stubs_dir().map(Path::to_path_buf);
+    locations
+        .iter()
+        .map(|location| {
+            let text = std::fs::read(&location.path).unwrap();
+            let range = &text[location.start as usize..location.end as usize];
+            let relative = stubs
+                .as_deref()
+                .and_then(|dir| location.path.strip_prefix(dir).ok())
+                .or_else(|| location.path.strip_prefix(fixture()).ok())
+                .unwrap_or(&location.path);
+            (
+                relative.display().to_string(),
+                String::from_utf8_lossy(range).into_owned(),
+            )
+        })
+        .collect()
+}
+
+fn under_stubs(index: &Index, location: &Location) -> bool {
+    index
+        .stubs_dir()
+        .is_some_and(|dir| location.path.starts_with(dir))
+}
+
+fn pair(path: &str, text: &str) -> (String, String) {
+    (path.to_string(), text.to_string())
+}
+
+#[test]
+fn built_in_method_opens_its_stub() {
+    let mut index = build(&DiscoverOptions::default());
+    let found = definition(&mut index, "app/Uses.php", "getMessage", 0);
+    assert_eq!(
+        described(&index, &found),
+        [pair("Core/Core_c.php", "getMessage")]
+    );
+}
+
+#[test]
+fn inherited_built_in_members_resolve() {
+    let mut index = build(&DiscoverOptions::default());
+    let direct = definition(&mut index, "app/Uses.php", "getMessage", 0);
+    let inherited = definition(&mut index, "app/Uses.php", "getMessage", 1);
+    assert_eq!(inherited, direct);
+    let constructor = definition(&mut index, "app/Uses.php", "__construct('failed')", 0);
+    assert_eq!(
+        described(&index, &constructor),
+        [pair("Core/Core_c.php", "__construct")]
+    );
+}
+
+#[test]
+fn built_in_return_types_continue_the_chain() {
+    let mut index = build(&DiscoverOptions::default());
+    let found = definition(&mut index, "app/Uses.php", "format", 0);
+    assert_eq!(
+        described(&index, &found),
+        [pair("date/date_c.php", "format")]
+    );
+}
+
+#[test]
+fn version_duplicates_give_one_target() {
+    let mut index = build(&DiscoverOptions::default());
+    let found = definition(&mut index, "app/Uses.php", "modify", 0);
+    assert_eq!(found.len(), 1);
+    let text = std::fs::read_to_string(&found[0].path).unwrap();
+    let before = &text[..found[0].start as usize];
+    let attribute = before
+        .rfind("PhpStormStubsElementAvailable(")
+        .expect("modify has an availability attribute");
+    assert!(before[attribute..].starts_with("PhpStormStubsElementAvailable(from: '8.3')"));
+}
+
+#[test]
+fn built_in_function_and_constant_open_stubs() {
+    let mut index = build(&DiscoverOptions::default());
+    for (needle, name) in [("count([])", "count"), ("PHP_EOL", "PHP_EOL")] {
+        let found = definition(&mut index, "app/Uses.php", needle, 0);
+        assert_eq!(found.len(), 1, "{name}");
+        assert!(under_stubs(&index, &found[0]), "{name}");
+        assert_eq!(described(&index, &found)[0].1, name);
+    }
+}
+
+#[test]
+fn project_function_wins_in_its_namespace() {
+    let mut index = build(&DiscoverOptions::default());
+    let found = definition(&mut index, "app/Local.php", "count()", 1);
+    assert_eq!(described(&index, &found), [pair("app/Local.php", "count")]);
+}
+
+#[test]
+fn polyfill_of_a_built_in_class_is_not_a_target() {
+    let mut index = build(&DiscoverOptions::default());
+    let found = definition(&mut index, "app/Uses.php", "Stringable", 0);
+    assert_eq!(found.len(), 1);
+    assert!(under_stubs(&index, &found[0]));
+}
+
+#[test]
+fn hover_shows_the_stub_signature() {
+    let mut index = build(&DiscoverOptions::default());
+    let (path, source, offset) = at("app/Uses.php", "getMessage", 0);
+    let hover = index.hover(&path, &source, offset).expect("a hover");
+    assert!(
+        hover.markdown.contains("getMessage(): string"),
+        "{}",
+        hover.markdown
+    );
+}
+
+#[test]
+fn stub_files_never_enter_the_project_index() {
+    let mut index = build(&DiscoverOptions::default());
+    for (needle, nth) in [
+        ("getMessage", 0),
+        ("format", 0),
+        ("count([])", 0),
+        ("Stringable", 0),
+    ] {
+        definition(&mut index, "app/Uses.php", needle, nth);
+    }
+    let stubs = index.stubs_dir().expect("stubs are loaded").to_path_buf();
+    assert!(
+        index
+            .declarations()
+            .all(|(path, _)| !path.starts_with(&stubs))
+    );
+}
+
+#[test]
+fn without_stubs_built_ins_resolve_to_nothing() {
+    let opts = DiscoverOptions {
+        stubs: None,
+        ..DiscoverOptions::default()
+    };
+    let mut index = build(&opts);
+    assert!(definition(&mut index, "app/Uses.php", "getMessage", 0).is_empty());
+    assert!(definition(&mut index, "app/Uses.php", "count([])", 0).is_empty());
+    let found = definition(&mut index, "app/Uses.php", "Stringable", 0);
+    assert_eq!(
+        described(&index, &found),
+        [pair("lib/Stringable.php", "Stringable")]
+    );
 }

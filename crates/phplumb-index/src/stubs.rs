@@ -1,9 +1,12 @@
 //! JetBrains `phpstorm-stubs`: the declarations of PHP's built-in classes, functions
 //! and constants, read as PHP `PHP_VERSION` has them (see `data/README.md`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use crate::index::Index;
 use crate::metadata::{MetaValue, Metadata};
 use crate::phpdoc::{self, NameContext, TypeExpr};
 use crate::summary::{Declaration, FileSummary, SymbolKind, pick_type, summarize};
@@ -16,6 +19,44 @@ const AVAILABLE: &str = "JetBrains\\PhpStorm\\Internal\\PhpStormStubsElementAvai
 
 /// Gives a declaration's type per PHP version, with a default.
 const TYPE_AWARE: &str = "JetBrains\\PhpStorm\\Internal\\LanguageLevelTypeAware";
+
+/// The directory of the stub files: `$PHPLUMB_STUBS`, `stubs` beside the engine
+/// binary, or the copy in the source tree the engine was built from, whichever
+/// exists first.
+pub fn default_dir() -> Option<PathBuf> {
+    let configured = std::env::var_os("PHPLUMB_STUBS").map(PathBuf::from);
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("stubs")));
+    let built = Some(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/stubs"
+    )));
+    [configured, beside, built]
+        .into_iter()
+        .flatten()
+        .find(|dir| dir.is_dir())
+}
+
+/// The index of the stubs in `dir`, built once per process and directory; none when
+/// the directory holds no PHP file.
+pub(crate) fn load(dir: &Path) -> Option<Arc<Index>> {
+    static LOADED: OnceLock<Mutex<HashMap<PathBuf, Option<Arc<Index>>>>> = OnceLock::new();
+    let dir = dir.canonicalize().ok()?;
+    let mut loaded = LOADED
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    loaded
+        .entry(dir.clone())
+        .or_insert_with(|| {
+            Index::build_stubs(&dir)
+                .ok()
+                .filter(|index| index.declarations().next().is_some())
+                .map(Arc::new)
+        })
+        .clone()
+}
 
 /// The summary of a stub file as PHP `PHP_VERSION` has it: declarations it lacks
 /// are dropped, each function and member is kept once (its last declaration), and

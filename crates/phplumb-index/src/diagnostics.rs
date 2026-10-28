@@ -280,7 +280,9 @@ fn fully_known(index: &Index, class: &str, check_magic: bool) -> bool {
             continue;
         }
         let declarations = index.classes_named(&next);
-        if declarations.is_empty() {
+        // The stubs give a built-in class as one PHP version has it, and the project
+        // may run another, so its members are never certain.
+        if declarations.is_empty() || declarations.iter().any(|d| index.is_stub(d.path)) {
             return false;
         }
         for declaration in declarations {

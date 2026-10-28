@@ -7,11 +7,12 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use rayon::prelude::*;
 
+use crate::builtins;
 use crate::cache::{self, CachedFile};
 use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
-use crate::filter::{PathFilter, is_yaml};
+use crate::filter::{PHP_EXTENSION, PathFilter, is_yaml};
 use crate::frameworks::{self, FoundCall, Framework, FrameworkCall, FrameworkDeclaration};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Assigning, PropertyTypes, Receiver};
@@ -94,6 +95,8 @@ pub struct Index {
     /// What each class's code assigns to its properties, by lowercased class name,
     /// computed on first use and emptied on every update.
     property_types: RwLock<HashMap<String, Arc<PropertyTypes>>>,
+    /// The index of the phpstorm stubs, which declares PHP's built-in symbols.
+    stubs: Option<Arc<Index>>,
 }
 
 impl Index {
@@ -160,6 +163,7 @@ impl Index {
             method_names: HashMap::new(),
             namespaces: HashMap::new(),
             property_types: RwLock::new(HashMap::new()),
+            stubs: opts.stubs.as_deref().and_then(crate::stubs::load),
         };
         for file in files.into_iter().flatten() {
             stats.files_with_parse_errors += usize::from(file.has_errors);
@@ -178,6 +182,58 @@ impl Index {
             .clear();
         stats.elapsed_ms = started.elapsed().as_millis();
         Ok((index, stats))
+    }
+
+    /// The index of the stub files below `dir`, each summarized as PHP
+    /// `stubs::PHP_VERSION` has it, with no framework and no stubs of its own.
+    pub(crate) fn build_stubs(dir: &Path) -> anyhow::Result<Index> {
+        let opts = DiscoverOptions {
+            stubs: None,
+            ..DiscoverOptions::default()
+        };
+        let filter = PathFilter::new(dir, &opts)?;
+        let mut paths: Vec<PathBuf> = Vec::new();
+        let mut pending = vec![filter.root().to_path_buf()];
+        while let Some(next) = pending.pop() {
+            for entry in std::fs::read_dir(&next)?.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|e| e == PHP_EXTENSION) {
+                    paths.push(path);
+                }
+            }
+        }
+        paths.sort();
+        let mut index = Index {
+            filter,
+            frameworks: Vec::new(),
+            files: Vec::new(),
+            ids: HashMap::new(),
+            classes: HashMap::new(),
+            functions: HashMap::new(),
+            constants: HashMap::new(),
+            subtype_table: HashMap::new(),
+            candidates: HashMap::new(),
+            method_names: HashMap::new(),
+            namespaces: HashMap::new(),
+            property_types: RwLock::new(HashMap::new()),
+            stubs: None,
+        };
+        for file in read_files_with(&paths, crate::stubs::summarize_stub) {
+            index.insert(file);
+        }
+        Ok(index)
+    }
+
+    /// The directory of the stubs this index reads built-in symbols from.
+    pub fn stubs_dir(&self) -> Option<&Path> {
+        self.stubs.as_ref().map(|stubs| stubs.filter.root())
+    }
+
+    /// Whether `path` is a stub file.
+    pub fn is_stub(&self, path: &Path) -> bool {
+        self.stubs_dir().is_some_and(|dir| path.starts_with(dir))
     }
 
     /// Writes the index to `cache` for a later `build_with_cache`.
@@ -431,7 +487,10 @@ impl Index {
 
     /// Whether a class-like named `fqn` is indexed.
     pub(crate) fn has_class(&self, fqn: &str) -> bool {
-        !lookup(&self.classes, &fqn.to_ascii_lowercase()).is_empty()
+        !self
+            .entries(SymbolKind::Class, &fqn.to_ascii_lowercase())
+            .1
+            .is_empty()
     }
 
     /// Whether a function named `fqn` is indexed.
@@ -775,7 +834,33 @@ impl Index {
 
     /// Every class-like declaration named `fqn`, matched case-insensitively.
     pub fn classes_named(&self, fqn: &str) -> Vec<ClassRef<'_>> {
-        self.class_refs(lookup(&self.classes, &fqn.to_ascii_lowercase()))
+        let (holder, entries) = self.entries(SymbolKind::Class, &fqn.to_ascii_lowercase());
+        holder.class_refs(entries)
+    }
+
+    /// The index that declares `fqn` of `kind`: the stubs for a name PHP itself
+    /// declares, when they are loaded, and this index otherwise.
+    fn holder(&self, kind: SymbolKind, fqn: &str) -> &Index {
+        let built_in = match kind {
+            SymbolKind::Function => builtins::is_function(fqn),
+            SymbolKind::Constant => builtins::is_constant(fqn),
+            _ => builtins::is_class(fqn),
+        };
+        match &self.stubs {
+            Some(stubs) if built_in => stubs,
+            _ => self,
+        }
+    }
+
+    /// The holder of `key` of `kind` and the entries its table has for the key.
+    fn entries(&self, kind: SymbolKind, key: &str) -> (&Index, &[Entry]) {
+        let holder = self.holder(kind, key);
+        let table = match kind {
+            SymbolKind::Function => &holder.functions,
+            SymbolKind::Constant => &holder.constants,
+            _ => &holder.classes,
+        };
+        (holder, lookup(table, key))
     }
 
     /// Direct subtypes: classes extending `fqn`, classes and enums implementing it,
@@ -847,18 +932,18 @@ impl Index {
     /// fallback for unqualified, non-imported names.
     pub(crate) fn function_returns(&self, name: &NameRef) -> Vec<TypeExpr> {
         let key = name.fqn.to_ascii_lowercase();
-        let mut entries = lookup(&self.functions, &key);
+        let (mut holder, mut entries) = self.entries(SymbolKind::Function, &key);
         if entries.is_empty()
             && !name.qualified
             && !name.imported
             && let Some((_, global)) = key.rsplit_once('\\')
         {
-            entries = lookup(&self.functions, global);
+            (holder, entries) = self.entries(SymbolKind::Function, global);
         }
         entries
             .iter()
             .filter_map(|entry| {
-                let file = self.files[entry.file as usize].as_ref()?;
+                let file = holder.files[entry.file as usize].as_ref()?;
                 file.declarations.get(entry.decl as usize)?.returns.clone()
             })
             .collect()
@@ -1460,37 +1545,37 @@ impl Index {
                 .map(|name| self.class_targets(&self.annotation_classes(&summary, name)))
                 .unwrap_or_default();
         };
-        let (key, entries): (String, &[Entry]) = match name.kind {
+        let (key, holder, entries): (String, &Index, &[Entry]) = match name.kind {
             NameKind::ClassLike => {
                 let key = name.fqn.to_ascii_lowercase();
-                let entries = lookup(&self.classes, &key);
-                (key, entries)
+                let (holder, entries) = self.entries(SymbolKind::Class, &key);
+                (key, holder, entries)
             }
             NameKind::Function => {
                 let key = name.fqn.to_ascii_lowercase();
-                let found = lookup(&self.functions, &key);
+                let (holder, found) = self.entries(SymbolKind::Function, &key);
                 match key.rsplit_once('\\') {
                     // PHP falls back to the global function only for unqualified,
                     // non-imported names.
                     Some((_, global)) if found.is_empty() && !name.qualified && !name.imported => {
                         let global = global.to_string();
-                        let entries = lookup(&self.functions, &global);
-                        (global, entries)
+                        let (holder, entries) = self.entries(SymbolKind::Function, &global);
+                        (global, holder, entries)
                     }
-                    _ => (key, found),
+                    _ => (key, holder, found),
                 }
             }
             NameKind::Constant => {
                 let key = symbol_key(SymbolKind::Constant, &name.fqn);
-                let found = lookup(&self.constants, &key);
+                let (holder, found) = self.entries(SymbolKind::Constant, &key);
                 match name.fqn.rsplit_once('\\') {
                     // Unqualified constants fall back to the global one, like functions.
                     Some((_, global)) if found.is_empty() && !name.qualified && !name.imported => {
                         let global = global.to_string();
-                        let entries = lookup(&self.constants, &global);
-                        (global, entries)
+                        let (holder, entries) = self.entries(SymbolKind::Constant, &global);
+                        (global, holder, entries)
                     }
-                    _ => (key, found),
+                    _ => (key, holder, found),
                 }
             }
         };
@@ -1499,7 +1584,7 @@ impl Index {
         let mut found: Vec<(Location, String)> = entries
             .iter()
             .map(|entry| {
-                let file = self.files[entry.file as usize]
+                let file = holder.files[entry.file as usize]
                     .as_ref()
                     .expect("symbol tables only reference live files");
                 let location = Location {
@@ -1778,13 +1863,18 @@ fn stamp(path: &Path) -> Option<(u64, u64)> {
 /// file written meanwhile looks changed to the next cache check. Unreadable files
 /// yield no declarations rather than failing.
 fn read_files(paths: &[PathBuf]) -> Vec<CachedFile> {
+    read_files_with(paths, summarize)
+}
+
+/// `read_files` with `summarize_with` in place of `summarize`.
+fn read_files_with(paths: &[PathBuf], summarize_with: fn(&[u8]) -> FileSummary) -> Vec<CachedFile> {
     paths
         .par_iter()
         .map(|path| {
             let (size, mtime_ns) = stamp(path).unwrap_or_default();
             let (declarations, has_errors, ref_keys) = match std::fs::read(path) {
                 Ok(source) => {
-                    let summary = summarize(&source);
+                    let summary = summarize_with(&source);
                     let declarations = summary.declarations.into_iter().map(lean).collect();
                     (declarations, summary.has_parse_errors, summary.ref_keys)
                 }

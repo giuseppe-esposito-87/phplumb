@@ -17,6 +17,9 @@ pub struct DiscoverOptions {
     pub max_file_bytes: u64,
     /// Which framework modules run.
     pub frameworks: FrameworkSettings,
+    /// The directory of the phpstorm stubs that declare PHP's built-in symbols;
+    /// none leaves built-in names unresolved.
+    pub stubs: Option<PathBuf>,
 }
 
 impl Default for DiscoverOptions {
@@ -25,6 +28,7 @@ impl Default for DiscoverOptions {
             exclude: Vec::new(),
             max_file_bytes: 4 * 1024 * 1024,
             frameworks: FrameworkSettings::default(),
+            stubs: crate::stubs::default_dir(),
         }
     }
 }
