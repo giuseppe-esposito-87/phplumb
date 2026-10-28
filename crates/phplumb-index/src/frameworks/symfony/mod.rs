@@ -128,8 +128,8 @@ impl Framework for Symfony {
         self.read(index);
     }
 
-    /// Reads the routes again when a PHP or YAML file of the project, or a
-    /// directory, changed.
+    /// Reads the routes and template paths again when a PHP or YAML file of the
+    /// project, or a directory, changed.
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
         let relevant = changed.iter().chain(removed).any(|path| {
             let path = index.filter().under_root(path);
@@ -146,7 +146,8 @@ impl Framework for Symfony {
         None
     }
 
-    /// A route name given to a route method leads to the route's definitions.
+    /// A template name given to a rendering method opens the template; a route name
+    /// given to a route method leads to the route's definitions.
     fn string_targets(
         &self,
         index: &Index,

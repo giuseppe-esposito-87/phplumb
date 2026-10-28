@@ -177,6 +177,31 @@ fn is_tag_argument(source: &[u8], literal: &Literal) -> bool {
         return !followed_by(source, literal, b"~|.+[(");
     }
     if LIST_TAGS.contains(&tag) && argument < end && source[argument] == b'[' {
+        // Only a direct element of that first list, not of a later one.
+        let mut depth = 0;
+        let mut k = argument + 1;
+        while k < literal.quote {
+            match source[k] {
+                quote @ (b'\'' | b'"') => {
+                    k += 1;
+                    while k < literal.quote && source[k] != quote {
+                        k += if source[k] == b'\\' { 2 } else { 1 };
+                    }
+                }
+                b'[' | b'{' | b'(' => depth += 1,
+                b']' | b'}' | b')' => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        if depth != 0 {
+            return false;
+        }
         let mut before = literal.quote;
         while before > argument && source[before - 1].is_ascii_whitespace() {
             before -= 1;
@@ -232,5 +257,10 @@ mod tests {
         assert_eq!(template("{% embed 'a' with {b: 'c'} %}", "'c'"), None);
         assert_eq!(template("{% import ['a'] as x %}", "'a'"), None);
         assert_eq!(template("{{ 'a' }}", "'a'"), None);
+        assert_eq!(
+            template("{% include ['a'] with {items: ['b']} %}", "'b'"),
+            None
+        );
+        assert_eq!(template("{% include ['a'] with ['x'] %}", "'x'"), None);
     }
 }

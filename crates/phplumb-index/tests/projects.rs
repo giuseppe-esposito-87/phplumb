@@ -284,3 +284,63 @@ fn templates_without_paths_use_the_default_directory() {
         Some(root.join("templates/page.html.twig"))
     );
 }
+
+/// A Symfony project with `twig_yaml` as `config/packages/twig.yaml` and each of
+/// `files` as an empty template; the file `name` resolves to, relative to the root.
+fn resolve_template(twig_yaml: &str, files: &[&str], name: &str) -> Option<String> {
+    let (_dir, root) = project();
+    lock(&root, "", SYMFONY_LOCK);
+    fs::create_dir_all(root.join("config/packages")).unwrap();
+    fs::write(root.join("config/packages/twig.yaml"), twig_yaml).unwrap();
+    for file in files {
+        let path = root.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "<p></p>\n").unwrap();
+    }
+    let index = auto(&root);
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    symfony
+        .template_file(name)
+        .map(|path| path.strip_prefix(&root).unwrap().display().to_string())
+}
+
+#[test]
+fn environment_blocks_never_shadow_the_main_paths() {
+    let yaml = "twig: {}\nwhen@test:\n    twig:\n        default_path: '%kernel.project_dir%/tests/templates'\n        paths:\n            '%kernel.project_dir%/tests/fixtures': ~\n            '%kernel.project_dir%/tests/ns': Fix\n";
+    let files = [
+        "templates/base.html.twig",
+        "tests/templates/base.html.twig",
+        "tests/fixtures/base.html.twig",
+        "tests/ns/x.html.twig",
+    ];
+    assert_eq!(
+        resolve_template(yaml, &files, "base.html.twig").as_deref(),
+        Some("templates/base.html.twig")
+    );
+    assert_eq!(
+        resolve_template(yaml, &files, "@Fix/x.html.twig").as_deref(),
+        Some("tests/ns/x.html.twig")
+    );
+}
+
+#[test]
+fn an_unreadable_path_stops_its_namespace() {
+    let files = ["templates/base.html.twig", "theme/base.html.twig"];
+    assert_eq!(
+        resolve_template(
+            "twig:\n    paths:\n        '%app.theme_dir%': ~\n",
+            &files,
+            "base.html.twig"
+        ),
+        None
+    );
+    assert_eq!(
+        resolve_template(
+            "twig:\n    paths:\n        'theme': NULL\n",
+            &files,
+            "base.html.twig"
+        )
+        .as_deref(),
+        Some("theme/base.html.twig")
+    );
+}
