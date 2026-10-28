@@ -1,0 +1,268 @@
+//! Doctrine mappings: the `*.orm.xml` files of the project and
+//! `#[ORM\Entity(repositoryClass:)]` attributes, read for navigation and for the
+//! repository `getRepository()` returns.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use ignore::WalkBuilder;
+
+use crate::filter::{PathFilter, SKIPPED_DIR_NAMES};
+use crate::index::Index;
+use crate::metadata::MetaValue;
+use crate::summary::SymbolKind;
+
+/// The attribute that maps an entity class.
+const ENTITY_ATTRIBUTE: &str = "Doctrine\\ORM\\Mapping\\Entity";
+
+/// An XML element of a mapping file: its name, its attributes with each value and
+/// the value's range inside the quotes, and how deep it is nested.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Element {
+    pub(crate) name: String,
+    pub(crate) attributes: Vec<(String, String, u32, u32)>,
+    pub(crate) depth: usize,
+}
+
+impl Element {
+    pub(crate) fn attribute(&self, name: &str) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|(key, ..)| key == name)
+            .map(|(_, value, ..)| value.as_str())
+    }
+}
+
+/// The elements of `text` in order; comments, declarations and text are skipped.
+pub(crate) fn elements(text: &str) -> Vec<Element> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &text[i..];
+        let skip_to = |end: &str| {
+            text[i..]
+                .find(end)
+                .map_or(bytes.len(), |p| i + p + end.len())
+        };
+        if rest.starts_with("<!--") {
+            i = skip_to("-->");
+            continue;
+        }
+        if rest.starts_with("<?") {
+            i = skip_to("?>");
+            continue;
+        }
+        if rest.starts_with("<!") {
+            i = skip_to(">");
+            continue;
+        }
+        if rest.starts_with("</") {
+            depth = depth.saturating_sub(1);
+            i = skip_to(">");
+            continue;
+        }
+        let mut j = i + 1;
+        while j < bytes.len() && !bytes[j].is_ascii_whitespace() && !matches!(bytes[j], b'/' | b'>')
+        {
+            j += 1;
+        }
+        let name = text[i + 1..j].to_string();
+        let mut attributes = Vec::new();
+        let mut closed = false;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'>' => {
+                    j += 1;
+                    break;
+                }
+                b'/' if bytes.get(j + 1) == Some(&b'>') => {
+                    closed = true;
+                    j += 2;
+                    break;
+                }
+                c if c.is_ascii_whitespace() => j += 1,
+                _ => {
+                    let key_start = j;
+                    while j < bytes.len()
+                        && !matches!(bytes[j], b'=' | b'>' | b'/')
+                        && !bytes[j].is_ascii_whitespace()
+                    {
+                        j += 1;
+                    }
+                    let key = text[key_start..j].to_string();
+                    while j < bytes.len() && (bytes[j].is_ascii_whitespace() || bytes[j] == b'=') {
+                        j += 1;
+                    }
+                    let Some(&quote) = bytes.get(j).filter(|q| matches!(q, b'"' | b'\'')) else {
+                        continue;
+                    };
+                    let value_start = j + 1;
+                    let value_end = text[value_start..]
+                        .find(quote as char)
+                        .map_or(bytes.len(), |p| value_start + p);
+                    attributes.push((
+                        key,
+                        text[value_start..value_end].to_string(),
+                        value_start as u32,
+                        value_end as u32,
+                    ));
+                    j = value_end + 1;
+                }
+            }
+        }
+        found.push(Element {
+            name,
+            attributes,
+            depth,
+        });
+        if !closed {
+            depth += 1;
+        }
+        i = j;
+    }
+    found
+}
+
+/// What the mappings declare: each entity's repository class.
+#[derive(Default)]
+pub(crate) struct Mappings {
+    repositories: HashMap<String, String>,
+}
+
+impl Mappings {
+    /// The `repository-class` of every entity in the project's `*.orm.xml` files,
+    /// then the `repositoryClass` of `#[ORM\Entity]` attributes of project classes.
+    pub(crate) fn read(index: &Index, filter: &PathFilter, dir: &Path) -> Mappings {
+        let mut repositories = HashMap::new();
+        for file in mapping_files(dir, filter) {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for element in elements(&text) {
+                if element.name != "entity" {
+                    continue;
+                }
+                if let (Some(entity), Some(repository)) = (
+                    element.attribute("name"),
+                    element.attribute("repository-class"),
+                ) {
+                    let entity = entity.trim_start_matches('\\');
+                    repositories.insert(entity.to_ascii_lowercase(), qualify(entity, repository));
+                }
+            }
+        }
+        for (path, declaration) in index.declarations() {
+            if declaration.kind != SymbolKind::Class || !filter.in_scope(path) {
+                continue;
+            }
+            let Some(shape) = &declaration.class else {
+                continue;
+            };
+            let repository = shape
+                .metadata
+                .iter()
+                .filter(|m| !m.annotation && m.name.eq_ignore_ascii_case(ENTITY_ATTRIBUTE))
+                .find_map(|m| match m.argument("repositoryClass") {
+                    Some(MetaValue::Class(class) | MetaValue::String(class)) => Some(class.clone()),
+                    _ => None,
+                });
+            if let Some(repository) = repository {
+                repositories.insert(declaration.fqn.to_ascii_lowercase(), repository);
+            }
+        }
+        Mappings { repositories }
+    }
+
+    pub(crate) fn repository_of(&self, entity: &str) -> Option<&str> {
+        self.repositories
+            .get(&entity.trim_start_matches('\\').to_ascii_lowercase())
+            .map(String::as_str)
+    }
+}
+
+/// A class name written in the mapping of `mapped`: a name without a namespace is
+/// in `mapped`'s namespace, as Doctrine resolves it.
+pub(crate) fn qualify(mapped: &str, name: &str) -> String {
+    let name = name.trim_start_matches('\\');
+    if name.contains('\\') {
+        return name.to_string();
+    }
+    match mapped.rsplit_once('\\') {
+        Some((namespace, _)) => format!("{namespace}\\{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// Every `*.orm.xml` below `dir`, outside `vendor`, hidden directories and
+/// `node_modules`, in path order.
+fn mapping_files(dir: &Path, filter: &PathFilter) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = WalkBuilder::new(dir)
+        .standard_filters(false)
+        .hidden(true)
+        .filter_entry(|entry| {
+            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+            !(is_dir
+                && (entry.file_name() == "vendor"
+                    || SKIPPED_DIR_NAMES
+                        .iter()
+                        .any(|name| entry.file_name() == *name)))
+        })
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
+        .map(|entry| entry.into_path())
+        .filter(|path| is_mapping(path) && filter.in_scope(path))
+        .collect();
+    files.sort();
+    files
+}
+
+/// Whether `path` is a Doctrine XML mapping file.
+pub(crate) fn is_mapping(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".orm.xml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{elements, qualify};
+
+    #[test]
+    fn reads_elements_and_their_attributes() {
+        let text = "<?xml version=\"1.0\"?>\n<!-- <entity name=\"No\"/> -->\n<doctrine-mapping>\n  <entity name=\"A\\B\" table='t'>\n    <field name=\"x\"/>\n  </entity>\n</doctrine-mapping>\n";
+        let found = elements(text);
+        let names: Vec<(&str, usize)> = found.iter().map(|e| (e.name.as_str(), e.depth)).collect();
+        assert_eq!(
+            names,
+            [("doctrine-mapping", 0), ("entity", 1), ("field", 2)]
+        );
+        let entity = &found[1];
+        assert_eq!(entity.attribute("name"), Some("A\\B"));
+        assert_eq!(entity.attribute("table"), Some("t"));
+        let (_, value, start, end) = &entity.attributes[0];
+        assert_eq!(&text[*start as usize..*end as usize], value);
+    }
+
+    #[test]
+    fn short_names_take_the_mapped_namespace() {
+        assert_eq!(
+            qualify("App\\Entity\\Post", "Author"),
+            "App\\Entity\\Author"
+        );
+        assert_eq!(
+            qualify("App\\Entity\\Post", "App\\Other\\X"),
+            "App\\Other\\X"
+        );
+        assert_eq!(
+            qualify("App\\Entity\\Post", "\\App\\Other\\X"),
+            "App\\Other\\X"
+        );
+    }
+}

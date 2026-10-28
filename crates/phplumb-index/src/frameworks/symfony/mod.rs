@@ -1,6 +1,7 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
 mod config;
+mod doctrine;
 mod messenger;
 mod routes;
 mod templates;
@@ -20,6 +21,7 @@ use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
 
+use doctrine::Mappings;
 use messenger::Handlers;
 pub use routes::RouteTarget;
 use routes::Routes;
@@ -132,6 +134,7 @@ pub struct Symfony {
     parameters: HashMap<String, Vec<RouteTarget>>,
     /// Service definitions, by id.
     services: HashMap<String, Vec<RouteTarget>>,
+    mappings: Mappings,
 }
 
 impl Symfony {
@@ -249,6 +252,11 @@ impl Symfony {
         Vec::new()
     }
 
+    /// The repository class the Doctrine mappings declare for `entity`.
+    pub fn repository_of(&self, entity: &str) -> Option<&str> {
+        self.mappings.repository_of(entity)
+    }
+
     /// The `%name%` under the cursor in the value of an attribute.
     fn value_parameter_targets(
         &self,
@@ -265,6 +273,7 @@ impl Symfony {
         let files = config::config_files(&self.project, &filter);
         self.parameters = config::read_parameters(&files);
         self.services = config::read_services(&files);
+        self.mappings = Mappings::read(index, &filter, &self.project.dir);
         self.routes = Routes::read(index, &filter, &self.project);
         self.templates = Templates::read(&self.project);
         self.handlers = Handlers::read(index, &filter);
@@ -300,14 +309,15 @@ impl Framework for Symfony {
         self.read(index);
     }
 
-    /// Reads the routes, template paths and message handlers again when a PHP or
-    /// YAML file of the project, or a directory, changed.
+    /// Reads the routes, template paths, message handlers, configuration and Doctrine
+    /// mappings again when a PHP, YAML or XML file of the project, or a directory,
+    /// changed.
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
         let relevant = changed.iter().chain(removed).any(|path| {
             let path = index.filter().under_root(path);
             let kind = path.extension().and_then(|e| e.to_str());
             (self.project.contains(&path) || self.project.dir.starts_with(&path))
-                && (path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml")))
+                && (path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml" | "xml")))
         });
         if relevant {
             self.read(index);

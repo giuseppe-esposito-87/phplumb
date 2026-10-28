@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping">
+    <entity name="App\Entity\Post" repository-class="App\Repository\PostRepository">
+        <id name="id" type="integer"/>
+        <field name="title" type="string"/>
+        <many-to-one field="author" target-entity="Author" inversed-by="posts"/>
+        <embedded name="address" class="App\Entity\Address"/>
+    </entity>
+</doctrine-mapping>

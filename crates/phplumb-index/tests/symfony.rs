@@ -826,3 +826,18 @@ fn alias_and_decorates_open_their_service() {
         "decorates"
     );
 }
+
+#[test]
+fn repositories_come_from_xml_and_attributes() {
+    let index = build();
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    assert_eq!(
+        symfony.repository_of("App\\Entity\\Post"),
+        Some("App\\Repository\\PostRepository")
+    );
+    assert_eq!(
+        symfony.repository_of("App\\Entity\\Comment"),
+        Some("App\\Repository\\CommentRepository")
+    );
+    assert_eq!(symfony.repository_of("App\\Entity\\Author"), None);
+}

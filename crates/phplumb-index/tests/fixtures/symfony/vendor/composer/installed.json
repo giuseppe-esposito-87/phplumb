@@ -53,6 +53,24 @@
                     "Symfony\\Component\\DependencyInjection\\": ""
                 }
             }
+        },
+        {
+            "name": "doctrine/orm",
+            "install-path": "../doctrine/orm",
+            "autoload": {
+                "psr-4": {
+                    "Doctrine\\ORM\\": "src/"
+                }
+            }
+        },
+        {
+            "name": "doctrine/persistence",
+            "install-path": "../doctrine/persistence",
+            "autoload": {
+                "psr-4": {
+                    "Doctrine\\Persistence\\": "src/"
+                }
+            }
         }
     ]
 }
