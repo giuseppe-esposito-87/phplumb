@@ -245,3 +245,44 @@ fn bench_reports_diagnostics() {
             .any(|e| e.as_str().unwrap().contains("Undefined class 'App\\Ghost'"))
     );
 }
+
+#[test]
+fn bench_renders_stub_targets_under_stubs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../phplumb-index/tests/fixtures/stubs")
+        .canonicalize()
+        .unwrap();
+    let uses = std::fs::read_to_string(root.join("app/Uses.php")).unwrap();
+    let stub = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../phplumb-index/data/stubs/Core/Core_c.php"),
+    )
+    .unwrap();
+    let at = format!("app/Uses.php:{}", position_of(&uses, "getMessage"));
+    let target = format!(
+        "stubs/Core/Core_c.php:{}",
+        position_of(&stub, "getMessage(): string {}")
+    );
+
+    let cases_dir = tempfile::TempDir::new().unwrap();
+    let cases = cases_dir.path().join("cases.toml");
+    std::fs::write(
+        &cases,
+        format!(
+            "[[case]]\nname = \"built-in method\"\nkind = \"definition\"\nat = \"{at}\"\nexpect = [\"{target}\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .arg("--cases")
+        .arg(&cases)
+        .output()
+        .unwrap();
+
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["cases_passed"], 1, "{report}");
+    assert_eq!(output.status.code(), Some(0));
+}

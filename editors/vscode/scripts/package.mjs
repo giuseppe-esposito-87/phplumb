@@ -1,11 +1,12 @@
-// Builds a platform-specific .vsix with the phplumb binary for that platform.
+// Builds a platform-specific .vsix with the phplumb binary for that platform and,
+// beside it in bin/stubs, the phpstorm stubs the engine reads built-in symbols from.
 //
 //   npm run package -- [darwin-arm64 | linux-x64]
 //
 // darwin-arm64 (the default on an Apple silicon Mac) builds with the host
 // toolchain. linux-x64 builds a static binary in Docker on any host.
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,6 +60,9 @@ const bin = path.join(extensionDir, "bin");
 mkdirSync(bin, { recursive: true });
 copyFileSync(binary, path.join(bin, "phplumb"));
 chmodSync(path.join(bin, "phplumb"), 0o755);
+const stubs = path.join(bin, "stubs");
+rmSync(stubs, { recursive: true, force: true });
+cpSync(path.join(repoRoot, "crates", "phplumb-index", "data", "stubs"), stubs, { recursive: true });
 
 const { version } = JSON.parse(readFileSync(path.join(extensionDir, "package.json"), "utf8"));
 const vsix = `phplumb-${target}-${version}.vsix`;

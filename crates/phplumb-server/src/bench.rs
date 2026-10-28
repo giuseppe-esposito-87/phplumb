@@ -329,7 +329,8 @@ fn coverage(
     })
 }
 
-/// Runs `query` at the case position and renders its targets as case positions.
+/// Runs `query` at the case position and renders its targets as case positions:
+/// relative to the root, or under `stubs/` for a stub file.
 fn query_case(
     index: &mut Index,
     root: &Path,
@@ -341,12 +342,21 @@ fn query_case(
     let offset = LineIndex::new(&source)
         .offset(&source, line - 1, col - 1)
         .with_context(|| format!("{at} is outside the file"))?;
-    query(index, &path, &source, offset)
+    let found = query(index, &path, &source, offset);
+    let stubs = index.stubs_dir();
+    found
         .into_iter()
         .map(|location| {
             let text = std::fs::read(&location.path)?;
             let (line, col) = LineIndex::new(&text).position(&text, location.start);
-            let relative = location.path.strip_prefix(root).unwrap_or(&location.path);
+            let relative = match stubs.and_then(|dir| location.path.strip_prefix(dir).ok()) {
+                Some(stub) => Path::new("stubs").join(stub),
+                None => location
+                    .path
+                    .strip_prefix(root)
+                    .unwrap_or(&location.path)
+                    .to_path_buf(),
+            };
             Ok(format!("{}:{}:{}", relative.display(), line + 1, col + 1))
         })
         .collect()

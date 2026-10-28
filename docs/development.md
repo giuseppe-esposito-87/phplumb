@@ -46,6 +46,16 @@ The command prints a JSON report and exits with code 1 when a case fails. Case f
 mv builtins.new crates/phplumb-index/data/builtins.txt
 ```
 
+`crates/phplumb-index/data/stubs` holds the stub files of the same tag, which the engine reads for built-in declarations. Replace them in the same change, copying every PHP file outside the tag's top-level `tests` directory and its `LICENSE`:
+
+```sh
+rm -rf crates/phplumb-index/data/stubs && mkdir crates/phplumb-index/data/stubs
+(cd <stubs-dir> && find . -type f -name '*.php' ! -path './tests/*' ! -path './.git/*' | tar -cf - -T -) | (cd crates/phplumb-index/data/stubs && tar -xf -)
+cp <stubs-dir>/LICENSE crates/phplumb-index/data/stubs/
+```
+
+The engine finds the stubs in `$PHPLUMB_STUBS`, then in `stubs` beside its binary, then in this source tree.
+
 ## Packaging
 
 Build one `.vsix` per platform:
