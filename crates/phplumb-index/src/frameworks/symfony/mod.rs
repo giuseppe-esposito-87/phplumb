@@ -1,15 +1,18 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
+mod config;
 mod messenger;
 mod routes;
 mod templates;
 mod twig;
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Diagnostic;
 use crate::frameworks::ancestry::is_a;
+use crate::frameworks::yaml::{self, Yaml};
 use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration, Project};
 use crate::index::{Index, Location};
 use crate::metadata::MetaValue;
@@ -48,6 +51,12 @@ const TEMPLATE_METHODS: [(&str, &[&str]); 2] = [
     ("Twig\\Environment", &["render", "display", "load"]),
 ];
 
+/// The method whose argument 0 is a parameter name.
+const PARAMETER_METHODS: [(&str, &[&str]); 1] = [(
+    "Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController",
+    &["getParameter"],
+)];
+
 /// The bus method whose argument 0 is a message.
 const DISPATCH: [(&str, &[&str]); 1] = [(
     "Symfony\\Component\\Messenger\\MessageBusInterface",
@@ -69,6 +78,14 @@ fn calls_one_of(index: &Index, call: &FrameworkCall<'_>, methods: &[(&str, &[&st
     })
 }
 
+/// Targets as `(location, expected text)` pairs.
+fn targets_of(targets: &[RouteTarget]) -> Vec<(Location, String)> {
+    targets
+        .iter()
+        .map(|target| (target.location.clone(), target.text.clone()))
+        .collect()
+}
+
 /// A file target at its start.
 fn file_start(path: PathBuf) -> (Location, String) {
     (
@@ -87,6 +104,8 @@ pub struct Symfony {
     routes: Routes,
     templates: Templates,
     handlers: Handlers,
+    /// Parameter definitions, by name.
+    parameters: HashMap<String, Vec<RouteTarget>>,
 }
 
 impl Symfony {
@@ -169,8 +188,31 @@ impl Symfony {
             .collect()
     }
 
+    /// Where the parameter `name` is defined under `parameters:`.
+    pub fn parameter_targets(&self, name: &str) -> &[RouteTarget] {
+        self.parameters.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// The parameter `%name%` under `offset` in a YAML configuration file.
+    fn yaml_parameter_targets(&self, source: &[u8], offset: u32) -> Vec<(Location, String)> {
+        let Ok(text) = std::str::from_utf8(source) else {
+            return Vec::new();
+        };
+        let Some(root) = yaml::parse(text) else {
+            return Vec::new();
+        };
+        let Some((_, Yaml::Scalar { start, end, .. })) = yaml::scalar_at(&root, offset) else {
+            return Vec::new();
+        };
+        let raw = &text[*start as usize..*end as usize];
+        config::parameter_at(raw, (offset - start) as usize)
+            .map(|name| targets_of(self.parameter_targets(&name)))
+            .unwrap_or_default()
+    }
+
     fn read(&mut self, index: &Index) {
         let filter = index.filter().scoped(&self.project);
+        self.parameters = config::read_parameters(&config::config_files(&self.project, &filter));
         self.routes = Routes::read(index, &filter, &self.project);
         self.templates = Templates::read(&self.project);
         self.handlers = Handlers::read(index, &filter);
@@ -235,6 +277,9 @@ impl Framework for Symfony {
     ) -> Vec<(Location, String)> {
         if argument != 0 {
             return Vec::new();
+        }
+        if calls_one_of(index, call, &PARAMETER_METHODS) {
+            return targets_of(self.parameter_targets(value));
         }
         if calls_one_of(index, call, &TEMPLATE_METHODS) {
             return self
@@ -312,6 +357,9 @@ impl Framework for Symfony {
         source: &[u8],
         offset: u32,
     ) -> Vec<(Location, String)> {
+        if crate::filter::is_yaml(path) {
+            return self.yaml_parameter_targets(source, offset);
+        }
         if !crate::filter::is_twig(path) {
             return Vec::new();
         }

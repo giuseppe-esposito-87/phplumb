@@ -1,0 +1,8 @@
+framework:
+    secret: '%app.name%'
+    cache: '%env(APP_X)%'
+    escaped: '100%%'
+
+when@dev:
+    parameters:
+        app.name: 'Dev demo'

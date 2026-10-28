@@ -647,3 +647,73 @@ fn copy_dir(from: &Path, to: &Path) {
         }
     }
 }
+
+fn parameters(index: &Index, name: &str) -> Vec<(String, String)> {
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    let mut found: Vec<(String, String)> = symfony
+        .parameter_targets(name)
+        .iter()
+        .map(|target| {
+            let text = std::fs::read(&target.location.path).unwrap();
+            let range = &text[target.location.start as usize..target.location.end as usize];
+            (
+                target
+                    .location
+                    .path
+                    .strip_prefix(fixture())
+                    .unwrap()
+                    .display()
+                    .to_string(),
+                String::from_utf8_lossy(range).into_owned(),
+            )
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn parameters_lead_to_their_definitions() {
+    let index = build();
+    assert_eq!(
+        parameters(&index, "app.name"),
+        [
+            pair("config/packages/framework.yaml", "app.name"),
+            pair("config/services.yaml", "app.name"),
+        ]
+    );
+    assert_eq!(
+        parameters(&index, "app.limit"),
+        [pair("config/services.yaml", "app.limit")]
+    );
+    assert!(parameters(&index, "env(APP_X)").is_empty());
+    assert!(parameters(&index, "kernel.project_dir").is_empty());
+}
+
+#[test]
+fn parameters_in_yaml_values() {
+    let mut index = build();
+    let framework = "config/packages/framework.yaml";
+    let mut found = definition(&mut index, framework, "%app.name%");
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            pair("config/packages/framework.yaml", "app.name"),
+            pair("config/services.yaml", "app.name"),
+        ]
+    );
+    assert!(definition(&mut index, framework, "%env(APP_X)%").is_empty());
+    assert!(definition(&mut index, framework, "%%'").is_empty());
+}
+
+#[test]
+fn get_parameter_leads_to_the_definition() {
+    let mut index = build();
+    let params = "src/Controller/ParamsController.php";
+    assert_eq!(
+        definition(&mut index, params, "'app.limit'"),
+        [pair("config/services.yaml", "app.limit")]
+    );
+    assert!(definition(&mut index, params, "'kernel.project_dir'").is_empty());
+}

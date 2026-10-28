@@ -1,0 +1,8 @@
+parameters:
+    app.name: 'Demo'
+    app.limit: 10
+    env(APP_X): 'x'
+
+services:
+    _defaults:
+        autowire: true

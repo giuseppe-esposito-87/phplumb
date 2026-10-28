@@ -19,6 +19,11 @@ abstract class AbstractController
         return '';
     }
 
+    protected function getParameter(string $name): mixed
+    {
+        return null;
+    }
+
     protected function redirectToRoute(string $route, array $parameters = []): object
     {
         return new \stdClass();
