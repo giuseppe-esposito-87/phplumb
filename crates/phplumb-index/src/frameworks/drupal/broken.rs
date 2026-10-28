@@ -5,8 +5,9 @@ use std::path::Path;
 
 use super::routes::{route_methods, takes_route};
 use super::services::in_tests;
-use super::{Drupal, is_a, plugins};
+use super::{Drupal, plugins};
 use crate::diagnostics::{Diagnostic, Severity};
+use crate::frameworks::ancestry::is_a;
 use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
 use crate::index::Index;
 use crate::infer;

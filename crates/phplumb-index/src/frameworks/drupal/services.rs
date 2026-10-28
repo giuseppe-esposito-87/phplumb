@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 
-use super::yaml::{self, Yaml};
 use crate::discover::chosen_path;
 use crate::filter::{PathFilter, SKIPPED_DIR_NAMES, has_skipped_component};
+use crate::frameworks::yaml::{self, Yaml};
 use crate::index::Index;
 
 /// One definition of a service id: where its key is and what it declares.

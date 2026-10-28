@@ -9,13 +9,12 @@ mod navigation;
 mod plugins;
 mod routes;
 mod services;
-mod yaml;
 
 use std::any::Any;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Diagnostic;
+use crate::frameworks::ancestry::is_a;
 use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration, Project};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
@@ -472,22 +471,4 @@ fn service_call<'a>(index: &Index, call: &'a FrameworkCall<'_>) -> Option<&'a st
         CallTarget::Function(_) => false,
     });
     asks_for_service.then_some(id)
-}
-
-/// Whether `class` is, extends or implements one of `ancestors`.
-pub(super) fn is_a(index: &Index, class: &str, ancestors: &[&str]) -> bool {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut pending = vec![class.to_string()];
-    while let Some(next) = pending.pop() {
-        if ancestors.iter().any(|c| c.eq_ignore_ascii_case(&next)) {
-            return true;
-        }
-        if !seen.insert(next.to_ascii_lowercase()) {
-            continue;
-        }
-        for supertype in index.supertypes(&next) {
-            pending.push(supertype.declaration.fqn.clone());
-        }
-    }
-    false
 }

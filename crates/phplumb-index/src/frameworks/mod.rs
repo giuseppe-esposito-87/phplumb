@@ -2,9 +2,12 @@
 //! containers configured in YAML. Core navigation reaches them only through
 //! `Framework` and `registered`.
 
+mod ancestry;
+mod attributes;
 pub mod drupal;
 mod project;
 pub mod symfony;
+pub(crate) mod yaml;
 
 use std::any::Any;
 use std::path::{Path, PathBuf};

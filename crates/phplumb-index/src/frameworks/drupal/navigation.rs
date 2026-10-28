@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use super::Drupal;
-use super::yaml::{self, Step, Yaml};
+use crate::frameworks::yaml::{self, Step, Yaml};
 use crate::index::{Index, Location};
 use crate::summary::MemberKind;
 

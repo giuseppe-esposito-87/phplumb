@@ -4,14 +4,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::is_a;
 use super::services::{Tests, drupal_files, in_tests, is_drupal_file};
-use super::yaml::{self, Yaml};
 use crate::discover::chosen_path;
 use crate::filter::PathFilter;
+use crate::frameworks::ancestry::is_a;
+use crate::frameworks::attributes::{RouteName, route_names};
+use crate::frameworks::yaml::{self, Yaml};
 use crate::frameworks::{CallTarget, FrameworkCall};
 use crate::index::{Index, Location};
-use crate::metadata::{MetaValue, Metadata};
 use crate::summary::MemberKind;
 
 const ROUTING: &str = ".routing.yml";
@@ -48,13 +48,6 @@ pub struct RouteDefinition {
     /// The text at the range.
     pub text: String,
 }
-
-/// Route attribute classes, whose `name` argument (named or at position 1) names a
-/// route.
-const ROUTE_ATTRIBUTES: [&str; 2] = [
-    "Symfony\\Component\\Routing\\Attribute\\Route",
-    "Symfony\\Component\\Routing\\Annotation\\Route",
-];
 
 #[derive(Default)]
 pub(crate) struct Routes {
@@ -300,42 +293,6 @@ pub(crate) fn takes_route(index: &Index, targets: &[CallTarget], argument: usize
 /// The names of the methods taking a route name.
 pub(crate) fn route_methods() -> Vec<&'static str> {
     ROUTE_CALLS.iter().map(|(_, method, _)| *method).collect()
-}
-
-/// The name a route attribute gives.
-enum RouteName {
-    Literal(String),
-    /// A constant or an expression.
-    Unreadable,
-    Missing,
-}
-
-/// The names of the route attributes in `metadata`: the `name` argument, named or at
-/// position 1.
-fn route_names(metadata: &[Metadata]) -> Vec<RouteName> {
-    metadata
-        .iter()
-        .filter(|m| {
-            !m.annotation
-                && ROUTE_ATTRIBUTES
-                    .iter()
-                    .any(|a| m.name.eq_ignore_ascii_case(a))
-        })
-        .map(|attribute| {
-            let name = attribute.argument("name").or_else(|| {
-                attribute
-                    .arguments
-                    .get(1)
-                    .filter(|(key, _)| key.is_none())
-                    .map(|(_, value)| value)
-            });
-            match name {
-                Some(MetaValue::String(name)) => RouteName::Literal(name.clone()),
-                Some(_) => RouteName::Unreadable,
-                None => RouteName::Missing,
-            }
-        })
-        .collect()
 }
 
 /// The routes of one file, and the routes its aliases point to; nothing when it does

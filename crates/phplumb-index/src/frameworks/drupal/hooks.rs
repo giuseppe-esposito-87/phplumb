@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::extensions::{Extensions, INFO};
-use super::is_a;
 use super::services::{Tests, is_drupal_file};
 use crate::filter::PathFilter;
+use crate::frameworks::ancestry::is_a;
 use crate::frameworks::{CallTarget, FoundCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
 use crate::metadata::{MetaValue, Metadata};

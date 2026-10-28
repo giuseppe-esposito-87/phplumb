@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::extensions::Extensions;
-use super::is_a;
 use crate::filter::PathFilter;
+use crate::frameworks::ancestry::is_a;
 use crate::frameworks::{CallTarget, FrameworkCall};
 use crate::index::{Index, Location};
 use crate::infer::{self, class_names};
