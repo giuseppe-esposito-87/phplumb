@@ -195,10 +195,10 @@ pub(crate) struct Mappings {
 impl Mappings {
     /// The `repository-class` of every entity in the project's `*.orm.xml` files,
     /// then the `repositoryClass` of `#[ORM\Entity]` attributes of project classes.
-    pub(crate) fn read(index: &Index, filter: &PathFilter, dir: &Path) -> Mappings {
+    pub(crate) fn read(index: &Index, filter: &PathFilter, files: &[PathBuf]) -> Mappings {
         let mut repositories = HashMap::new();
-        for file in mapping_files(dir, filter) {
-            let Ok(text) = std::fs::read_to_string(&file) else {
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(file) else {
                 continue;
             };
             for element in elements(&text) {
@@ -256,9 +256,9 @@ pub(crate) fn qualify(mapped: &str, name: &str) -> String {
     }
 }
 
-/// Every `*.orm.xml` below `dir`, outside `vendor`, hidden directories and
-/// `node_modules`, in path order.
-fn mapping_files(dir: &Path, filter: &PathFilter) -> Vec<PathBuf> {
+/// Every `*.orm.xml` below `dir`, outside `vendor`, the top `var` directory, hidden
+/// directories and `node_modules`, in path order.
+pub(crate) fn mapping_files(dir: &Path, filter: &PathFilter) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = WalkBuilder::new(dir)
         .standard_filters(false)
         .hidden(true)
@@ -266,6 +266,7 @@ fn mapping_files(dir: &Path, filter: &PathFilter) -> Vec<PathBuf> {
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
             !(is_dir
                 && (entry.file_name() == "vendor"
+                    || (entry.depth() == 1 && entry.file_name() == "var")
                     || SKIPPED_DIR_NAMES
                         .iter()
                         .any(|name| entry.file_name() == *name)))

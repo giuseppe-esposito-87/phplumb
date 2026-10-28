@@ -159,6 +159,9 @@ pub struct Symfony {
     /// Service definitions, by id.
     services: HashMap<String, Vec<RouteTarget>>,
     mappings: Mappings,
+    /// The project's `*.orm.xml` files, walked again only when a directory or a
+    /// mapping file changes.
+    mapping_files: Vec<PathBuf>,
 }
 
 impl Symfony {
@@ -297,7 +300,7 @@ impl Symfony {
         let files = config::config_files(&self.project, &filter);
         self.parameters = config::read_parameters(&files);
         self.services = config::read_services(&files);
-        self.mappings = Mappings::read(index, &filter, &self.project.dir);
+        self.mappings = Mappings::read(index, &filter, &self.mapping_files);
         self.routes = Routes::read(index, &filter, &self.project);
         self.templates = Templates::read(&self.project);
         self.handlers = Handlers::read(index, &filter);
@@ -330,6 +333,8 @@ impl Framework for Symfony {
     }
 
     fn rebuild(&mut self, index: &Index) {
+        let filter = index.filter().scoped(&self.project);
+        self.mapping_files = doctrine::mapping_files(&self.project.dir, &filter);
         self.read(index);
     }
 
@@ -343,6 +348,14 @@ impl Framework for Symfony {
             (self.project.contains(&path) || self.project.dir.starts_with(&path))
                 && (path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml" | "xml")))
         });
+        let mappings_moved = changed
+            .iter()
+            .chain(removed)
+            .any(|path| path.is_dir() || path.extension().is_none() || doctrine::is_mapping(path));
+        if mappings_moved {
+            let filter = index.filter().scoped(&self.project);
+            self.mapping_files = doctrine::mapping_files(&self.project.dir, &filter);
+        }
         if relevant {
             self.read(index);
         }
