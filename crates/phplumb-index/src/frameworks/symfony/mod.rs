@@ -60,6 +60,12 @@ const PARAMETER_METHODS: [(&str, &[&str]); 1] = [(
     &["getParameter"],
 )];
 
+/// Methods whose argument 0 is an entity class and that return its repository.
+const REPOSITORY_METHODS: [(&str, &[&str]); 2] = [
+    ("Doctrine\\Persistence\\ObjectManager", &["getRepository"]),
+    ("Doctrine\\Persistence\\ManagerRegistry", &["getRepository"]),
+];
+
 /// The bus method whose argument 0 is a message.
 const DISPATCH: [(&str, &[&str]); 1] = [(
     "Symfony\\Component\\Messenger\\MessageBusInterface",
@@ -342,8 +348,14 @@ impl Framework for Symfony {
         }
     }
 
-    fn call_type(&self, _index: &Index, _call: &FrameworkCall<'_>) -> Option<TypeExpr> {
-        None
+    /// `getRepository(X::class)` returns the repository the mappings declare for `X`.
+    fn call_type(&self, index: &Index, call: &FrameworkCall<'_>) -> Option<TypeExpr> {
+        if !calls_one_of(index, call, &REPOSITORY_METHODS) {
+            return None;
+        }
+        let entity = call.strings.first()?.as_deref()?;
+        let repository = self.repository_of(entity)?;
+        Some(TypeExpr::Named(repository.to_string()))
     }
 
     /// A template name given to a rendering method opens the template; a route name

@@ -908,3 +908,29 @@ fn mapping_comments_and_namespaces_give_nothing() {
     assert!(definition_on_line(&mut index, AUTHOR_XML, 3, "App\\Entity").is_empty());
     assert!(definition_on_line(&mut index, POST_XML, 2, "doctrine-project").is_empty());
 }
+
+const POSTS: &str = "src/Service/Posts.php";
+
+#[test]
+fn get_repository_returns_the_mapped_repository() {
+    let mut index = build();
+    assert_eq!(
+        definition_on_line(&mut index, POSTS, 18, "findRecent"),
+        [pair("src/Repository/PostRepository.php", "findRecent")]
+    );
+    assert_eq!(
+        definition_on_line(&mut index, POSTS, 19, "findThread"),
+        [pair("src/Repository/CommentRepository.php", "findThread")]
+    );
+}
+
+#[test]
+fn get_repository_without_a_mapping_keeps_its_type() {
+    let mut index = build();
+    let declared = [pair(
+        "vendor/doctrine/persistence/src/ObjectRepository.php",
+        "find",
+    )];
+    assert_eq!(definition_on_line(&mut index, POSTS, 20, "find("), declared);
+    assert_eq!(definition_on_line(&mut index, POSTS, 21, "find("), declared);
+}
