@@ -406,3 +406,80 @@ fn routes_and_templates_on_one_line() {
         [pair("src/Shared/templates/card.html.twig", "")]
     );
 }
+
+/// Each location as (path relative to the fixture, text at its range), sorted.
+fn located(locations: &[phplumb_index::Location]) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = locations
+        .iter()
+        .map(|location| {
+            let text = std::fs::read(&location.path).unwrap();
+            let range = &text[location.start as usize..location.end as usize];
+            (
+                location
+                    .path
+                    .strip_prefix(fixture())
+                    .unwrap()
+                    .display()
+                    .to_string(),
+                String::from_utf8_lossy(range).into_owned(),
+            )
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+fn handlers(index: &Index, message: &str) -> Vec<(String, String)> {
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    located(&symfony.handlers_of(index, message))
+}
+
+#[test]
+fn handlers_of_a_message() {
+    let index = build();
+    assert_eq!(
+        handlers(&index, "App\\Message\\SendEmail"),
+        [
+            pair("src/Handler/NotifyLogger.php", "handle"),
+            pair("src/Handler/SendEmailHandler.php", "__invoke"),
+            pair("src/Handler/SmsHandlers.php", "onSms"),
+        ]
+    );
+    assert_eq!(
+        handlers(&index, "App\\Message\\SendSms"),
+        [
+            pair("src/Handler/Explicit.php", "run"),
+            pair("src/Handler/NotifyLogger.php", "handle"),
+            pair("src/Handler/SmsHandlers.php", "onSms"),
+        ]
+    );
+}
+
+#[test]
+fn messages_without_handlers_give_nothing() {
+    let index = build();
+    assert!(handlers(&index, "App\\Message\\Unhandled").is_empty());
+}
+
+#[test]
+fn handlers_name_what_they_handle() {
+    let index = build();
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    let handled = |file: &str, method: &str| -> Vec<String> {
+        let path = fixture().join(file);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let start = text.find(&format!("function {method}(")).unwrap() + "function ".len();
+        let mut found = symfony.handled_by(&path, start as u32);
+        found.sort();
+        found
+    };
+    assert_eq!(
+        handled("src/Handler/NotifyLogger.php", "handle"),
+        ["App\\Message\\Notify"]
+    );
+    assert_eq!(
+        handled("src/Handler/SmsHandlers.php", "onSms"),
+        ["App\\Message\\SendEmail", "App\\Message\\SendSms"]
+    );
+    assert!(handled("src/Handler/NotifyLogger.php", "__invoke").is_empty());
+}

@@ -35,6 +35,15 @@
                     "Symfony\\Bridge\\Twig\\": ""
                 }
             }
+        },
+        {
+            "name": "symfony/messenger",
+            "install-path": "../symfony/messenger",
+            "autoload": {
+                "psr-4": {
+                    "Symfony\\Component\\Messenger\\": ""
+                }
+            }
         }
     ]
 }

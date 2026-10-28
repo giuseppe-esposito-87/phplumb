@@ -1,5 +1,6 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
+mod messenger;
 mod routes;
 mod templates;
 mod twig;
@@ -15,6 +16,7 @@ use crate::metadata::MetaValue;
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
 
+use messenger::Handlers;
 pub use routes::RouteTarget;
 use routes::Routes;
 use templates::Templates;
@@ -78,6 +80,7 @@ pub struct Symfony {
     project: Project,
     routes: Routes,
     templates: Templates,
+    handlers: Handlers,
 }
 
 impl Symfony {
@@ -92,10 +95,21 @@ impl Symfony {
         self.templates.file(name)
     }
 
+    /// The handler methods of the message class `message`, at their names.
+    pub fn handlers_of(&self, index: &Index, message: &str) -> Vec<Location> {
+        self.handlers.of(index, message)
+    }
+
+    /// The message classes the handler method named at `start` in `path` handles.
+    pub fn handled_by(&self, path: &Path, start: u32) -> Vec<String> {
+        self.handlers.handled_by(path, start)
+    }
+
     fn read(&mut self, index: &Index) {
         let filter = index.filter().scoped(&self.project);
         self.routes = Routes::read(index, &filter, &self.project);
         self.templates = Templates::read(&self.project);
+        self.handlers = Handlers::read(index, &filter);
     }
 }
 
@@ -128,8 +142,8 @@ impl Framework for Symfony {
         self.read(index);
     }
 
-    /// Reads the routes and template paths again when a PHP or YAML file of the
-    /// project, or a directory, changed.
+    /// Reads the routes, template paths and message handlers again when a PHP or
+    /// YAML file of the project, or a directory, changed.
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
         let relevant = changed.iter().chain(removed).any(|path| {
             let path = index.filter().under_root(path);
