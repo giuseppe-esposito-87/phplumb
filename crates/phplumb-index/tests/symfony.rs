@@ -915,11 +915,11 @@ const POSTS: &str = "src/Service/Posts.php";
 fn get_repository_returns_the_mapped_repository() {
     let mut index = build();
     assert_eq!(
-        definition_on_line(&mut index, POSTS, 18, "findRecent"),
+        definition_on_line(&mut index, POSTS, 20, "findRecent"),
         [pair("src/Repository/PostRepository.php", "findRecent")]
     );
     assert_eq!(
-        definition_on_line(&mut index, POSTS, 19, "findThread"),
+        definition_on_line(&mut index, POSTS, 21, "findThread"),
         [pair("src/Repository/CommentRepository.php", "findThread")]
     );
 }
@@ -931,6 +931,48 @@ fn get_repository_without_a_mapping_keeps_its_type() {
         "vendor/doctrine/persistence/src/ObjectRepository.php",
         "find",
     )];
-    assert_eq!(definition_on_line(&mut index, POSTS, 20, "find("), declared);
-    assert_eq!(definition_on_line(&mut index, POSTS, 21, "find("), declared);
+    assert_eq!(definition_on_line(&mut index, POSTS, 22, "find("), declared);
+    assert_eq!(definition_on_line(&mut index, POSTS, 23, "find("), declared);
+}
+
+#[test]
+fn short_enum_types_are_not_qualified() {
+    let mut index = build();
+    assert!(definition_on_line(&mut index, POST_XML, 8, "Status").is_empty());
+}
+
+#[test]
+fn string_repository_classes_are_qualified_and_must_exist() {
+    let mut index = build();
+    assert_eq!(
+        definition_on_line(&mut index, POSTS, 24, "findTagged"),
+        [pair("src/Entity/TagRepository.php", "findTagged")]
+    );
+    assert_eq!(
+        definition_on_line(&mut index, POSTS, 25, "find("),
+        [pair("vendor/doctrine/persistence/src/ObjectRepository.php", "find")]
+    );
+}
+
+#[test]
+fn excluded_mappings_are_not_read() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dir(&fixture(), &root);
+    std::fs::create_dir_all(root.join("legacy")).unwrap();
+    std::fs::write(
+        root.join("legacy/Post.orm.xml"),
+        "<doctrine-mapping><entity name=\"App\\Entity\\Post\" repository-class=\"App\\Repository\\CommentRepository\"/></doctrine-mapping>\n",
+    )
+    .unwrap();
+    let opts = DiscoverOptions {
+        exclude: vec!["legacy/**".to_string()],
+        ..DiscoverOptions::default()
+    };
+    let index = Index::build(&root, &opts).unwrap().0;
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    assert_eq!(
+        symfony.repository_of("App\\Entity\\Post"),
+        Some("App\\Repository\\PostRepository")
+    );
 }

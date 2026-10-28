@@ -4,10 +4,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ignore::WalkBuilder;
 
-use crate::filter::{PathFilter, SKIPPED_DIR_NAMES};
+use crate::filter::{PathFilter, SKIPPED_DIR_NAMES, is_doctrine_xml};
 use crate::index::Index;
 use crate::metadata::MetaValue;
 use crate::summary::SymbolKind;
@@ -16,12 +17,11 @@ use crate::summary::SymbolKind;
 const ENTITY_ATTRIBUTE: &str = "Doctrine\\ORM\\Mapping\\Entity";
 
 /// An XML element of a mapping file: its name, its attributes with each value and
-/// the value's range inside the quotes, and how deep it is nested.
+/// the value's range inside the quotes.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Element {
     pub(crate) name: String,
     pub(crate) attributes: Vec<(String, String, u32, u32)>,
-    pub(crate) depth: usize,
 }
 
 impl Element {
@@ -37,7 +37,6 @@ impl Element {
 pub(crate) fn elements(text: &str) -> Vec<Element> {
     let bytes = text.as_bytes();
     let mut found = Vec::new();
-    let mut depth = 0usize;
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != b'<' {
@@ -54,6 +53,10 @@ pub(crate) fn elements(text: &str) -> Vec<Element> {
             i = skip_to("-->");
             continue;
         }
+        if rest.starts_with("<![CDATA[") {
+            i = skip_to("]]>");
+            continue;
+        }
         if rest.starts_with("<?") {
             i = skip_to("?>");
             continue;
@@ -63,7 +66,6 @@ pub(crate) fn elements(text: &str) -> Vec<Element> {
             continue;
         }
         if rest.starts_with("</") {
-            depth = depth.saturating_sub(1);
             i = skip_to(">");
             continue;
         }
@@ -74,7 +76,6 @@ pub(crate) fn elements(text: &str) -> Vec<Element> {
         }
         let name = text[i + 1..j].to_string();
         let mut attributes = Vec::new();
-        let mut closed = false;
         while j < bytes.len() {
             match bytes[j] {
                 b'>' => {
@@ -82,7 +83,6 @@ pub(crate) fn elements(text: &str) -> Vec<Element> {
                     break;
                 }
                 b'/' if bytes.get(j + 1) == Some(&b'>') => {
-                    closed = true;
                     j += 2;
                     break;
                 }
@@ -94,6 +94,11 @@ pub(crate) fn elements(text: &str) -> Vec<Element> {
                         && !bytes[j].is_ascii_whitespace()
                     {
                         j += 1;
+                    }
+                    if j == key_start {
+                        // A stray `/` or `=` outside a value: step over it.
+                        j += 1;
+                        continue;
                     }
                     let key = text[key_start..j].to_string();
                     while j < bytes.len() && (bytes[j].is_ascii_whitespace() || bytes[j] == b'=') {
@@ -116,14 +121,7 @@ pub(crate) fn elements(text: &str) -> Vec<Element> {
                 }
             }
         }
-        found.push(Element {
-            name,
-            attributes,
-            depth,
-        });
-        if !closed {
-            depth += 1;
-        }
+        found.push(Element { name, attributes });
         i = j;
     }
     found
@@ -169,7 +167,10 @@ pub(crate) fn named_at(text: &str, offset: u32) -> Option<Named> {
             }
             "target-entity" | "repository-class" => class(value).map(Named::Class),
             "class" if name == "embedded" => class(value).map(Named::Class),
-            "enum-type" if matches!(name, "field" | "id") => class(value).map(Named::Class),
+            // Doctrine reads `enum-type` as written, without the mapped namespace.
+            "enum-type" if matches!(name, "field" | "id") => {
+                Some(Named::Class(value.trim_start_matches('\\').to_string()))
+            }
             "name" if matches!(name, "field" | "id" | "embedded") => {
                 Some(Named::Property(mapped.clone()?, value.clone()))
             }
@@ -226,7 +227,8 @@ impl Mappings {
                 .iter()
                 .filter(|m| !m.annotation && m.name.eq_ignore_ascii_case(ENTITY_ATTRIBUTE))
                 .find_map(|m| match m.argument("repositoryClass") {
-                    Some(MetaValue::Class(class) | MetaValue::String(class)) => Some(class.clone()),
+                    Some(MetaValue::Class(class)) => Some(class.clone()),
+                    Some(MetaValue::String(class)) => Some(qualify(&declaration.fqn, class)),
                     _ => None,
                 });
             if let Some(repository) = repository {
@@ -257,35 +259,36 @@ pub(crate) fn qualify(mapped: &str, name: &str) -> String {
 }
 
 /// Every `*.orm.xml` below `dir`, outside `vendor`, the top `var` directory, hidden
-/// directories and `node_modules`, in path order.
-pub(crate) fn mapping_files(dir: &Path, filter: &PathFilter) -> Vec<PathBuf> {
+/// directories, `node_modules`, excluded paths and nested projects, in path order.
+pub(crate) fn mapping_files(dir: &Path, filter: PathFilter) -> Vec<PathBuf> {
+    let filter = Arc::new(filter);
+    let excluded = |filter: &PathFilter, path: &Path| {
+        path.strip_prefix(filter.root())
+            .map_or(true, |relative| filter.excludes(relative))
+    };
+    let walk_filter = Arc::clone(&filter);
     let mut files: Vec<PathBuf> = WalkBuilder::new(dir)
         .standard_filters(false)
         .hidden(true)
-        .filter_entry(|entry| {
+        .filter_entry(move |entry| {
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
             !(is_dir
+                && entry.depth() > 0
                 && (entry.file_name() == "vendor"
                     || (entry.depth() == 1 && entry.file_name() == "var")
                     || SKIPPED_DIR_NAMES
                         .iter()
-                        .any(|name| entry.file_name() == *name)))
+                        .any(|name| entry.file_name() == *name)
+                    || excluded(&walk_filter, entry.path())))
         })
         .build()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
         .map(|entry| entry.into_path())
-        .filter(|path| is_mapping(path) && filter.in_scope(path))
+        .filter(|path| is_doctrine_xml(path) && !excluded(&filter, path))
         .collect();
     files.sort();
     files
-}
-
-/// Whether `path` is a Doctrine XML mapping file.
-pub(crate) fn is_mapping(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".orm.xml"))
 }
 
 #[cfg(test)]
@@ -296,16 +299,35 @@ mod tests {
     fn reads_elements_and_their_attributes() {
         let text = "<?xml version=\"1.0\"?>\n<!-- <entity name=\"No\"/> -->\n<doctrine-mapping>\n  <entity name=\"A\\B\" table='t'>\n    <field name=\"x\"/>\n  </entity>\n</doctrine-mapping>\n";
         let found = elements(text);
-        let names: Vec<(&str, usize)> = found.iter().map(|e| (e.name.as_str(), e.depth)).collect();
-        assert_eq!(
-            names,
-            [("doctrine-mapping", 0), ("entity", 1), ("field", 2)]
-        );
+        let names: Vec<&str> = found.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["doctrine-mapping", "entity", "field"]);
         let entity = &found[1];
         assert_eq!(entity.attribute("name"), Some("A\\B"));
         assert_eq!(entity.attribute("table"), Some("t"));
         let (_, value, start, end) = &entity.attributes[0];
         assert_eq!(&text[*start as usize..*end as usize], value);
+    }
+
+    /// Runs `elements` on `text` in a thread and fails when it does not finish.
+    fn finishes(text: &'static str) -> Vec<String> {
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(elements(text).into_iter().map(|e| e.name).collect());
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap_or_else(|_| panic!("elements did not finish on {text:?}"))
+    }
+
+    #[test]
+    fn malformed_tags_end() {
+        finishes("<field name=\"x\" /\n<id name=\"y\"/>");
+        finishes("<entity name=\"A\" / >");
+        finishes("<entity name=\"A\" /");
+        assert_eq!(
+            finishes("<entity name=\"A\"><![CDATA[x > <field name=\"bogus\"/> <c / d>]]></entity>"),
+            ["entity"]
+        );
     }
 
     #[test]

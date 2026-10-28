@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Diagnostic;
+use crate::filter::is_doctrine_xml;
 use crate::frameworks::ancestry::is_a;
 use crate::frameworks::yaml::{self, Yaml};
 use crate::frameworks::{
@@ -334,7 +335,7 @@ impl Framework for Symfony {
 
     fn rebuild(&mut self, index: &Index) {
         let filter = index.filter().scoped(&self.project);
-        self.mapping_files = doctrine::mapping_files(&self.project.dir, &filter);
+        self.mapping_files = doctrine::mapping_files(&self.project.dir, filter);
         self.read(index);
     }
 
@@ -342,33 +343,39 @@ impl Framework for Symfony {
     /// mappings again when a PHP, YAML or XML file of the project, or a directory,
     /// changed.
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
-        let relevant = changed.iter().chain(removed).any(|path| {
-            let path = index.filter().under_root(path);
-            let kind = path.extension().and_then(|e| e.to_str());
-            (self.project.contains(&path) || self.project.dir.starts_with(&path))
-                && (path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml" | "xml")))
-        });
-        let mappings_moved = changed
+        let paths: Vec<PathBuf> = changed
             .iter()
             .chain(removed)
-            .any(|path| path.is_dir() || path.extension().is_none() || doctrine::is_mapping(path));
+            .map(|path| index.filter().under_root(path))
+            .filter(|path| self.project.contains(path) || self.project.dir.starts_with(path))
+            .collect();
+        let relevant = paths.iter().any(|path| {
+            let kind = path.extension().and_then(|e| e.to_str());
+            path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml" | "xml"))
+        });
+        let mappings_moved = paths
+            .iter()
+            .any(|path| path.is_dir() || path.extension().is_none() || is_doctrine_xml(path));
         if mappings_moved {
             let filter = index.filter().scoped(&self.project);
-            self.mapping_files = doctrine::mapping_files(&self.project.dir, &filter);
+            self.mapping_files = doctrine::mapping_files(&self.project.dir, filter);
         }
         if relevant {
             self.read(index);
         }
     }
 
-    /// `getRepository(X::class)` returns the repository the mappings declare for `X`.
+    /// `getRepository(X::class)` returns the repository the mappings declare for `X`,
+    /// when the index knows that class.
     fn call_type(&self, index: &Index, call: &FrameworkCall<'_>) -> Option<TypeExpr> {
         if !calls_one_of(index, call, &REPOSITORY_METHODS) {
             return None;
         }
         let entity = call.strings.first()?.as_deref()?;
         let repository = self.repository_of(entity)?;
-        Some(TypeExpr::Named(repository.to_string()))
+        index
+            .has_class(repository)
+            .then(|| TypeExpr::Named(repository.to_string()))
     }
 
     /// A template name given to a rendering method opens the template; a route name

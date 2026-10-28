@@ -478,8 +478,8 @@ impl Server<'_> {
         Ok(())
     }
 
-    /// Watches files with `php_extensions`, Composer's installed packages, YAML files
-    /// and directories.
+    /// Watches files with `php_extensions`, Composer's installed packages, YAML files,
+    /// Doctrine XML mappings and directories.
     fn register_watchers(&self, php_extensions: &[&str]) -> anyhow::Result<()> {
         let watcher = |pattern: String, kind: Option<WatchKind>| FileSystemWatcher {
             glob_pattern: GlobPattern::String(pattern),

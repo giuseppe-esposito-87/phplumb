@@ -13,7 +13,7 @@ export interface PhplumbApi {
   cacheDir: string | undefined;
 }
 
-/** The files the engine answers in: PHP, and the YAML and Twig files framework modules read. */
+/** The files the engine answers in: PHP, and the YAML, Twig and Doctrine XML files framework modules read. */
 export const DOCUMENT_SELECTOR: { scheme: string; language?: string; pattern?: string }[] = [
   { scheme: "file", language: "php" },
   // Framework modules answer in YAML files, such as Drupal's services.
