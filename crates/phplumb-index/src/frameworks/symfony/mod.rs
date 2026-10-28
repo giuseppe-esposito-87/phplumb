@@ -235,6 +235,14 @@ impl Symfony {
             .is_some_and(|set| !set.contains(name))
     }
 
+    /// Whether `path` is code of the project, not a dependency nor what Symfony
+    /// generates in `var`, such as the compiled container.
+    fn is_source(&self, index: &Index, path: &Path) -> bool {
+        self.project.contains(path)
+            && index.is_project_code(path)
+            && !path.starts_with(self.project.dir.join("var"))
+    }
+
     /// The literal names `setParameter()` calls in project code give the container,
     /// or none when one of them is computed. Only files that mention a container
     /// class are read: a call whose receiver stays unknown there counts.
@@ -249,7 +257,7 @@ impl Symfony {
                     .candidate_files(&RefKey::Member("setParameter".to_string()))
                     .into_iter()
                     .filter(|path| holders.contains(path))
-                    .filter(|path| self.project.contains(path) && index.is_project_code(path))
+                    .filter(|path| self.is_source(index, path))
                     .collect();
                 files.sort();
                 files.dedup();
@@ -401,7 +409,7 @@ impl Symfony {
         let configured_in_php = CONFIGURATORS
             .iter()
             .flat_map(|class| index.candidate_files(&RefKey::Class(class.to_string())))
-            .any(|path| filter.in_scope(path) && index.is_project_code(path));
+            .any(|path| self.is_source(index, path));
         self.parameters_unknown =
             configured_in_php || config::has_unread_configuration(&self.project, &files);
         self.set_parameters = OnceLock::new();

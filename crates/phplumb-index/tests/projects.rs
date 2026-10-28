@@ -499,3 +499,18 @@ fn diagnostics_stay_in_their_module() {
     );
     assert!(diagnostics_in(&index, "config/services.yaml").is_empty());
 }
+
+#[test]
+fn the_compiled_container_is_not_configuration() {
+    let (_dir, root) = broken_symfony(&[(
+        "var/cache/dev/Container.php",
+        "<?php\nnamespace ContainerX;\nuse Symfony\\Component\\Config\\Loader\\LoaderInterface;\nclass Container\n{\n    public function load(LoaderInterface $loader, $c, string $name): void\n    {\n        $c->setParameter($name, 1);\n    }\n}\n",
+    )]);
+    assert_eq!(
+        broken_messages(&root),
+        [
+            "Undefined route 'missing_route'",
+            "Undefined parameter 'app.nowhere'"
+        ]
+    );
+}
