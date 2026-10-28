@@ -483,3 +483,49 @@ fn handlers_name_what_they_handle() {
     );
     assert!(handled("src/Handler/NotifyLogger.php", "__invoke").is_empty());
 }
+
+const MESSAGES: &str = "src/Controller/MessagesController.php";
+
+/// Go to definition on `dispatch` of line `line` of the messages controller, sorted.
+fn dispatch_targets(index: &mut Index, line: usize) -> Vec<(String, String)> {
+    let mut found = definition_on_line(index, MESSAGES, line, "dispatch");
+    found.sort();
+    found
+}
+
+#[test]
+fn dispatch_lists_the_handlers() {
+    let mut index = build();
+    assert_eq!(
+        dispatch_targets(&mut index, 19),
+        [
+            pair("src/Handler/NotifyLogger.php", "handle"),
+            pair("src/Handler/SendEmailHandler.php", "__invoke"),
+            pair("src/Handler/SmsHandlers.php", "onSms"),
+        ]
+    );
+    assert_eq!(
+        dispatch_targets(&mut index, 20),
+        [
+            pair("src/Handler/Explicit.php", "run"),
+            pair("src/Handler/NotifyLogger.php", "handle"),
+            pair("src/Handler/SmsHandlers.php", "onSms"),
+        ]
+    );
+}
+
+#[test]
+fn dispatch_without_handlers_keeps_its_declaration() {
+    let mut index = build();
+    let declaration = [pair(
+        "vendor/symfony/messenger/MessageBusInterface.php",
+        "dispatch",
+    )];
+    for line in [21, 22, 23] {
+        assert_eq!(
+            dispatch_targets(&mut index, line),
+            declaration,
+            "line {line}"
+        );
+    }
+}

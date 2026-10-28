@@ -48,6 +48,12 @@ const TEMPLATE_METHODS: [(&str, &[&str]); 2] = [
     ("Twig\\Environment", &["render", "display", "load"]),
 ];
 
+/// The bus method whose argument 0 is a message.
+const DISPATCH: [(&str, &[&str]); 1] = [(
+    "Symfony\\Component\\Messenger\\MessageBusInterface",
+    &["dispatch"],
+)];
+
 /// The attribute that names a controller method's template.
 const TEMPLATE_ATTRIBUTE: &str = "Symfony\\Bridge\\Twig\\Attribute\\Template";
 
@@ -61,6 +67,17 @@ fn calls_one_of(index: &Index, call: &FrameworkCall<'_>, methods: &[(&str, &[&st
             names.iter().any(|m| m.eq_ignore_ascii_case(name)) && is_a(index, class, &[owner])
         })
     })
+}
+
+/// The method name a handler location covers, read from its file.
+fn handler_name(location: &Location) -> String {
+    std::fs::read(&location.path)
+        .ok()
+        .and_then(|text| {
+            text.get(location.start as usize..location.end as usize)
+                .map(|name| String::from_utf8_lossy(name).into_owned())
+        })
+        .unwrap_or_default()
 }
 
 /// A file target at its start.
@@ -186,6 +203,31 @@ impl Framework for Symfony {
             .iter()
             .map(|target| (target.location.clone(), target.text.clone()))
             .collect()
+    }
+
+    /// A `dispatch()` on a message bus lists the handlers of its message.
+    fn call_targets(
+        &self,
+        index: &Index,
+        call: &FrameworkCall<'_>,
+        arguments: &[TypeExpr],
+    ) -> Vec<(Location, String)> {
+        if !calls_one_of(index, call, &DISPATCH) {
+            return Vec::new();
+        }
+        let Some(message) = arguments.first() else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        for class in crate::infer::class_names(message) {
+            for location in self.handlers_of(index, &class) {
+                if !found.iter().any(|(known, _)| *known == location) {
+                    let text = handler_name(&location);
+                    found.push((location, text));
+                }
+            }
+        }
+        found
     }
 
     fn keyed_string_targets(

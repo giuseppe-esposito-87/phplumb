@@ -1403,6 +1403,29 @@ impl Index {
         (!found.is_empty()).then_some(found)
     }
 
+    /// What the frameworks give for a cursor on the name of a method call, from what
+    /// it targets and the types of its arguments.
+    fn framework_call(
+        &self,
+        path: &Path,
+        summary: &FileSummary,
+        source: &[u8],
+        offset: u32,
+    ) -> Option<Vec<(Location, String)>> {
+        self.frameworks_for(path).next()?;
+        let found = infer::call_at(self, path, summary, source, offset)?;
+        let call = FrameworkCall {
+            targets: &found.parts.targets,
+            strings: &found.parts.strings,
+            receiver: Some(&found.parts.receiver),
+        };
+        let targets: Vec<(Location, String)> = self
+            .frameworks_for(path)
+            .flat_map(|f| f.call_targets(self, &call, &found.arguments))
+            .collect();
+        (!targets.is_empty()).then_some(targets)
+    }
+
     /// What the frameworks give for a string literal that is the value of an array key.
     fn framework_keyed_strings(
         &self,
@@ -1593,6 +1616,9 @@ impl Index {
                     }
                 }
             };
+        }
+        if let Some(found) = self.framework_call(path, &summary, source, offset) {
+            return found;
         }
         if let Some((receiver, kind, name)) = infer::member_at(self, path, &summary, source, offset)
         {

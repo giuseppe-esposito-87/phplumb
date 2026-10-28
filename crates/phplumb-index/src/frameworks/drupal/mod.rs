@@ -299,6 +299,15 @@ impl Framework for Drupal {
 
     /// A render element type or a widget or formatter type in display options leads
     /// to its plugin class.
+    fn call_targets(
+        &self,
+        _index: &Index,
+        _call: &FrameworkCall<'_>,
+        _arguments: &[TypeExpr],
+    ) -> Vec<(Location, String)> {
+        Vec::new()
+    }
+
     fn keyed_string_targets(
         &self,
         index: &Index,

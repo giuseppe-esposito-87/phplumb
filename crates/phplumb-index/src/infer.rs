@@ -145,6 +145,55 @@ pub(crate) fn string_argument_at(
         .find_map(|call| ctx.string_argument(call, offset))
 }
 
+/// A method call under the cursor: what it targets, its literal arguments and
+/// receiver, and the type of each positional argument.
+pub(crate) struct CallAt {
+    pub parts: StringArgument,
+    pub arguments: Vec<TypeExpr>,
+}
+
+/// The method, null-safe or static call whose name holds `offset`.
+pub(crate) fn call_at(
+    index: &Index,
+    path: &Path,
+    summary: &FileSummary,
+    source: &[u8],
+    offset: u32,
+) -> Option<CallAt> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut calls: Vec<CallRef<'_, '_>> = Vec::new();
+    CallsWithArguments.walk_program(program, &mut calls);
+    let mut facts = Facts::default();
+    Collect.walk_program(program, &mut facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
+    calls.iter().rev().find_map(|call| {
+        let (selector, arguments) = match call {
+            CallRef::Method(c) => (&c.method, &c.argument_list),
+            CallRef::NullSafe(c) => (&c.method, &c.argument_list),
+            CallRef::Static(c) => (&c.method, &c.argument_list),
+        };
+        let ClassLikeMemberSelector::Identifier(name) = selector else {
+            return None;
+        };
+        if !(name.span.start.offset <= offset && offset <= name.span.end.offset) {
+            return None;
+        }
+        let parts = ctx.call_parts(call)?;
+        let arguments = arguments
+            .arguments
+            .iter()
+            .map_while(|argument| match argument {
+                Argument::Positional(argument) if argument.ellipsis.is_none() => {
+                    Some(ctx.expr(argument.value, argument.value.span().start.offset, 0))
+                }
+                _ => None,
+            })
+            .collect();
+        Some(CallAt { parts, arguments })
+    })
+}
+
 /// The first positional argument of every call to a method named one of `names`
 /// (case-insensitively) in a file, when it is a string literal or `X::class`.
 pub(crate) fn first_arguments(source: &[u8], names: &[&str]) -> Vec<String> {

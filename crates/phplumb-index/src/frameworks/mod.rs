@@ -137,6 +137,15 @@ pub trait Framework: Send + Sync {
         argument: usize,
         value: &str,
     ) -> Vec<(Location, String)>;
+    /// Targets of a definition request on the name of a method call, given the type
+    /// of each of its positional arguments, each with the text expected at its
+    /// range; none to keep the method's declaration.
+    fn call_targets(
+        &self,
+        index: &Index,
+        call: &FrameworkCall<'_>,
+        arguments: &[TypeExpr],
+    ) -> Vec<(Location, String)>;
     /// Targets of a string literal that is the value of the array key `key`, each
     /// with the text expected at its range. `call` is the call whose positional
     /// argument at the given position holds the array, if any.
