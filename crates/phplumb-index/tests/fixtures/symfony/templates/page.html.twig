@@ -1,0 +1,12 @@
+{% extends 'base.html.twig' %}
+{% include '@Blog/list.html.twig' with {a: 1} %}
+{% embed "@Blog/card.html.twig" %}{% endembed %}
+{% import 'only_extra.html.twig' as ui %}
+{% from '@Dev/tools.html.twig' import x %}
+{% use 'base.html.twig' %}
+{{ include('@Blog/list.html.twig') }}
+{{ source('base.html.twig') }}
+{% extends ['missing.html.twig', 'base.html.twig'] %}
+{% include template %}
+<a href="{{ path('home') }}">{{ include('@Blog/card.html.twig') }}</a>
+{% include 'base.html.twig' ~ suffix %}

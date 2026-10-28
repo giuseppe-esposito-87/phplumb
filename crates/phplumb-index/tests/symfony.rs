@@ -314,3 +314,95 @@ fn unknown_template_names_give_nothing() {
         "{on_name:?}"
     );
 }
+
+const PAGE: &str = "templates/page.html.twig";
+
+/// Go to definition one byte inside `needle` on line `line` (from 1) of `file`.
+fn definition_on_line(
+    index: &mut Index,
+    file: &str,
+    line: usize,
+    needle: &str,
+) -> Vec<(String, String)> {
+    let path = fixture().join(file);
+    let source = std::fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&source).into_owned();
+    let line_start: usize = text
+        .split_inclusive('\n')
+        .take(line - 1)
+        .map(str::len)
+        .sum();
+    let column = text[line_start..].find(needle).unwrap();
+    let offset = (line_start + column + 1) as u32;
+    index
+        .definition(&path, &source, offset)
+        .into_iter()
+        .map(|location| {
+            let content = std::fs::read(&location.path).unwrap();
+            let range = &content[location.start as usize..location.end as usize];
+            (
+                location
+                    .path
+                    .strip_prefix(fixture())
+                    .unwrap()
+                    .display()
+                    .to_string(),
+                String::from_utf8_lossy(range).into_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn template_names_in_twig_open_their_file() {
+    let mut index = build();
+    for (line, needle, file) in [
+        (1, "'base.html.twig'", "extra/base.html.twig"),
+        (
+            2,
+            "'@Blog/list.html.twig'",
+            "src/Blog/templates/list.html.twig",
+        ),
+        (
+            3,
+            "\"@Blog/card.html.twig\"",
+            "src/Shared/templates/card.html.twig",
+        ),
+        (4, "'only_extra.html.twig'", "extra/only_extra.html.twig"),
+        (5, "'@Dev/tools.html.twig'", "dev/templates/tools.html.twig"),
+        (6, "'base.html.twig'", "extra/base.html.twig"),
+        (
+            7,
+            "'@Blog/list.html.twig'",
+            "src/Blog/templates/list.html.twig",
+        ),
+        (8, "'base.html.twig'", "extra/base.html.twig"),
+        (9, "'base.html.twig'", "extra/base.html.twig"),
+    ] {
+        assert_eq!(
+            definition_on_line(&mut index, PAGE, line, needle),
+            [pair(file, "")],
+            "line {line}"
+        );
+    }
+}
+
+#[test]
+fn twig_template_variables_give_nothing() {
+    let mut index = build();
+    assert!(definition_on_line(&mut index, PAGE, 10, "template").is_empty());
+    assert!(definition_on_line(&mut index, PAGE, 12, "'base.html.twig'").is_empty());
+}
+
+#[test]
+fn routes_and_templates_on_one_line() {
+    let mut index = build();
+    assert_eq!(
+        definition_on_line(&mut index, PAGE, 11, "'home'"),
+        [pair("src/Controller/HomeController.php", "index")]
+    );
+    assert_eq!(
+        definition_on_line(&mut index, PAGE, 11, "'@Blog/card.html.twig'"),
+        [pair("src/Shared/templates/card.html.twig", "")]
+    );
+}

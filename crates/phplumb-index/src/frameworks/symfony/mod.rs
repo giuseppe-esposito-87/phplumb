@@ -200,7 +200,8 @@ impl Framework for Symfony {
         None
     }
 
-    /// A route name in `path()` or `url()` of a Twig template leads to the route.
+    /// In a Twig template, a template name opens its file, and a route name in
+    /// `path()` or `url()` leads to the route.
     fn file_targets(
         &self,
         _index: &Index,
@@ -210,6 +211,13 @@ impl Framework for Symfony {
     ) -> Vec<(Location, String)> {
         if !crate::filter::is_twig(path) {
             return Vec::new();
+        }
+        if let Some((name, _, _)) = twig::template_name_at(source, offset) {
+            return self
+                .template_file(&name)
+                .into_iter()
+                .map(file_start)
+                .collect();
         }
         let Some((name, _, _)) = twig::route_name_at(source, offset) else {
             return Vec::new();
