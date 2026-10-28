@@ -223,6 +223,17 @@ impl Index {
         for file in read_files_with(&paths, crate::stubs::summarize_stub) {
             index.insert(file);
         }
+        // A name the stubs declare in several files, such as `Ds\Map` in `ds` and
+        // `ds_v2`, keeps the declaration of the first file in path order.
+        for table in [
+            &mut index.classes,
+            &mut index.functions,
+            &mut index.constants,
+        ] {
+            for entries in table.values_mut() {
+                entries.truncate(1);
+            }
+        }
         Ok(index)
     }
 
@@ -839,29 +850,42 @@ impl Index {
         holder.class_refs(entries)
     }
 
-    /// The index that declares `fqn` of `kind`: the stubs for a name PHP itself
-    /// declares, when they are loaded, and this index otherwise.
-    fn holder(&self, kind: SymbolKind, fqn: &str) -> &Index {
+    /// The index that declares `key` of `kind`: the stubs for a name PHP itself
+    /// declares, when they are loaded and project code does not declare it, and this
+    /// index otherwise. A polyfill in `vendor` gives way to the stubs.
+    fn holder(&self, kind: SymbolKind, key: &str) -> &Index {
         let built_in = match kind {
-            SymbolKind::Function => builtins::is_function(fqn),
-            SymbolKind::Constant => builtins::is_constant(fqn),
-            _ => builtins::is_class(fqn),
+            SymbolKind::Function => builtins::is_function(key),
+            SymbolKind::Constant => builtins::is_constant(key),
+            _ => builtins::is_class(key),
         };
         match &self.stubs {
-            Some(stubs) if built_in => stubs,
+            Some(stubs) if built_in && !self.project_declares(kind, key) => stubs,
             _ => self,
         }
+    }
+
+    /// Whether project code declares `key` of `kind`.
+    fn project_declares(&self, kind: SymbolKind, key: &str) -> bool {
+        lookup(self.table(kind), key).iter().any(|entry| {
+            self.files[entry.file as usize]
+                .as_ref()
+                .is_some_and(|file| self.is_project_code(&file.path))
+        })
     }
 
     /// The holder of `key` of `kind` and the entries its table has for the key.
     fn entries(&self, kind: SymbolKind, key: &str) -> (&Index, &[Entry]) {
         let holder = self.holder(kind, key);
-        let table = match kind {
-            SymbolKind::Function => &holder.functions,
-            SymbolKind::Constant => &holder.constants,
-            _ => &holder.classes,
-        };
-        (holder, lookup(table, key))
+        (holder, lookup(holder.table(kind), key))
+    }
+
+    fn table(&self, kind: SymbolKind) -> &HashMap<String, Vec<Entry>> {
+        match kind {
+            SymbolKind::Function => &self.functions,
+            SymbolKind::Constant => &self.constants,
+            _ => &self.classes,
+        }
     }
 
     /// Direct subtypes: classes extending `fqn`, classes and enums implementing it,
@@ -1156,9 +1180,13 @@ impl Index {
             Some(_) => Vec::new(),
             None => self.targets(path, source, offset),
         };
-        let compute = |index: &Index| match &call {
-            Some((classes, name)) => index.call_site_targets(classes, name),
-            None => index.implementation_targets(&targets),
+        let compute = |index: &Index| {
+            let mut found = match &call {
+                Some((classes, name)) => index.call_site_targets(classes, name),
+                None => index.implementation_targets(&targets),
+            };
+            found.retain(|(location, _)| !index.is_stub(&location.path));
+            found
         };
         let found = compute(self);
         let mut stale: Vec<PathBuf> = found

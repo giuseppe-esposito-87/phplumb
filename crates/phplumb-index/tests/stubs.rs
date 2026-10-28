@@ -206,6 +206,9 @@ fn under_stubs(index: &Index, location: &Location) -> bool {
         .is_some_and(|dir| location.path.starts_with(dir))
 }
 
+/// A vendor polyfill of the built-in `Stringable`.
+const POLYFILL: &str = "vendor/symfony/polyfill-php80/Resources/stubs/Stringable.php";
+
 fn pair(path: &str, text: &str) -> (String, String) {
     (path.to_string(), text.to_string())
 }
@@ -323,10 +326,7 @@ fn without_stubs_built_ins_resolve_to_nothing() {
     assert!(definition(&mut index, "app/Uses.php", "getMessage", 0).is_empty());
     assert!(definition(&mut index, "app/Uses.php", "count([])", 0).is_empty());
     let found = definition(&mut index, "app/Uses.php", "Stringable", 0);
-    assert_eq!(
-        described(&index, &found),
-        [pair("lib/Stringable.php", "Stringable")]
-    );
+    assert_eq!(described(&index, &found), [pair(POLYFILL, "Stringable")]);
 }
 
 #[test]
@@ -346,4 +346,38 @@ fn implementations_leave_stubs_out() {
         found.iter().all(|location| !under_stubs(&index, location)),
         "{found:?}"
     );
+}
+
+#[test]
+fn implementations_of_built_in_calls_leave_stubs_out() {
+    let mut index = build(&DiscoverOptions::default());
+    for nth in [0, 1] {
+        let (path, source, offset) = at("app/Uses.php", "getMessage", nth);
+        let found = index.implementations(&path, &source, offset);
+        assert!(
+            found.iter().all(|location| !under_stubs(&index, location)),
+            "{found:?}"
+        );
+    }
+}
+
+#[test]
+fn built_in_classes_declared_twice_give_one_target() {
+    let mut index = build(&DiscoverOptions::default());
+    for needle in ["Map", "Cluster", "get("] {
+        let found = definition(&mut index, "app/Twice.php", needle, 0);
+        assert_eq!(found.len(), 1, "{needle}: {found:?}");
+    }
+}
+
+#[test]
+fn project_class_with_a_built_in_name_wins() {
+    let mut index = build(&DiscoverOptions::default());
+    let class = definition(&mut index, "app/Legacy.php", "Worker", 0);
+    assert_eq!(
+        described(&index, &class),
+        [pair("lib/Worker.php", "Worker")]
+    );
+    let method = definition(&mut index, "app/Legacy.php", "work()", 0);
+    assert_eq!(described(&index, &method), [pair("lib/Worker.php", "work")]);
 }
