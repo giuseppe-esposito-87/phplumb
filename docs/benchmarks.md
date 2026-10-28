@@ -2,6 +2,21 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 6f Doctrine mapping
+
+Same machine and checkouts as step 6e. Class and property names in `*.orm.xml` mappings open their declarations, and `getRepository(X::class)` is typed from the mappings. The build before this step ran first.
+
+| Metric               | Drupal reference                | Symfony reference          |
+| -------------------- | ------------------------------- | -------------------------- |
+| Member coverage      | 42,929, the same as before      | 13,097, the same as before |
+| Cold index           | 5.9 s (7.1 s before, run first) | 0.9 to 1.2 s               |
+| Update of one file   | 93 ms (97 ms before)            | 24 ms (19 ms before)       |
+| Peak resident memory | 625 MB                          | 256 MB                     |
+| All cases            | 87 passed, 7 failed, as before  | 31 passed, 0 failed        |
+| Diagnostics          | 94, the same as before          | 0, the same as before      |
+
+All 344 class and property names in the 30 mapping files of the Symfony reference project resolve. Its mappings declare no repository class, so `getRepository()` keeps its declared type there. New cases cover an entity name, a field name, a `target-entity` and an `enum-type`. A first version walked the whole project for mapping files on every PHP update, which cost 58 ms; the module now walks again only when a directory or a mapping file changes.
+
 ## 2026-10-28, step 6e Symfony parameters and YAML
 
 Same machine and checkouts as step 6d. Parameter names in PHP attributes, `getParameter()` and YAML lead to their definitions, and class names and `@id` references in Symfony YAML configuration open their class or service. This time the build before this step ran first.

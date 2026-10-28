@@ -54,6 +54,7 @@ PHPlumb turns on its Symfony support when the project's `composer.lock` requires
 - **Messenger.** Cmd+click on `dispatch` in `$bus->dispatch(new Message())` lists every handler of the message, and Cmd+click on a handler lists every place that dispatches its message. Handlers are classes or methods with `#[AsMessageHandler]`, and a handler of a parent class or interface of the message handles it too.
 - **Parameters.** Cmd+click on a parameter name in `#[Autowire(param: 'x')]`, `#[Autowire('%x%')]`, `getParameter('x')` or a `%x%` in YAML opens its definitions under `parameters:`, including those inside `when@env` blocks.
 - **YAML configuration.** In `config/services*.yaml` and `config/packages/*.yaml`, Cmd+click on a class name opens the class, and on `@id` (or `#[Autowire(service: 'id')]`) opens the service definition, or the class when the id is a class name with no definition.
+- **Doctrine.** In `*.orm.xml` mapping files, Cmd+click on an entity, embeddable, target, repository or enum class opens the class, and on a field, association or id name opens the property. `getRepository(X::class)` is typed as the repository class the mapping or `#[ORM\Entity(repositoryClass:)]` declares.
 
 ## Speed
 

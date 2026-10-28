@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<doctrine-mapping>
+    <entity name="Drupal\demo\Thing"/>
+</doctrine-mapping>

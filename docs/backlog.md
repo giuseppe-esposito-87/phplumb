@@ -75,6 +75,12 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Some service and parameter forms give nothing.** `@!id` and `@>id` references, `#[Autowire('@id')]` and the positional `#[Autowire(null, 'id')]`, files loaded through `imports:`, and a `%name%` after a lone `%` in the same string (`'50% of %app.name%'`) give nothing. Found in the step 6e review.
 - **Some step 6e behaviour has no test.** Another argument of `#[Template]` giving nothing, and aliased or fully qualified `#[Autowire]`, are untested. Found in the step 6e review.
 
+- **Only XML mappings and `repositoryClass` are read.** Attribute and annotation mappings of fields and associations, YAML mappings and `getRepository('Alias:Entity')` give nothing. Found in step 6f.
+- **Some repository declarations are not read.** `repository-class` on a `mapped-superclass`, the positional `#[ORM\Entity(PostRepository::class)]`, `#[ORM\MappedSuperclass(repositoryClass:)]` and the `@ORM\Entity(repositoryClass=...)` annotation leave `getRepository()` with its declared type. Found in the step 6f review.
+- **Some mapping attributes do not navigate.** `class` of `discriminator-mapping`, `entity-listener` and `custom-id-generator`, and `name` of `order-by-field`, give nothing. Found in the step 6f review.
+- **A deleted directory with a dot in its name leaves its mappings listed.** The module walks for mapping files again only when a directory, an extension-less path or a mapping file changes, so removing `config/doctrine.old` keeps its files until the next rebuild; reading a missing file gives nothing. Found in the step 6f review.
+- **Some step 6f behaviour has no test.** `Symfony::update` after a mapping file is added or removed, a mapping file with a BOM or a different encoding declaration, and `getRepository()` through `ManagerRegistry` are untested. Found in the step 6f review.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.

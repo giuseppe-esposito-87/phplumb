@@ -41,6 +41,13 @@ suite("manifest", () => {
     );
   });
 
+  test("sends Doctrine mappings to the engine", () => {
+    assert.ok(
+      DOCUMENT_SELECTOR.some((filter) => filter.pattern === "**/*.orm.xml"),
+      JSON.stringify(DOCUMENT_SELECTOR),
+    );
+  });
+
   test("contributes the project folder setting", () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, "package.json"), "utf8"));
     const setting = manifest.contributes.configuration.properties["phplumb.root"];

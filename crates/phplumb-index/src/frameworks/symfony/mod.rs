@@ -1,6 +1,7 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
 mod config;
+mod doctrine;
 mod messenger;
 mod routes;
 mod templates;
@@ -11,6 +12,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Diagnostic;
+use crate::filter::is_doctrine_xml;
 use crate::frameworks::ancestry::is_a;
 use crate::frameworks::yaml::{self, Yaml};
 use crate::frameworks::{
@@ -20,6 +22,7 @@ use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
 
+use doctrine::Mappings;
 use messenger::Handlers;
 pub use routes::RouteTarget;
 use routes::Routes;
@@ -57,6 +60,12 @@ const PARAMETER_METHODS: [(&str, &[&str]); 1] = [(
     "Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController",
     &["getParameter"],
 )];
+
+/// Methods whose argument 0 is an entity class and that return its repository.
+const REPOSITORY_METHODS: [(&str, &[&str]); 2] = [
+    ("Doctrine\\Persistence\\ObjectManager", &["getRepository"]),
+    ("Doctrine\\Persistence\\ManagerRegistry", &["getRepository"]),
+];
 
 /// The bus method whose argument 0 is a message.
 const DISPATCH: [(&str, &[&str]); 1] = [(
@@ -102,6 +111,24 @@ fn class_targets(index: &Index, fqn: &str) -> Vec<(Location, String)> {
         .collect()
 }
 
+/// The declaration of property `name` on `class` or its parents, at its name.
+fn property_targets(index: &Index, class: &str, name: &str) -> Vec<(Location, String)> {
+    index
+        .find_member(class, crate::summary::MemberKind::Property, name)
+        .into_iter()
+        .map(|(found, member)| {
+            (
+                Location {
+                    path: found.path.to_path_buf(),
+                    start: member.name_start,
+                    end: member.name_end,
+                },
+                member.name.clone(),
+            )
+        })
+        .collect()
+}
+
 /// Targets as `(location, expected text)` pairs.
 fn targets_of(targets: &[RouteTarget]) -> Vec<(Location, String)> {
     targets
@@ -132,6 +159,10 @@ pub struct Symfony {
     parameters: HashMap<String, Vec<RouteTarget>>,
     /// Service definitions, by id.
     services: HashMap<String, Vec<RouteTarget>>,
+    mappings: Mappings,
+    /// The project's `*.orm.xml` files, walked again only when a directory or a
+    /// mapping file changes.
+    mapping_files: Vec<PathBuf>,
 }
 
 impl Symfony {
@@ -249,6 +280,11 @@ impl Symfony {
         Vec::new()
     }
 
+    /// The repository class the Doctrine mappings declare for `entity`.
+    pub fn repository_of(&self, entity: &str) -> Option<&str> {
+        self.mappings.repository_of(entity)
+    }
+
     /// The `%name%` under the cursor in the value of an attribute.
     fn value_parameter_targets(
         &self,
@@ -265,6 +301,7 @@ impl Symfony {
         let files = config::config_files(&self.project, &filter);
         self.parameters = config::read_parameters(&files);
         self.services = config::read_services(&files);
+        self.mappings = Mappings::read(index, &filter, &self.mapping_files);
         self.routes = Routes::read(index, &filter, &self.project);
         self.templates = Templates::read(&self.project);
         self.handlers = Handlers::read(index, &filter);
@@ -297,25 +334,48 @@ impl Framework for Symfony {
     }
 
     fn rebuild(&mut self, index: &Index) {
+        let filter = index.filter().scoped(&self.project);
+        self.mapping_files = doctrine::mapping_files(&self.project.dir, filter);
         self.read(index);
     }
 
-    /// Reads the routes, template paths and message handlers again when a PHP or
-    /// YAML file of the project, or a directory, changed.
+    /// Reads the routes, template paths, message handlers, configuration and Doctrine
+    /// mappings again when a PHP, YAML or XML file of the project, or a directory,
+    /// changed.
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
-        let relevant = changed.iter().chain(removed).any(|path| {
-            let path = index.filter().under_root(path);
+        let paths: Vec<PathBuf> = changed
+            .iter()
+            .chain(removed)
+            .map(|path| index.filter().under_root(path))
+            .filter(|path| self.project.contains(path) || self.project.dir.starts_with(path))
+            .collect();
+        let relevant = paths.iter().any(|path| {
             let kind = path.extension().and_then(|e| e.to_str());
-            (self.project.contains(&path) || self.project.dir.starts_with(&path))
-                && (path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml")))
+            path.is_dir() || matches!(kind, None | Some("php" | "yaml" | "yml" | "xml"))
         });
+        let mappings_moved = paths
+            .iter()
+            .any(|path| path.is_dir() || path.extension().is_none() || is_doctrine_xml(path));
+        if mappings_moved {
+            let filter = index.filter().scoped(&self.project);
+            self.mapping_files = doctrine::mapping_files(&self.project.dir, filter);
+        }
         if relevant {
             self.read(index);
         }
     }
 
-    fn call_type(&self, _index: &Index, _call: &FrameworkCall<'_>) -> Option<TypeExpr> {
-        None
+    /// `getRepository(X::class)` returns the repository the mappings declare for `X`,
+    /// when the index knows that class.
+    fn call_type(&self, index: &Index, call: &FrameworkCall<'_>) -> Option<TypeExpr> {
+        if !calls_one_of(index, call, &REPOSITORY_METHODS) {
+            return None;
+        }
+        let entity = call.strings.first()?.as_deref()?;
+        let repository = self.repository_of(entity)?;
+        index
+            .has_class(repository)
+            .then(|| TypeExpr::Named(repository.to_string()))
     }
 
     /// A template name given to a rendering method opens the template; a route name
@@ -430,8 +490,9 @@ impl Framework for Symfony {
     }
 
     /// In YAML configuration, a parameter, a service reference or a class name leads
-    /// to its definition; in a Twig template, a template name opens its file, and a
-    /// route name in `path()` or `url()` leads to the route.
+    /// to its definition; in a Doctrine mapping, a class or property name opens it;
+    /// in a Twig template, a template name opens its file, and a route name in
+    /// `path()` or `url()` leads to the route.
     fn file_targets(
         &self,
         index: &Index,
@@ -441,6 +502,18 @@ impl Framework for Symfony {
     ) -> Vec<(Location, String)> {
         if crate::filter::is_yaml(path) {
             return self.yaml_targets(index, path, source, offset);
+        }
+        if crate::filter::is_doctrine_xml(path) {
+            let Ok(text) = std::str::from_utf8(source) else {
+                return Vec::new();
+            };
+            return match doctrine::named_at(text, offset) {
+                Some(doctrine::Named::Class(class)) => class_targets(index, &class),
+                Some(doctrine::Named::Property(class, property)) => {
+                    property_targets(index, &class, &property)
+                }
+                None => Vec::new(),
+            };
         }
         if !crate::filter::is_twig(path) {
             return Vec::new();

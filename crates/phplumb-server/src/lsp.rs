@@ -478,8 +478,8 @@ impl Server<'_> {
         Ok(())
     }
 
-    /// Watches files with `php_extensions`, Composer's installed packages, YAML files
-    /// and directories.
+    /// Watches files with `php_extensions`, Composer's installed packages, YAML files,
+    /// Doctrine XML mappings and directories.
     fn register_watchers(&self, php_extensions: &[&str]) -> anyhow::Result<()> {
         let watcher = |pattern: String, kind: Option<WatchKind>| FileSystemWatcher {
             glob_pattern: GlobPattern::String(pattern),
@@ -496,6 +496,8 @@ impl Server<'_> {
                 // Framework modules read YAML files, such as Drupal's services and
                 // Symfony's routes.
                 watcher("**/*.{yml,yaml}".to_string(), None),
+                // Doctrine mappings, which the Symfony module reads.
+                watcher("**/*.orm.xml".to_string(), None),
                 // Creating, moving or deleting a directory reports only the directory.
                 watcher(
                     "**/*".to_string(),
