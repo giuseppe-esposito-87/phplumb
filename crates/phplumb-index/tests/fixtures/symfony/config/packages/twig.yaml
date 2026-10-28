@@ -1,0 +1,10 @@
+twig:
+    paths:
+        '%kernel.project_dir%/src/Blog/templates': Blog
+        '%kernel.project_dir%/src/Shared/templates': Blog
+        '%kernel.project_dir%/extra': ~
+
+when@dev:
+    twig:
+        paths:
+            '%kernel.project_dir%/dev/templates': Dev

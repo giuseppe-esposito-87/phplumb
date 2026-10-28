@@ -1,6 +1,7 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
 mod routes;
+mod templates;
 mod twig;
 
 use std::any::Any;
@@ -15,6 +16,7 @@ use crate::summary::NameRef;
 
 pub use routes::RouteTarget;
 use routes::Routes;
+use templates::Templates;
 
 /// Methods whose argument 0 is a route name, by the class that declares them.
 const ROUTE_METHODS: [(&str, &[&str]); 2] = [
@@ -44,6 +46,7 @@ fn route_call(index: &Index, call: &FrameworkCall<'_>) -> bool {
 pub struct Symfony {
     project: Project,
     routes: Routes,
+    templates: Templates,
 }
 
 impl Symfony {
@@ -53,9 +56,15 @@ impl Symfony {
         self.routes.targets(name)
     }
 
+    /// The file the template `name` resolves to, as Twig's loader finds it.
+    pub fn template_file(&self, name: &str) -> Option<PathBuf> {
+        self.templates.file(name)
+    }
+
     fn read(&mut self, index: &Index) {
         let filter = index.filter().scoped(&self.project);
         self.routes = Routes::read(index, &filter, &self.project);
+        self.templates = Templates::read(&self.project);
     }
 }
 

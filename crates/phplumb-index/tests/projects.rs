@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use phplumb_index::Index;
 use phplumb_index::discover::DiscoverOptions;
 use phplumb_index::frameworks::drupal::Drupal;
+use phplumb_index::frameworks::symfony::Symfony;
 use phplumb_index::frameworks::{Activation, FrameworkSettings, Project};
 use tempfile::TempDir;
 
@@ -266,4 +267,20 @@ fn symfony_sees_no_drupal_routes() {
         .map(|location| location.path)
         .collect();
     assert_eq!(home, [nested().join("src/Controller/HomeController.php")]);
+}
+
+#[test]
+fn templates_without_paths_use_the_default_directory() {
+    let (_dir, root) = project();
+    lock(&root, "", SYMFONY_LOCK);
+    fs::create_dir_all(root.join("config/packages")).unwrap();
+    fs::write(root.join("config/packages/twig.yaml"), "twig: {}\n").unwrap();
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::write(root.join("templates/page.html.twig"), "<p></p>\n").unwrap();
+    let index = auto(&root);
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    assert_eq!(
+        symfony.template_file("page.html.twig"),
+        Some(root.join("templates/page.html.twig"))
+    );
 }

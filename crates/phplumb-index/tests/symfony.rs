@@ -232,3 +232,48 @@ fn inherited_route_methods_belong_to_the_subclass() {
         [pair(crud, "index")]
     );
 }
+
+/// The file the template `name` resolves to, relative to the fixture.
+fn template(index: &Index, name: &str) -> Option<String> {
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    symfony
+        .template_file(name)
+        .map(|path| path.strip_prefix(fixture()).unwrap().display().to_string())
+}
+
+#[test]
+fn namespaced_names_use_their_paths() {
+    let index = build();
+    assert_eq!(
+        template(&index, "@Blog/list.html.twig").as_deref(),
+        Some("src/Blog/templates/list.html.twig")
+    );
+    assert_eq!(
+        template(&index, "@Blog/card.html.twig").as_deref(),
+        Some("src/Shared/templates/card.html.twig")
+    );
+    assert_eq!(
+        template(&index, "@Dev/tools.html.twig").as_deref(),
+        Some("dev/templates/tools.html.twig")
+    );
+}
+
+#[test]
+fn plain_names_use_the_main_namespace_then_the_default_path() {
+    let index = build();
+    assert_eq!(
+        template(&index, "base.html.twig").as_deref(),
+        Some("extra/base.html.twig")
+    );
+    assert_eq!(
+        template(&index, "only_extra.html.twig").as_deref(),
+        Some("extra/only_extra.html.twig")
+    );
+}
+
+#[test]
+fn unknown_names_and_namespaces_give_nothing() {
+    let index = build();
+    assert_eq!(template(&index, "@Twig/Exception/error.html.twig"), None);
+    assert_eq!(template(&index, "missing.html.twig"), None);
+}
