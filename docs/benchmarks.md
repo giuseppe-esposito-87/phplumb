@@ -2,6 +2,21 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 6b Symfony routes
+
+Same machine and checkouts as step 6a. Route names in `redirectToRoute()`, `generateUrl()`, `UrlGeneratorInterface::generate()` and Twig `path()` and `url()` lead to the route's controller method or YAML definition. Both projects were measured with this branch and with the build before it.
+
+| Metric               | Drupal reference               | Symfony reference          |
+| -------------------- | ------------------------------ | -------------------------- |
+| Member coverage      | 42,929, the same as before     | 13,097, the same as before |
+| Cold index           | 7.5 s (6.3 s before)           | 1.0 s                      |
+| Peak resident memory | 558 MB                         | 189 MB                     |
+| Update of one file   | 105 ms (95 ms before)          |                            |
+| All cases            | 87 passed, 7 failed, as before | 16 passed, 0 failed        |
+| Diagnostics          | 94, the same as before         | 0, the same as before      |
+
+Of the 383 literal route names in the Symfony reference project's PHP and Twig files, 381 resolve. The other 2 name a route whose attribute gives its name through a class constant. New cases cover a `redirectToRoute()` name, a `generate()` name and a Twig `path()` name. The Drupal timings vary from run to run as in earlier steps.
+
 ## 2026-10-28, step 6a Symfony module skeleton
 
 Same machine and checkouts as step 5c. Each framework module now reads and answers only for its own project. A Symfony module turns on with `symfony/framework-bundle` and does nothing else yet. Both projects were measured with this branch and with the build before it.

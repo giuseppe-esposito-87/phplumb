@@ -47,6 +47,12 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **The server log does not name module projects.** Logging `drupal (codebase/drupal), symfony` would show users which folder each module reads. Found in the step 6a review.
 - **Some gating has no test.** YAML file targets, declaration targets and keyed strings outside a module's project, and the Drupal update filter on its own, are untested; `Framework::set_project` has no doc comment. Found in the step 6a review.
 
+### Symfony
+
+- **Route names given by class constants are not read.** `#[Route('/dev/login', name: DevLoginAuthenticator::ROUTE)]` makes no route, so 2 of 383 route names in the Symfony reference project resolve to nothing. Found in step 6b.
+- **Route imports with `name_prefix` are not read.** Attribute routes under a YAML import that sets `name_prefix` keep their plain names. Found in step 6b.
+- **Routes from bundles are not read.** Routes that bundles define, such as `_wdt` or `_security_logout`, have no target. Found in step 6b.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.

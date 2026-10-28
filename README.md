@@ -45,6 +45,12 @@ PHPlumb starts with Drupal, because its code calls almost everything through int
 - **Routes and YAML.** Cmd+click on the route name in `Url::fromRoute('name')`, `Link::createFromRoute()`, `setRedirect()` or `redirect()` opens the route in `*.routing.yml`. In services, routing and links YAML files, Cmd+click on a class, a `Class::method`, a `service:method` controller, an `@service` or a route name opens its definition.
 - **Broken Drupal references.** A service id, route name or plugin id written in PHP that is defined nowhere on disk, test modules included, is reported: `\Drupal::service('x')`, `Url::fromRoute('x')`, `'#type' => 'x'`, field types, widgets and formatters. Ids that code builds at run time, and lookups that tolerate a missing id, stay silent. Nothing is reported while `phplumb.exclude` is set, since ids defined in excluded files are unknown.
 
+## Symfony
+
+PHPlumb turns on its Symfony support when the project's `composer.lock` requires `symfony/framework-bundle`. What works today:
+
+- **Routes.** Cmd+click on a route name in `redirectToRoute()`, `generateUrl()`, `UrlGeneratorInterface::generate()`, or `path()` and `url()` in a Twig template, opens the controller method of a `#[Route]` attribute, or the route in `config/routes.yaml` and its controller. Route names follow Symfony's rules: class name prefixes, generated default names and `Class::method` aliases.
+
 ## Speed
 
 Measured on a Drupal 11 project with 39,417 PHP files, on an Apple M3 Pro.
