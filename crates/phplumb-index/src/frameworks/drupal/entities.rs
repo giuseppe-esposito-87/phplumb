@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::filter::PathFilter;
 use crate::index::{Index, Location};
 use crate::metadata::Metadata;
 
@@ -92,10 +93,13 @@ pub(crate) struct EntityTypes {
 
 impl EntityTypes {
     /// Every entity type the index's classes declare, outside test modules.
-    pub(crate) fn read(index: &Index) -> EntityTypes {
-        let root = index.filter().root();
+    pub(crate) fn read(index: &Index, filter: &PathFilter) -> EntityTypes {
+        let root = filter.root();
         let mut by_id: HashMap<String, Vec<EntityType>> = HashMap::new();
         for (path, declaration) in index.declarations() {
+            if !filter.in_scope(path) {
+                continue;
+            }
             let Some(shape) = &declaration.class else {
                 continue;
             };

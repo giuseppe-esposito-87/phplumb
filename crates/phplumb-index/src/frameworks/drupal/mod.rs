@@ -165,25 +165,41 @@ impl Framework for Drupal {
         &["module", "inc", "install", "theme", "profile", "engine"]
     }
 
+    /// Reads files and declarations of the Drupal project only.
     fn rebuild(&mut self, index: &Index) {
-        self.services = Services::read(index.filter());
-        self.entities = EntityTypes::read(index);
-        self.hooks = Hooks::read(index);
-        self.plugins = Plugins::read(index, self.hooks.extensions());
-        self.routes = Routes::read(index.filter());
-        self.routes.read_attributes(index);
-        self.literals = PhpLiterals::read(index);
+        let filter = index.filter().scoped(&self.project);
+        self.services = Services::read(&filter);
+        self.entities = EntityTypes::read(index, &filter);
+        self.hooks = Hooks::read(index, &filter);
+        self.plugins = Plugins::read(index, &filter, self.hooks.extensions());
+        self.routes = Routes::read(&filter);
+        self.routes.read_attributes(index, &filter);
+        self.literals = PhpLiterals::read(index, &filter);
     }
 
+    /// Paths outside the Drupal project are dropped, apart from directories that
+    /// hold it.
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
-        self.services.update(index.filter(), changed, removed);
-        self.entities = EntityTypes::read(index);
-        self.hooks.update(index, changed, removed);
+        let filter = index.filter().scoped(&self.project);
+        let ours = |paths: &[PathBuf]| -> Vec<PathBuf> {
+            paths
+                .iter()
+                .filter(|path| {
+                    let path = filter.under_root(path);
+                    self.project.contains(&path) || self.project.dir.starts_with(&path)
+                })
+                .cloned()
+                .collect()
+        };
+        let (changed, removed) = (ours(changed), ours(removed));
+        self.services.update(&filter, &changed, &removed);
+        self.entities = EntityTypes::read(index, &filter);
+        self.hooks.update(index, &filter, &changed, &removed);
         self.plugins
-            .update(index, self.hooks.extensions(), changed, removed);
-        self.routes.update(index.filter(), changed, removed);
-        self.routes.read_attributes(index);
-        self.literals.update(changed, removed, index);
+            .update(index, &filter, self.hooks.extensions(), &changed, &removed);
+        self.routes.update(&filter, &changed, &removed);
+        self.routes.read_attributes(index, &filter);
+        self.literals.update(&changed, &removed, index, &filter);
     }
 
     /// `\Drupal::service(id)` and a container's `get(id)` give the service's classes;

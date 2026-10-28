@@ -1,0 +1,6 @@
+demo.page:
+  path: '/demo'
+  defaults:
+    _controller: '\Drupal\demo\Controller\AttrController::page'
+  requirements:
+    _access: 'TRUE'

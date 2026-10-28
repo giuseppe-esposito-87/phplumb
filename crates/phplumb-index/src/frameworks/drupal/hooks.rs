@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use super::extensions::{Extensions, INFO};
 use super::is_a;
 use super::services::{Tests, is_drupal_file};
+use crate::filter::PathFilter;
 use crate::frameworks::{CallTarget, FoundCall, FrameworkDeclaration};
 use crate::index::{Index, Location};
 use crate::metadata::{MetaValue, Metadata};
@@ -470,19 +471,24 @@ pub(crate) struct Hooks {
 }
 
 impl Hooks {
-    pub(crate) fn read(index: &Index) -> Hooks {
+    pub(crate) fn read(index: &Index, filter: &PathFilter) -> Hooks {
         let mut hooks = Hooks {
-            extensions: Extensions::read(index.filter()),
+            extensions: Extensions::read(filter),
             ..Hooks::default()
         };
-        hooks.collect(index);
+        hooks.collect(index, filter);
         hooks
     }
 
     /// Re-reads the extensions when an `.info.yml` file or a directory changed, then
     /// collects the hooks again from the index.
-    pub(crate) fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
-        let filter = index.filter();
+    pub(crate) fn update(
+        &mut self,
+        index: &Index,
+        filter: &PathFilter,
+        changed: &[PathBuf],
+        removed: &[PathBuf],
+    ) {
         let extensions_changed = removed.iter().chain(changed).any(|path| {
             path.is_dir()
                 || is_drupal_file(filter, path, INFO, Tests::Skip)
@@ -495,13 +501,13 @@ impl Hooks {
         if extensions_changed {
             self.extensions = Extensions::read(filter);
         }
-        self.collect(index);
+        self.collect(index, filter);
     }
 
-    fn collect(&mut self, index: &Index) {
+    fn collect(&mut self, index: &Index, filter: &PathFilter) {
         let mut implementations: HashMap<String, Vec<HookImplementation>> = HashMap::new();
         let mut docs: HashMap<String, Vec<HookDoc>> = HashMap::new();
-        let root = index.filter().root().to_path_buf();
+        let root = filter.root().to_path_buf();
         let mut file: Vec<&Declaration> = Vec::new();
         let mut current: Option<&Path> = None;
         let mut flush = |path: Option<&Path>, file: &mut Vec<&Declaration>| {
@@ -516,6 +522,9 @@ impl Hooks {
             file.clear();
         };
         for (path, declaration) in index.declarations() {
+            if !filter.in_scope(path) {
+                continue;
+            }
             if current != Some(path) {
                 flush(current, &mut file);
                 current = Some(path);

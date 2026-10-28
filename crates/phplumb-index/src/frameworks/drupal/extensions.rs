@@ -25,7 +25,7 @@ pub(crate) struct Extensions {
 impl Extensions {
     pub(crate) fn read(filter: &PathFilter) -> Extensions {
         let mut extensions = Extensions::default();
-        for path in drupal_files(filter, filter.root(), INFO, Tests::Skip) {
+        for path in drupal_files(filter, filter.start(), INFO, Tests::Skip) {
             let Some(kind) = info_kind(&path) else {
                 continue;
             };

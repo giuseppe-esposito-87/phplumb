@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::extensions::Extensions;
 use super::is_a;
+use crate::filter::PathFilter;
 use crate::frameworks::{CallTarget, FrameworkCall};
 use crate::index::{Index, Location};
 use crate::infer::{self, class_names};
@@ -101,10 +102,10 @@ pub(crate) struct Plugins {
 }
 
 impl Plugins {
-    pub(crate) fn read(index: &Index, extensions: &Extensions) -> Plugins {
+    pub(crate) fn read(index: &Index, filter: &PathFilter, extensions: &Extensions) -> Plugins {
         let mut plugins = Plugins::default();
-        plugins.read_types(index);
-        plugins.collect(index, extensions);
+        plugins.read_types(index, filter);
+        plugins.collect(index, filter, extensions);
         plugins
     }
 
@@ -113,6 +114,7 @@ impl Plugins {
     pub(crate) fn update(
         &mut self,
         index: &Index,
+        filter: &PathFilter,
         extensions: &Extensions,
         changed: &[PathBuf],
         removed: &[PathBuf],
@@ -122,14 +124,15 @@ impl Plugins {
             .chain(changed)
             .any(|path| self.manager_files.iter().any(|file| file.starts_with(path)))
             || index.declarations().any(|(path, declaration)| {
-                declaration.kind == SymbolKind::Class
+                filter.in_scope(path)
+                    && declaration.kind == SymbolKind::Class
                     && changed.iter().any(|changed| path.starts_with(changed))
                     && is_a(index, &declaration.fqn, &[DEFAULT_MANAGER])
             });
         if touches_managers {
-            self.read_types(index);
+            self.read_types(index, filter);
         }
-        self.collect(index, extensions);
+        self.collect(index, filter, extensions);
     }
 
     pub(crate) fn types(&self) -> &[PluginType] {
@@ -290,11 +293,11 @@ impl Plugins {
 
     /// Every subclass of the default plugin manager whose own constructor calls the
     /// default constructor with a literal subdirectory.
-    fn read_types(&mut self, index: &Index) {
+    fn read_types(&mut self, index: &Index, filter: &PathFilter) {
         let mut types = Vec::new();
         let mut files = HashSet::new();
         for manager in index.all_subtypes(DEFAULT_MANAGER) {
-            if manager.declaration.kind != SymbolKind::Class {
+            if !filter.in_scope(manager.path) || manager.declaration.kind != SymbolKind::Class {
                 continue;
             }
             let fqn = &manager.declaration.fqn;
@@ -364,7 +367,7 @@ impl Plugins {
     /// The plugins of every type: classes in the type's subdirectory of a module,
     /// core or component namespace, outside test modules, with the type's attribute
     /// or, failing that, its annotation.
-    fn collect(&mut self, index: &Index, extensions: &Extensions) {
+    fn collect(&mut self, index: &Index, filter: &PathFilter, extensions: &Extensions) {
         let mut by_subdir: HashMap<String, Vec<&PluginType>> = HashMap::new();
         for plugin_type in &self.types {
             let namespace = plugin_type.subdir.trim_matches('/').replace('/', "\\");
@@ -379,13 +382,13 @@ impl Plugins {
             .map(|m| m.to_ascii_lowercase())
             .chain(["core".to_string(), "component".to_string()])
             .collect();
-        let root = index.filter().root().to_path_buf();
+        let root = filter.root().to_path_buf();
         let mut is_a_cache: HashMap<(String, String), bool> = HashMap::new();
         let mut found: HashMap<String, Vec<Plugin>> = HashMap::new();
         let mut test_ids: HashMap<String, HashSet<String>> = HashMap::new();
         let mut uncertain: HashSet<String> = HashSet::new();
         for (path, declaration) in index.declarations() {
-            if declaration.kind != SymbolKind::Class {
+            if !filter.in_scope(path) || declaration.kind != SymbolKind::Class {
                 continue;
             }
             let tests = in_tests(&root, path);

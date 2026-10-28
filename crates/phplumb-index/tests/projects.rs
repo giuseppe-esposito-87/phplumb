@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use phplumb_index::Index;
 use phplumb_index::discover::DiscoverOptions;
+use phplumb_index::frameworks::drupal::Drupal;
 use phplumb_index::frameworks::{Activation, FrameworkSettings, Project};
 use tempfile::TempDir;
 
@@ -138,4 +139,53 @@ fn project_contains_compares_whole_components() {
     assert!(!project.contains(Path::new("/p/drupal2/x.php")));
     assert!(!project.contains(Path::new("/p/drupal/sub/x.php")));
     assert!(project.contains(Path::new("/p/drupal/subway/x.php")));
+}
+
+/// The fixture of a Symfony project holding a Drupal codebase.
+fn nested() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/projects")
+        .canonicalize()
+        .unwrap()
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+fn drupal(index: &Index) -> &Drupal {
+    index.framework::<Drupal>().expect("drupal is active")
+}
+
+#[test]
+fn drupal_reads_only_its_project() {
+    let index = auto(&nested());
+    assert!(drupal(&index).defines_route("demo.page"));
+    assert!(drupal(&index).defines_route("demo.attr"));
+    assert!(!drupal(&index).defines_route("symfony_home"));
+}
+
+#[test]
+fn updates_outside_the_drupal_project_are_ignored() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dir(&nested(), &root);
+    let mut index = auto(&root);
+    let late = root.join("src/Controller/LateController.php");
+    fs::write(
+        &late,
+        "<?php\nnamespace App\\Controller;\nuse Symfony\\Component\\Routing\\Attribute\\Route;\nclass LateController\n{\n    #[Route('/late', name: 'symfony_late')]\n    public function late(): void {}\n}\n",
+    )
+    .unwrap();
+    index.update(&[late], &[]);
+    assert!(!drupal(&index).defines_route("symfony_late"));
 }

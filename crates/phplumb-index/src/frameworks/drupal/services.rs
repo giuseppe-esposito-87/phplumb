@@ -43,7 +43,7 @@ impl Services {
             root: filter.root().to_path_buf(),
             ..Services::default()
         };
-        for path in drupal_files(filter, filter.root(), SERVICES, Tests::Include) {
+        for path in drupal_files(filter, filter.start(), SERVICES, Tests::Include) {
             services.by_file.insert(path.clone(), parse_file(&path));
         }
         services.reindex();

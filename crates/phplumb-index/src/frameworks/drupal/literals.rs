@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::discover::chosen_path;
+use crate::filter::PathFilter;
 use crate::index::Index;
 use crate::infer;
 use rayon::prelude::*;
@@ -60,16 +61,21 @@ pub(crate) struct PhpLiterals {
 }
 
 impl PhpLiterals {
-    pub(crate) fn read(index: &Index) -> PhpLiterals {
+    pub(crate) fn read(index: &Index, filter: &PathFilter) -> PhpLiterals {
         let mut literals = PhpLiterals::default();
-        literals.refresh(index);
+        literals.refresh(index, filter);
         literals
     }
 
     /// Reads the changed files again, under the paths the index chose for them, and
     /// drops the removed ones.
-    pub(crate) fn update(&mut self, changed: &[PathBuf], removed: &[PathBuf], index: &Index) {
-        let filter = index.filter();
+    pub(crate) fn update(
+        &mut self,
+        changed: &[PathBuf],
+        removed: &[PathBuf],
+        index: &Index,
+        filter: &PathFilter,
+    ) {
         for path in removed.iter().chain(changed) {
             let path = filter.under_root(path);
             let chosen = chosen_path(filter.root(), &path).map(|(_, chosen)| chosen);
@@ -77,7 +83,7 @@ impl PhpLiterals {
                 !file.starts_with(&path) && chosen.as_ref().is_none_or(|c| !file.starts_with(c))
             });
         }
-        self.refresh(index);
+        self.refresh(index, filter);
     }
 
     /// Whether a service id shape matches `id`.
@@ -91,10 +97,11 @@ impl PhpLiterals {
     }
 
     /// Reads the candidate files not read yet, then gathers every file's share.
-    fn refresh(&mut self, index: &Index) {
+    fn refresh(&mut self, index: &Index, filter: &PathFilter) {
         let candidates = |keys: Vec<RefKey>| -> HashSet<PathBuf> {
             keys.iter()
                 .flat_map(|key| index.candidate_files(key))
+                .filter(|path| filter.in_scope(path))
                 .map(Path::to_path_buf)
                 .collect()
         };

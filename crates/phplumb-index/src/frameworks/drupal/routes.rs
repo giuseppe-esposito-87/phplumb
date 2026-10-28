@@ -78,7 +78,7 @@ impl Routes {
             root: filter.root().to_path_buf(),
             ..Routes::default()
         };
-        for path in drupal_files(filter, filter.root(), ROUTING, Tests::Include) {
+        for path in drupal_files(filter, filter.start(), ROUTING, Tests::Include) {
             routes.insert(path);
         }
         routes.reindex();
@@ -123,10 +123,13 @@ impl Routes {
     /// `Class::method`, and an invokable class with one route is also `Class` and
     /// `Class::__invoke`. A name that is not a literal string makes route names
     /// uncertain.
-    pub(crate) fn read_attributes(&mut self, index: &Index) {
+    pub(crate) fn read_attributes(&mut self, index: &Index, filter: &PathFilter) {
         let mut found = Vec::new();
         let mut uncertain = false;
         for (path, declaration) in index.declarations() {
+            if !filter.in_scope(path) {
+                continue;
+            }
             let Some(shape) = &declaration.class else {
                 continue;
             };

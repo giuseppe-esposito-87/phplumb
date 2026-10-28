@@ -7,7 +7,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 
 use crate::composer::VendorFilter;
 use crate::discover::DiscoverOptions;
-use crate::frameworks::{self, Framework};
+use crate::frameworks::{self, Framework, Project};
 
 /// The extension of PHP source files in every project.
 pub const PHP_EXTENSION: &str = "php";
@@ -35,6 +35,8 @@ pub struct PathFilter {
     vendor_filters: HashMap<PathBuf, Option<VendorFilter>>,
     /// Extensions of the files read as PHP.
     extensions: Vec<&'static str>,
+    /// The framework project the filter is limited to, if any.
+    scope: Option<Project>,
 }
 
 impl PathFilter {
@@ -56,12 +58,41 @@ impl PathFilter {
             max_file_bytes: opts.max_file_bytes,
             vendor_filters: HashMap::new(),
             extensions: frameworks::extensions(active),
+            scope: None,
         })
+    }
+
+    /// The same rules, limited to the files of `project`.
+    pub(crate) fn scoped(&self, project: &Project) -> PathFilter {
+        PathFilter {
+            root: self.root.clone(),
+            given_root: self.given_root.clone(),
+            exclude: self.exclude.clone(),
+            exclude_patterns: self.exclude_patterns.clone(),
+            max_file_bytes: self.max_file_bytes,
+            vendor_filters: HashMap::new(),
+            extensions: self.extensions.clone(),
+            scope: Some(project.clone()),
+        }
+    }
+
+    /// Where walks start: the project directory, or the root without a project.
+    pub(crate) fn start(&self) -> &Path {
+        self.scope
+            .as_ref()
+            .map_or(&self.root, |project| &project.dir)
+    }
+
+    /// Whether `path`, under the canonical root, is inside the project, if any.
+    pub(crate) fn in_scope(&self, path: &Path) -> bool {
+        self.scope
+            .as_ref()
+            .is_none_or(|project| project.contains(path))
     }
 
     /// Whether `relative`, a path relative to the root, matches an exclusion.
     pub(crate) fn excludes(&self, relative: &Path) -> bool {
-        self.exclude.is_match(relative)
+        self.exclude.is_match(relative) || !self.in_scope(&self.root.join(relative))
     }
 
     /// Whether the user excluded any paths from the index.
@@ -100,8 +131,10 @@ impl PathFilter {
     /// Whether files inside `dir`, a directory under the canonical root, can belong
     /// to the index: it is inside the root and neither hidden nor `node_modules`.
     pub(crate) fn accepts_dir(&self, dir: &Path) -> bool {
-        dir.strip_prefix(&self.root)
-            .is_ok_and(|relative| !has_skipped_component(relative))
+        self.in_scope(dir)
+            && dir
+                .strip_prefix(&self.root)
+                .is_ok_and(|relative| !has_skipped_component(relative))
     }
 
     /// The path rules alone, without touching the file itself. `path` is under the
@@ -110,7 +143,8 @@ impl PathFilter {
         let Ok(relative) = path.strip_prefix(&self.root) else {
             return false;
         };
-        if !self.has_php_extension(path)
+        if !self.in_scope(path)
+            || !self.has_php_extension(path)
             || self.exclude.is_match(relative)
             || has_skipped_component(relative)
         {
