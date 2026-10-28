@@ -23,7 +23,7 @@ pub(crate) fn supertype_args(
 ) -> Option<Vec<TypeExpr>> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut pending: VecDeque<(String, Vec<TypeExpr>)> = VecDeque::new();
-    pending.push_back((class.to_string(), args.to_vec()));
+    pending.push_back((class.to_string(), written_args(index, class, args)));
     while let Some((next, next_args)) = pending.pop_front() {
         if next.eq_ignore_ascii_case(ancestor) {
             return Some(next_args);
@@ -73,10 +73,39 @@ pub(crate) fn substitute(ty: &TypeExpr, templates: &[String], args: &[TypeExpr])
     }
 }
 
-/// The type of the values `foreach` gives over a value of type `ty`. A class
-/// written with one argument that is `Traversable` gives that argument, as
-/// `\Iterator<Item>` does; any other class gives the value argument it passes to
-/// `Traversable`.
+/// The arguments `class<args>` gives its own templates. One argument on a
+/// `Traversable` class with several templates is its value, as analyzers read
+/// `\Iterator<Item>`: the iterator interfaces and `Generator` bind it to their value
+/// template, and other such classes leave every template unknown. Any other
+/// arguments bind in order.
+fn written_args(index: &Index, class: &str, args: &[TypeExpr]) -> Vec<TypeExpr> {
+    if args.len() != 1 || templates_of(index, class).len() < 2 {
+        return args.to_vec();
+    }
+    let value = args[0].clone();
+    match class.to_ascii_lowercase().as_str() {
+        "traversable" | "iterator" | "iteratoraggregate" => vec![TypeExpr::Other, value],
+        "generator" => vec![TypeExpr::Other, value, TypeExpr::Other, TypeExpr::Other],
+        _ if reaches(index, class, "Traversable") => Vec::new(),
+        _ => args.to_vec(),
+    }
+}
+
+/// The templates `class` declares.
+fn templates_of(index: &Index, class: &str) -> Vec<String> {
+    index
+        .classes_named(class)
+        .iter()
+        .filter_map(|c| c.declaration.class.as_ref())
+        .map(|shape| shape.templates.clone())
+        .find(|templates| !templates.is_empty())
+        .unwrap_or_default()
+}
+
+/// The type of the values `foreach` gives over a value of type `ty`. A
+/// `Traversable` class written with one argument, unless it declares exactly one
+/// template, gives that argument; any other class gives the value argument it
+/// passes to `Traversable`.
 pub(crate) fn element_type(index: &Index, ty: &TypeExpr) -> TypeExpr {
     match ty {
         TypeExpr::ArrayOf(element) => (**element).clone(),
@@ -87,7 +116,9 @@ pub(crate) fn element_type(index: &Index, ty: &TypeExpr) -> TypeExpr {
                 .collect(),
         ),
         TypeExpr::Generic { class, args }
-            if args.len() == 1 && reaches(index, class, "Traversable") =>
+            if args.len() == 1
+                && templates_of(index, class).len() != 1
+                && reaches(index, class, "Traversable") =>
         {
             args[0].clone()
         }
@@ -141,4 +172,14 @@ fn reaches(index: &Index, class: &str, root: &str) -> bool {
         );
     }
     false
+}
+
+/// The element of an array, for functions that read arrays only: objects give
+/// nothing, as PHP reads their properties or rejects them.
+pub(crate) fn array_element(ty: &TypeExpr) -> TypeExpr {
+    match ty {
+        TypeExpr::ArrayOf(element) => (**element).clone(),
+        TypeExpr::Union(members) => union(members.iter().map(array_element).collect()),
+        _ => TypeExpr::Other,
+    }
 }

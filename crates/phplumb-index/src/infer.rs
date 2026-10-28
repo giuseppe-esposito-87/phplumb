@@ -42,7 +42,7 @@ use mago_syntax::walker::Walker;
 
 use crate::calls::{self, CallKind};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
-use crate::generics::{element_type, offset_type, substitute, supertype_args};
+use crate::generics::{array_element, element_type, offset_type, substitute, supertype_args};
 use crate::index::{Index, Location};
 use crate::phpdoc::{TypeExpr, array_of, parse_docblock, parse_type};
 use crate::summary::{
@@ -2095,7 +2095,8 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                 .find(|(n, _)| *n == name)
                 .map(|(_, ty)| ty)
             });
-        if param.hint.is_none() && doc_type.is_none() {
+        // A variadic parameter collects several elements into an array.
+        if param.hint.is_none() && doc_type.is_none() && param.ellipsis.is_none() {
             return self.callback_param(scope, i, depth);
         }
         let declared = param.hint.as_ref().map(|hint| self.hint_type(hint));
@@ -2121,10 +2122,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             _ => return TypeExpr::Other,
         };
         match positional(arguments, array) {
-            Some(value) => element_type(
-                self.index,
-                &self.expr(value, value.span().start.offset, depth + 1),
-            ),
+            Some(value) => array_element(&self.expr(value, value.span().start.offset, depth + 1)),
             None => TypeExpr::Other,
         }
     }
@@ -2171,11 +2169,10 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         };
         match function.as_str() {
             "array_filter" | "array_values" | "array_reverse" | "array_slice" | "array_unique"
-            | "array_diff" | "array_intersect" | "iterator_to_array" => {
-                array_of(element_type(self.index, &first()))
-            }
+            | "array_diff" | "array_intersect" => array_of(array_element(&first())),
+            "iterator_to_array" => array_of(element_type(self.index, &first())),
             "reset" | "end" | "current" | "array_pop" | "array_shift" | "array_first"
-            | "array_last" => element_type(self.index, &first()),
+            | "array_last" => array_element(&first()),
             "array_map" => {
                 let hint = match positional(&call.argument_list, 0) {
                     Some(Expression::Closure(closure)) => closure.return_type_hint.as_ref(),
@@ -2371,12 +2368,22 @@ pub(crate) fn union(types: Vec<TypeExpr>) -> TypeExpr {
     }
 }
 
-/// The value of the argument at `position`, when it is positional. PHP puts every
-/// positional argument before the named ones.
+/// The value of the argument at `position`, when it and every argument before it
+/// are positional and none is spread. PHP puts every positional argument before
+/// the named ones.
 fn positional<'a, 'arena>(
     arguments: &'a ArgumentList<'arena>,
     position: usize,
 ) -> Option<&'a Expression<'arena>> {
+    // A spread argument before or at `position` moves every later one.
+    let spread = arguments
+        .arguments
+        .iter()
+        .take(position + 1)
+        .any(|argument| matches!(argument, Argument::Positional(a) if a.ellipsis.is_some()));
+    if spread {
+        return None;
+    }
     match arguments.arguments.iter().nth(position)? {
         Argument::Positional(argument) => Some(argument.value),
         Argument::Named(_) => None,

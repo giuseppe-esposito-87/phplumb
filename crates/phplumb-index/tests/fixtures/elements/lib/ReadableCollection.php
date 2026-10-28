@@ -15,6 +15,11 @@ interface ReadableCollection extends \IteratorAggregate
     public function first();
 
     /**
+     * @return TKey|null
+     */
+    public function key();
+
+    /**
      * @return array<TKey, T>
      */
     public function toArray();

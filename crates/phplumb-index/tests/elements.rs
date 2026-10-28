@@ -317,3 +317,62 @@ fn mixed_template_prefixes_keep_their_order() {
     assert_eq!(shape.templates, ["Lib\\TKey", "Lib\\T"]);
     assert_eq!(shape.generic_supertypes.len(), 1);
 }
+
+/// Go to definition on the `nth` `label()` of `app/Review.php`.
+fn in_review(index: &mut Index, nth: usize) -> Vec<(String, String)> {
+    described(&definition(index, "app/Review.php", "label()", nth))
+}
+
+#[test]
+fn one_template_iterables_walk_their_parents() {
+    let mut index = build();
+    assert_eq!(
+        in_review(&mut index, 0),
+        [("lib/Box.php".to_string(), "label".to_string())]
+    );
+}
+
+#[test]
+fn iterators_with_one_argument_bind_the_value() {
+    let mut index = build();
+    assert_eq!(in_review(&mut index, 1), item_label(), "current");
+    assert!(in_review(&mut index, 2).is_empty(), "key");
+}
+
+#[test]
+fn generators_with_one_argument_bind_the_value() {
+    let mut index = build();
+    assert_eq!(in_review(&mut index, 3), item_label(), "current");
+    assert!(in_review(&mut index, 4).is_empty(), "key");
+}
+
+#[test]
+fn collections_with_one_argument_give_only_the_element() {
+    let mut index = build();
+    assert_eq!(in_review(&mut index, 5), item_label(), "foreach");
+    assert!(in_review(&mut index, 6).is_empty(), "key");
+}
+
+#[test]
+fn spread_arguments_give_nothing() {
+    let mut index = build();
+    assert!(in_review(&mut index, 7).is_empty());
+}
+
+#[test]
+fn variadic_callback_parameters_get_nothing() {
+    let mut index = build();
+    let (path, source, offset) = at("app/Review.php", "$vs, $items", 0);
+    let hover = index.hover(&path, &source, offset);
+    assert!(
+        hover.as_ref().is_none_or(|h| !h.markdown.contains("Item")),
+        "{hover:?}"
+    );
+}
+
+#[test]
+fn objects_get_no_array_elements() {
+    let mut index = build();
+    assert!(in_review(&mut index, 8).is_empty(), "current");
+    assert!(in_review(&mut index, 9).is_empty(), "array_walk");
+}
