@@ -398,6 +398,11 @@ impl Index {
             .map(|class| {
                 self.frameworks
                     .iter()
+                    .filter(|f| {
+                        self.classes_named(class)
+                            .iter()
+                            .any(|c| f.project().contains(c.path))
+                    })
                     .filter_map(|f| f.annotation_classes(self, class, name))
                     .collect()
             })
@@ -433,6 +438,19 @@ impl Index {
     /// The framework modules active for this project.
     pub(crate) fn frameworks(&self) -> &[Box<dyn Framework>] {
         &self.frameworks
+    }
+
+    /// The active framework modules whose project holds `path`: the only ones asked
+    /// about the file.
+    pub(crate) fn frameworks_for<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> impl Iterator<Item = &'a dyn Framework> + 'a {
+        let path = self.filter.under_root(path);
+        self.frameworks
+            .iter()
+            .filter(move |f| f.project().contains(&path))
+            .map(|f| f.as_ref())
     }
 
     /// The project of the active framework module named `name`.
@@ -496,8 +514,7 @@ impl Index {
             .is_some_and(|n| n.ends_with(".api.php"));
         if !documentation {
             found.extend(
-                self.frameworks
-                    .iter()
+                self.frameworks_for(path)
                     .flat_map(|f| f.diagnostics(self, path, source)),
             );
         }
@@ -1202,7 +1219,7 @@ impl Index {
         if self.ids.contains_key(&key) {
             self.update(&[key], &[]);
         }
-        let call = self.call_site(source, offset);
+        let call = self.call_site(path, source, offset);
         let targets = match call {
             Some(_) => Vec::new(),
             None => self.targets(path, source, offset),
@@ -1235,7 +1252,7 @@ impl Index {
 
     /// The receiver classes and method name when the cursor is on a method call:
     /// `$x->m()`, `$x?->m()` or `X::m()`. The classes are empty for an unknown receiver.
-    fn call_site(&self, source: &[u8], offset: u32) -> Option<(Vec<String>, String)> {
+    fn call_site(&self, path: &Path, source: &[u8], offset: u32) -> Option<(Vec<String>, String)> {
         let summary = summarize(source);
         let covers = |start: u32, end: u32| start <= offset && offset <= end;
         if let Some(call) = summary.static_refs.iter().find(|r| covers(r.start, r.end)) {
@@ -1251,7 +1268,7 @@ impl Index {
             };
             return Some((class.into_iter().collect(), call.name.clone()));
         }
-        match infer::member_at(self, &summary, source, offset)? {
+        match infer::member_at(self, path, &summary, source, offset)? {
             (Receiver::Classes(classes), MemberKind::Method, name) => Some((classes, name)),
             _ => None,
         }
@@ -1321,7 +1338,7 @@ impl Index {
                             push(sub.path, d.name_start, d.name_end, &short_name(&d.fqn));
                         }
                     }
-                    for framework in &self.frameworks {
+                    for framework in self.frameworks_for(&target.path) {
                         for (location, name) in
                             framework.class_implementations(self, &declaration.fqn)
                         {
@@ -1365,6 +1382,7 @@ impl Index {
     /// What the active frameworks resolve a string argument at `offset` to.
     fn framework_strings(
         &self,
+        path: &Path,
         summary: &FileSummary,
         source: &[u8],
         offset: u32,
@@ -1372,15 +1390,14 @@ impl Index {
         if self.frameworks.is_empty() {
             return None;
         }
-        let argument = infer::string_argument_at(self, summary, source, offset)?;
+        let argument = infer::string_argument_at(self, path, summary, source, offset)?;
         let call = FrameworkCall {
             targets: &argument.targets,
             strings: &argument.strings,
             receiver: Some(&argument.receiver),
         };
         let found: Vec<(Location, String)> = self
-            .frameworks
-            .iter()
+            .frameworks_for(path)
             .flat_map(|f| f.string_targets(self, &call, argument.position, &argument.value))
             .collect();
         (!found.is_empty()).then_some(found)
@@ -1389,6 +1406,7 @@ impl Index {
     /// What the frameworks give for a string literal that is the value of an array key.
     fn framework_keyed_strings(
         &self,
+        path: &Path,
         summary: &FileSummary,
         source: &[u8],
         offset: u32,
@@ -1396,7 +1414,7 @@ impl Index {
         if self.frameworks.is_empty() {
             return None;
         }
-        let keyed = infer::keyed_string_at(self, summary, source, offset)?;
+        let keyed = infer::keyed_string_at(self, path, summary, source, offset)?;
         let call = keyed.call.as_ref().map(|argument| {
             let call = FrameworkCall {
                 targets: &argument.targets,
@@ -1406,8 +1424,7 @@ impl Index {
             (call, argument.position)
         });
         let found: Vec<(Location, String)> = self
-            .frameworks
-            .iter()
+            .frameworks_for(path)
             .flat_map(|f| {
                 f.keyed_string_targets(
                     self,
@@ -1471,8 +1488,7 @@ impl Index {
             })
         })?;
         let found: Vec<(Location, String)> = self
-            .frameworks
-            .iter()
+            .frameworks_for(path)
             .flat_map(|f| f.declaration_targets(self, &declaration))
             .collect();
         (!found.is_empty()).then_some(found)
@@ -1493,8 +1509,7 @@ impl Index {
                 return Vec::new();
             }
             return self
-                .frameworks
-                .iter()
+                .frameworks_for(path)
                 .flat_map(|f| f.file_targets(self, path, source, offset))
                 .collect();
         }
@@ -1578,7 +1593,8 @@ impl Index {
                 }
             };
         }
-        if let Some((receiver, kind, name)) = infer::member_at(self, &summary, source, offset) {
+        if let Some((receiver, kind, name)) = infer::member_at(self, path, &summary, source, offset)
+        {
             return match receiver {
                 Receiver::Classes(classes) => self.member_targets(&classes, kind, &name),
                 Receiver::Anonymous(i) => {
@@ -1587,10 +1603,10 @@ impl Index {
             };
         }
 
-        if let Some(found) = self.framework_strings(&summary, source, offset) {
+        if let Some(found) = self.framework_strings(path, &summary, source, offset) {
             return found;
         }
-        if let Some(found) = self.framework_keyed_strings(&summary, source, offset) {
+        if let Some(found) = self.framework_keyed_strings(path, &summary, source, offset) {
             return found;
         }
 

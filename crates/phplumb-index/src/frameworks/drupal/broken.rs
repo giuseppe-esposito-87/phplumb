@@ -123,7 +123,7 @@ pub(super) fn find(drupal: &Drupal, index: &Index, path: &Path, source: &[u8]) -
             }
         }
     }
-    for keyed in infer::keyed_strings(index, &summary, source) {
+    for keyed in infer::keyed_strings(index, path, &summary, source) {
         let call = keyed.keyed.call.as_ref().map(|argument| {
             (
                 FrameworkCall {

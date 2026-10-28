@@ -24,7 +24,7 @@ pub(crate) fn hover(index: &mut Index, path: &Path, source: &[u8], offset: u32) 
         .iter()
         .any(|r| r.start <= offset && offset <= r.end);
     if !on_static_member
-        && let Some((name, ty)) = infer::variable_at(index, &summary, source, offset)
+        && let Some((name, ty)) = infer::variable_at(index, path, &summary, source, offset)
     {
         return (ty != TypeExpr::Other).then(|| Hover {
             start,

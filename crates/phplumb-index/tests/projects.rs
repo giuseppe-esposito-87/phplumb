@@ -189,3 +189,45 @@ fn updates_outside_the_drupal_project_are_ignored() {
     index.update(&[late], &[]);
     assert!(!drupal(&index).defines_route("symfony_late"));
 }
+
+const SYMFONY_USES: &str = "src/Uses.php";
+const DRUPAL_USES: &str = "codebase/drupal/web/modules/custom/demo/src/Uses.php";
+
+/// Go to definition on `run` in the fixture file `file`.
+fn run_targets(index: &mut Index, file: &str) -> Vec<PathBuf> {
+    let path = nested().join(file);
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8_lossy(&source).find("run()").unwrap() as u32;
+    index
+        .definition(&path, &source, offset)
+        .into_iter()
+        .map(|location| location.path)
+        .collect()
+}
+
+fn diagnostics_in(index: &Index, file: &str) -> Vec<String> {
+    let path = nested().join(file);
+    let source = fs::read(&path).unwrap();
+    index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+}
+
+#[test]
+fn drupal_types_nothing_outside_its_project() {
+    let mut index = auto(&nested());
+    let thing = nested().join("codebase/drupal/web/modules/custom/demo/src/Thing.php");
+    assert_eq!(run_targets(&mut index, DRUPAL_USES), [thing]);
+    assert!(run_targets(&mut index, SYMFONY_USES).is_empty());
+}
+
+#[test]
+fn drupal_flags_nothing_outside_its_project() {
+    let index = auto(&nested());
+    let drupal = diagnostics_in(&index, DRUPAL_USES);
+    assert_eq!(drupal.len(), 1, "{drupal:?}");
+    assert!(drupal[0].contains("missing.service"), "{drupal:?}");
+    assert!(diagnostics_in(&index, SYMFONY_USES).is_empty());
+}

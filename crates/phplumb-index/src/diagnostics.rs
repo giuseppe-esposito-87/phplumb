@@ -95,7 +95,8 @@ pub(crate) fn find(index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic>
         ));
     }
 
-    for (start, end, name, receiver, kind) in infer::member_accesses(index, &summary, source) {
+    for (start, end, name, receiver, kind) in infer::member_accesses(index, path, &summary, source)
+    {
         if kind != MemberKind::Method || is_guarded(&name) {
             continue;
         }

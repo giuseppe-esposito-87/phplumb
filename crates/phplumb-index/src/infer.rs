@@ -91,6 +91,7 @@ pub(crate) enum Receiver {
 /// the cursor is on the member name of `$x->name` or `$x?->name()`.
 pub(crate) fn member_at(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
     offset: u32,
@@ -103,7 +104,7 @@ pub(crate) fn member_at(
         .accesses
         .iter()
         .find(|a| a.start <= offset && offset <= a.end)?;
-    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
     let receiver = match ctx.anonymous_this(access.object, access.start) {
         Some(range) => Receiver::Anonymous(range),
         None => Receiver::Classes(class_names(&ctx.expr(access.object, access.start, 0))),
@@ -126,6 +127,7 @@ pub(crate) struct StringArgument {
 /// `offset`.
 pub(crate) fn string_argument_at(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
     offset: u32,
@@ -136,7 +138,7 @@ pub(crate) fn string_argument_at(
     CallsWithArguments.walk_program(program, &mut calls);
     let mut facts = Facts::default();
     Collect.walk_program(program, &mut facts);
-    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
     calls
         .iter()
         .rev()
@@ -305,6 +307,7 @@ pub(crate) struct KeyedString {
 /// `$a[...]['key'] = 'value'` with a string literal key and value.
 pub(crate) fn keyed_string_at(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
     offset: u32,
@@ -315,7 +318,7 @@ pub(crate) fn keyed_string_at(
     CallsWithArguments.walk_program(program, &mut calls);
     let mut facts = Facts::default();
     Collect.walk_program(program, &mut facts);
-    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
     if let Some(((key, value), mut call)) = calls
         .iter()
         .rev()
@@ -389,6 +392,7 @@ pub(crate) struct KeyedStringAt {
 /// call whose positional argument is the array holding it, if any.
 pub(crate) fn keyed_strings(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
 ) -> Vec<KeyedStringAt> {
@@ -398,7 +402,7 @@ pub(crate) fn keyed_strings(
     CallsWithArguments.walk_program(program, &mut calls);
     let mut facts = Facts::default();
     Collect.walk_program(program, &mut facts);
-    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
     // The call around each element that sits directly in an array argument, by the
     // start of the element's value.
     let mut around: HashMap<u32, StringArgument> = HashMap::new();
@@ -530,7 +534,7 @@ pub(crate) fn calls_named(
     CallsWithArguments.walk_program(program, &mut calls);
     let mut facts = Facts::default();
     Collect.walk_program(program, &mut facts);
-    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
     let mut found: Vec<FoundCall> = calls
         .iter()
         .filter_map(|call| {
@@ -764,6 +768,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Vec<CallRef<'ast, 'arena>>> for CallsWit
 /// The variable whose name covers `offset` and its inferred type.
 pub(crate) fn variable_at(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
     offset: u32,
@@ -777,7 +782,7 @@ pub(crate) fn variable_at(
         .iter()
         .find(|(_, start, end)| *start <= offset && offset <= *end)
         .map(|(name, start, _)| (name.clone(), *start))?;
-    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
     let ty = ctx.var(&name, start, 0);
     Some((name, ty))
 }
@@ -786,11 +791,12 @@ pub(crate) fn variable_at(
 /// start and end of the member name, receiver, and kind.
 pub(crate) fn member_accesses_named(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
     name: &str,
 ) -> Vec<(u32, u32, Receiver, MemberKind)> {
-    accesses(index, summary, source, Some(name))
+    accesses(index, path, summary, source, Some(name))
         .into_iter()
         .map(|(start, end, _, receiver, kind)| (start, end, receiver, kind))
         .collect()
@@ -800,14 +806,16 @@ pub(crate) fn member_accesses_named(
 /// end of the member name, the name, receiver, and kind.
 pub(crate) fn member_accesses(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
 ) -> Vec<(u32, u32, String, Receiver, MemberKind)> {
-    accesses(index, summary, source, None)
+    accesses(index, path, summary, source, None)
 }
 
 fn accesses(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
     name: Option<&str>,
@@ -816,7 +824,7 @@ fn accesses(
     let program = parse_file_content(&arena, FileId::zero(), source);
     let mut facts = Facts::default();
     Collect.walk_program(program, &mut facts);
-    let ctx = Ctx::new(index, summary, program, source, &facts);
+    let ctx = Ctx::new(index, path, summary, program, source, &facts);
     facts
         .accesses
         .iter()
@@ -1394,6 +1402,8 @@ impl State {
 
 struct Ctx<'a, 'ast, 'arena> {
     index: &'a Index,
+    /// The file being read: frameworks answer only for files of their project.
+    path: &'a Path,
     summary: &'a FileSummary,
     program: &'arena Program<'arena>,
     source: &'a [u8],
@@ -1410,6 +1420,7 @@ struct Ctx<'a, 'ast, 'arena> {
 impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
     fn new(
         index: &'a Index,
+        path: &'a Path,
         summary: &'a FileSummary,
         program: &'arena Program<'arena>,
         source: &'a [u8],
@@ -1433,6 +1444,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             .collect();
         Ctx {
             index,
+            path,
             summary,
             program,
             source,
@@ -1659,8 +1671,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             receiver: Some(receiver),
         };
         self.index
-            .frameworks()
-            .iter()
+            .frameworks_for(self.path)
             .find_map(|framework| framework.call_type(self.index, &call))
     }
 
@@ -2212,8 +2223,11 @@ pub(crate) fn property_assignments(
     let mut paths: Vec<&Path> = index.classes_named(class).iter().map(|c| c.path).collect();
     paths.sort();
     paths.dedup();
-    let sources: Vec<Vec<u8>> = paths.iter().filter_map(|p| std::fs::read(p).ok()).collect();
-    let summaries: Vec<FileSummary> = sources.iter().map(|s| summarize(s)).collect();
+    let sources: Vec<(&Path, Vec<u8>)> = paths
+        .iter()
+        .filter_map(|p| std::fs::read(p).ok().map(|source| (*p, source)))
+        .collect();
+    let summaries: Vec<FileSummary> = sources.iter().map(|(_, s)| summarize(s)).collect();
     let mut current = PropertyTypes::new();
     for _ in 0..MAX_PASSES {
         let assigning = Assigning {
@@ -2224,8 +2238,8 @@ pub(crate) fn property_assignments(
             pending: Cell::new(false),
         };
         let mut next = PropertyTypes::new();
-        for (source, summary) in sources.iter().zip(&summaries) {
-            assignments_in(index, summary, source, &assigning, &mut next);
+        for ((path, source), summary) in sources.iter().zip(&summaries) {
+            assignments_in(index, path, summary, source, &assigning, &mut next);
         }
         let settled = !assigning.read_self.get() || next == current;
         current = next;
@@ -2240,6 +2254,7 @@ pub(crate) fn property_assignments(
 /// `assigning` computes.
 fn assignments_in(
     index: &Index,
+    path: &Path,
     summary: &FileSummary,
     source: &[u8],
     assigning: &Assigning<'_>,
@@ -2249,7 +2264,7 @@ fn assignments_in(
     let program = parse_file_content(&arena, FileId::zero(), source);
     let mut facts = Facts::default();
     Collect.walk_program(program, &mut facts);
-    let mut ctx = Ctx::new(index, summary, program, source, &facts);
+    let mut ctx = Ctx::new(index, path, summary, program, source, &facts);
     ctx.assigning = Some(assigning);
     let is_class = |name: &str| name.eq_ignore_ascii_case(&assigning.class);
     for fact in &facts.properties {

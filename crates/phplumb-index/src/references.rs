@@ -212,7 +212,7 @@ fn scan_file(
                 }
             }
             for (start, end, receiver, access_kind) in
-                infer::member_accesses_named(index, summary, source, name)
+                infer::member_accesses_named(index, path, summary, source, name)
             {
                 if access_kind != *kind {
                     continue;
