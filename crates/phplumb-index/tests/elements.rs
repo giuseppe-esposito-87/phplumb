@@ -199,3 +199,34 @@ fn cyclic_generic_supertypes_end() {
     let mut index = build();
     assert!(label(&mut index, "app/Uses.php", 5).is_empty());
 }
+
+#[test]
+fn template_returns_take_the_receiver_arguments() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Shelf.php", 7), item_label());
+}
+
+#[test]
+fn template_arrays_take_the_receiver_arguments() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Shelf.php", 8), item_label());
+}
+
+#[test]
+fn generic_returns_continue_the_chain() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Shelf.php", 9), item_label());
+}
+
+#[test]
+fn fewer_arguments_leave_templates_unknown() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Uses.php", 6), item_label());
+    assert!(label(&mut index, "app/Uses.php", 7).is_empty());
+}
+
+#[test]
+fn unbound_templates_give_nothing() {
+    let mut index = build();
+    assert!(label(&mut index, "app/Shelf.php", 10).is_empty());
+}

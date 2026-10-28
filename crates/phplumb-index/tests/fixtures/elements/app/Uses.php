@@ -50,3 +50,12 @@ function cyclic($loop): void
         $l->label();
     }
 }
+
+/**
+ * @param \Lib\Pair<Item> $pair
+ */
+function pair($pair): void
+{
+    $pair->first()->label();
+    $pair->second()->label();
+}

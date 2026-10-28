@@ -32,4 +32,14 @@ class Shelf
             $p->label();
         }
     }
+
+    public function members(): void
+    {
+        $this->items->first()->label();
+        foreach ($this->items->toArray() as $t) {
+            $t->label();
+        }
+        $this->items->filter(fn () => true)->first()->label();
+        $this->plain->first()->label();
+    }
 }

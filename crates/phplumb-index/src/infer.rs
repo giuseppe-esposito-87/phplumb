@@ -42,7 +42,7 @@ use mago_syntax::walker::Walker;
 
 use crate::calls::{self, CallKind};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
-use crate::generics::{element_type, offset_type};
+use crate::generics::{element_type, offset_type, substitute, supertype_args};
 use crate::index::{Index, Location};
 use crate::phpdoc::{TypeExpr, parse_docblock, parse_type};
 use crate::summary::{
@@ -1771,7 +1771,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
         static_class: Option<&str>,
     ) -> TypeExpr {
         let mut types = Vec::new();
-        for class in class_names(receiver) {
+        for (class, args) in classes_with_args(receiver) {
             let static_class = static_class.unwrap_or(&class);
             for (found, member) in self.index.find_member(&class, kind, name) {
                 let typed = match &member.ty {
@@ -1793,7 +1793,17 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     declaration.fqn.as_str()
                 };
                 let parent = declaration.class.as_ref().and_then(|s| s.parent.as_deref());
-                types.push(bind(ty, static_class, self_class, parent));
+                // The declaring class's templates take the arguments the receiver
+                // gives it; without any, they are unknown.
+                let ty = match &declaration.class {
+                    Some(shape) if !shape.templates.is_empty() => {
+                        let given = supertype_args(self.index, &class, &args, &declaration.fqn)
+                            .unwrap_or_default();
+                        substitute(ty, &shape.templates, &given)
+                    }
+                    _ => ty.clone(),
+                };
+                types.push(bind(&ty, static_class, self_class, parent));
             }
             if kind == MemberKind::Property {
                 types.extend(self.assigned_types(&class, name));
@@ -2192,6 +2202,18 @@ fn bind(ty: &TypeExpr, static_class: &str, self_class: &str, parent: Option<&str
                 .collect(),
         ),
         other => other.clone(),
+    }
+}
+
+/// The classes a type can be, each with the generic arguments it is written with.
+fn classes_with_args(ty: &TypeExpr) -> Vec<(String, Vec<TypeExpr>)> {
+    match ty {
+        TypeExpr::Generic { class, args } => vec![(class.clone(), args.clone())],
+        TypeExpr::Union(members) => members.iter().flat_map(classes_with_args).collect(),
+        _ => class_names(ty)
+            .into_iter()
+            .map(|class| (class, Vec::new()))
+            .collect(),
     }
 }
 
