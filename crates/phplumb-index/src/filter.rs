@@ -62,8 +62,10 @@ impl PathFilter {
         })
     }
 
-    /// The same rules, limited to the files of `project`.
+    /// The same rules, limited to the files of `project`. A project that covers the
+    /// whole root sets no scope, so checks stay as cheap as without one.
     pub(crate) fn scoped(&self, project: &Project) -> PathFilter {
+        let whole = project.dir == self.root && project.excluded.is_empty();
         PathFilter {
             root: self.root.clone(),
             given_root: self.given_root.clone(),
@@ -72,7 +74,7 @@ impl PathFilter {
             max_file_bytes: self.max_file_bytes,
             vendor_filters: HashMap::new(),
             extensions: self.extensions.clone(),
-            scope: Some(project.clone()),
+            scope: (!whole).then(|| project.clone()),
         }
     }
 

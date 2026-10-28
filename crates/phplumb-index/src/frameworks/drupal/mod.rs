@@ -176,18 +176,24 @@ impl Framework for Drupal {
         self.literals = PhpLiterals::read(index, &filter);
     }
 
-    /// Paths outside the Drupal project are dropped, apart from directories that
-    /// hold it.
+    /// Paths outside the Drupal project are dropped; a directory that holds the
+    /// project is read as the project.
     fn update(&mut self, index: &Index, changed: &[PathBuf], removed: &[PathBuf]) {
         let filter = index.filter().scoped(&self.project);
+        // A directory holding the project stands for the project itself.
         let ours = |paths: &[PathBuf]| -> Vec<PathBuf> {
             paths
                 .iter()
-                .filter(|path| {
+                .filter_map(|path| {
                     let path = filter.under_root(path);
-                    self.project.contains(&path) || self.project.dir.starts_with(&path)
+                    if self.project.contains(&path) {
+                        Some(path)
+                    } else if self.project.dir.starts_with(&path) {
+                        Some(self.project.dir.clone())
+                    } else {
+                        None
+                    }
                 })
-                .cloned()
                 .collect()
         };
         let (changed, removed) = (ours(changed), ours(removed));

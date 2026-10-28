@@ -231,3 +231,19 @@ fn drupal_flags_nothing_outside_its_project() {
     assert!(drupal[0].contains("missing.service"), "{drupal:?}");
     assert!(diagnostics_in(&index, SYMFONY_USES).is_empty());
 }
+
+#[test]
+fn updating_a_directory_that_holds_the_drupal_project_keeps_it() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dir(&nested(), &root);
+    let mut index = auto(&root);
+    for holder in [root.join("codebase"), root.clone()] {
+        index.update(std::slice::from_ref(&holder), &[]);
+        assert!(drupal(&index).defines_route("demo.page"), "{holder:?}");
+        assert!(
+            !drupal(&index).services("demo.thing").is_empty(),
+            "{holder:?}"
+        );
+    }
+}
