@@ -166,46 +166,60 @@ pub(crate) fn attribute_string_at(
     source: &[u8],
     offset: u32,
 ) -> Option<AttributeString> {
+    attribute_strings(summary, source)
+        .into_iter()
+        .find(|(found, end)| found.start <= offset && offset <= *end)
+        .map(|(found, _)| found)
+}
+
+/// Every string literal that is an argument of an attribute, with the attribute's
+/// class as the file's names resolve it, and where the literal's text ends.
+pub(crate) fn attribute_strings(
+    summary: &FileSummary,
+    source: &[u8],
+) -> Vec<(AttributeString, u32)> {
     let arena = LocalArena::new();
     let program = parse_file_content(&arena, FileId::zero(), source);
     let mut attributes: Vec<&Attribute<'_>> = Vec::new();
     Attributes.walk_program(program, &mut attributes);
-    attributes.iter().find_map(|attribute| {
-        let list = attribute.argument_list.as_ref()?;
-        list.arguments
-            .iter()
-            .enumerate()
-            .find_map(|(position, argument)| {
-                let (key, value) = match argument {
-                    PartialArgument::Positional(argument) => (None, argument.value),
-                    PartialArgument::Named(argument) => (
-                        Some(String::from_utf8_lossy(argument.name.value).into_owned()),
-                        argument.value,
-                    ),
-                    _ => return None,
-                };
-                let Expression::Literal(Literal::String(literal)) = value else {
-                    return None;
-                };
-                let span = literal.span();
-                if !(span.start.offset < offset && offset < span.end.offset) {
-                    return None;
-                }
-                let name_start = attribute.name.span().start.offset;
-                let attribute_name = summary
-                    .names
-                    .iter()
-                    .find(|n| n.start == name_start)
-                    .map(|n| n.fqn.clone())?;
-                Some(AttributeString {
-                    attribute: attribute_name,
+    let mut found = Vec::new();
+    for attribute in attributes {
+        let Some(list) = attribute.argument_list.as_ref() else {
+            continue;
+        };
+        let name_start = attribute.name.span().start.offset;
+        let Some(attribute_name) = summary.names.iter().find(|n| n.start == name_start) else {
+            continue;
+        };
+        for (position, argument) in list.arguments.iter().enumerate() {
+            let (key, value) = match argument {
+                PartialArgument::Positional(argument) => (None, argument.value),
+                PartialArgument::Named(argument) => (
+                    Some(String::from_utf8_lossy(argument.name.value).into_owned()),
+                    argument.value,
+                ),
+                _ => continue,
+            };
+            let Expression::Literal(Literal::String(literal)) = value else {
+                continue;
+            };
+            let Some(text) = literal.value else {
+                continue;
+            };
+            let span = literal.span();
+            found.push((
+                AttributeString {
+                    attribute: attribute_name.fqn.clone(),
                     key,
                     position,
-                    value: String::from_utf8_lossy(literal.value?).into_owned(),
+                    value: String::from_utf8_lossy(text).into_owned(),
                     start: span.start.offset + 1,
-                })
-            })
-    })
+                },
+                span.end.offset - 1,
+            ));
+        }
+    }
+    found
 }
 
 /// A method call under the cursor: what it targets, its literal arguments and

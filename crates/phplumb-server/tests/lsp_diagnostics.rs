@@ -180,3 +180,45 @@ fn diagnostics_can_be_disabled() {
     );
     client.shutdown();
 }
+
+#[test]
+fn diagnostics_refresh_after_yaml_changes() {
+    let ws = Workspace::new(&[
+        (
+            "composer.lock",
+            r#"{"packages": [{"name": "symfony/framework-bundle", "version": "8.1.0"}]}"#,
+        ),
+        (
+            "lib/AbstractController.php",
+            "<?php\nnamespace Symfony\\Bundle\\FrameworkBundle\\Controller;\nabstract class AbstractController\n{\n    protected function redirectToRoute(string $route): object { return new \\stdClass(); }\n}\n",
+        ),
+        (
+            "src/Uses.php",
+            "<?php\nnamespace App;\nuse Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController;\nclass Uses extends AbstractController\n{\n    public function run(): void\n    {\n        $this->redirectToRoute('later');\n    }\n}\n",
+        ),
+        ("config/routes.yaml", "home:\n    path: /\n"),
+    ]);
+    let mut client = ws.start(json!({
+        "capabilities": {"workspace": {"diagnostics": {"refreshSupport": true}}},
+    }));
+    let initial = client.wait_for_request("workspace/diagnostic/refresh");
+    client.reply_null(&initial);
+    assert_eq!(pull(&mut client, 2, &ws.uri("src/Uses.php")).len(), 1);
+
+    ws.write(
+        "config/routes.yaml",
+        "home:\n    path: /\nlater:\n    path: /later\n",
+    );
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": ws.uri("config/routes.yaml"), "type": 2}]}),
+    );
+    let after_change = client.wait_for_request("workspace/diagnostic/refresh");
+    client.reply_null(&after_change);
+
+    assert_eq!(
+        pull(&mut client, 3, &ws.uri("src/Uses.php")),
+        Vec::<Value>::new()
+    );
+    client.shutdown();
+}

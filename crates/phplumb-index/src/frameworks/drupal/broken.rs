@@ -8,10 +8,10 @@ use super::services::in_tests;
 use super::{Drupal, plugins};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::frameworks::ancestry::is_a;
-use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
+use crate::frameworks::{CallTarget, FoundCall, FrameworkCall, mentions};
 use crate::index::Index;
 use crate::infer;
-use crate::summary::{FileSummary, RefKey, summarize};
+use crate::summary::summarize;
 
 /// Containers whose `get(id)` takes a service id. A plain PSR container may be any
 /// other container.
@@ -199,14 +199,6 @@ fn undefined_plugin(
     }
     let short = manager.rsplit('\\').next().unwrap_or(manager);
     Some(format!("Undefined plugin '{id}' of {short}"))
-}
-
-/// Whether the summary mentions one of `classes`.
-fn mentions(summary: &FileSummary, classes: &[&str]) -> bool {
-    classes.iter().any(|class| {
-        let key = RefKey::Class(class.to_string()).hash();
-        summary.ref_keys.binary_search(&key).is_ok()
-    })
 }
 
 /// Whether a call looks an id up softly: a container's `get()` or a plugin manager's

@@ -14,17 +14,18 @@ use crate::index::Location;
 /// `config/services_<env>.yaml`, then `config/packages/*.yaml`, in path order.
 pub(crate) fn config_files(project: &Project, filter: &PathFilter) -> Vec<PathBuf> {
     let config = project.dir.join("config");
-    let mut files = yaml_files(&config, |name| {
+    let mut files = files_named(&config, |name| {
         name == "services.yaml" || (name.starts_with("services_") && name.ends_with(".yaml"))
     });
-    files.extend(yaml_files(&config.join("packages"), |name| {
+    files.extend(files_named(&config.join("packages"), |name| {
         name.ends_with(".yaml")
     }));
     files.retain(|path| filter.in_scope(path));
     files
 }
 
-fn yaml_files(dir: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+/// The files of `dir` whose name `keep` accepts, in path order.
+fn files_named(dir: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -142,10 +143,10 @@ pub(crate) fn top_blocks(root: &Yaml) -> Vec<&Yaml> {
     blocks
 }
 
-/// The parameter name of the `%name%` that holds `offset` in `text`; none for the
-/// `%%` escape, `%env(...)%` and the kernel's own `kernel.*` parameters.
-pub(crate) fn parameter_at(text: &str, offset: usize) -> Option<String> {
+/// Each `%name%` of `text` with the range of its name, `%%` escapes skipped.
+fn placeholders(text: &str) -> Vec<(&str, usize, usize)> {
     let bytes = text.as_bytes();
+    let mut found = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != b'%' {
@@ -156,18 +157,66 @@ pub(crate) fn parameter_at(text: &str, offset: usize) -> Option<String> {
             i += 2;
             continue;
         }
-        let close = i + 1 + text[i + 1..].find('%')?;
-        if i <= offset && offset <= close {
-            let name = &text[i + 1..close];
-            let readable = !name.is_empty()
-                && !name.contains(char::is_whitespace)
-                && !name.starts_with("env(")
-                && !name.starts_with("kernel.");
-            return readable.then(|| name.to_string());
-        }
+        let Some(length) = text[i + 1..].find('%') else {
+            break;
+        };
+        let close = i + 1 + length;
+        found.push((&text[i + 1..close], i + 1, close));
         i = close + 1;
     }
-    None
+    found
+}
+
+/// Whether a placeholder name is a parameter the configuration may define: not
+/// `%env(...)%` nor one of the kernel's own `kernel.*` parameters.
+fn readable(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(char::is_whitespace)
+        && !name.starts_with("env(")
+        && !name.starts_with("kernel.")
+}
+
+/// The parameter name of the `%name%` that holds `offset` in `text`; none for the
+/// `%%` escape, `%env(...)%` and the kernel's own `kernel.*` parameters.
+pub(crate) fn parameter_at(text: &str, offset: usize) -> Option<String> {
+    let (name, ..) = placeholders(text)
+        .into_iter()
+        .find(|(_, start, end)| *start <= offset + 1 && offset <= *end)?;
+    readable(name).then(|| name.to_string())
+}
+
+/// The parameter names written as `%name%` in `text`, each with its range, apart
+/// from `%env(...)%` and `kernel.*`.
+pub(crate) fn parameters_in(text: &str) -> Vec<(&str, usize, usize)> {
+    placeholders(text)
+        .into_iter()
+        .filter(|(name, ..)| readable(name))
+        .collect()
+}
+
+/// Whether the project has configuration the module does not read, which may define
+/// parameters: PHP configuration files, environment directories below
+/// `config/packages`, or YAML files that import others, also inside `when@<env>`.
+pub(crate) fn has_unread_configuration(project: &Project, files: &[PathBuf]) -> bool {
+    let config = project.dir.join("config");
+    let php = |name: &str| name.ends_with(".php");
+    let services_php = !files_named(&config, |name| {
+        php(name) && (name == "services.php" || name.starts_with("services_"))
+    })
+    .is_empty();
+    let packages = std::fs::read_dir(config.join("packages"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .any(|path| path.is_dir() || path.file_name().and_then(|n| n.to_str()).is_some_and(php));
+    let imports = files.iter().any(|file| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| yaml::parse(&text))
+            .is_some_and(|root| top_blocks(&root).iter().any(|b| b.get("imports").is_some()))
+    });
+    services_php || packages || imports
 }
 
 #[cfg(test)]

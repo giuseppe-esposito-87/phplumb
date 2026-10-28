@@ -9,21 +9,44 @@ use crate::frameworks::yaml::{self, Yaml};
 /// The placeholder for the project directory in configured paths.
 const PROJECT_DIR: &str = "%kernel.project_dir%";
 
+/// TwigBridge's form themes, which FrameworkBundle adds to the main namespace last.
+const FORM_THEMES: &str = "vendor/symfony/twig-bridge/Resources/views/Form";
+
+/// Whether a template name resolves to a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TemplateStatus {
+    Found(PathBuf),
+    /// Every directory of its namespace was read, and none holds it.
+    Missing,
+    /// Its namespace is not configured, or a directory of it cannot be read.
+    Unknown,
+}
+
 #[derive(Default)]
 pub(crate) struct Templates {
     /// Each directory with its namespace, `None` for the main namespace, in order;
     /// a directory the module cannot read is `None` and ends its namespace.
     paths: Vec<(Option<String>, Option<PathBuf>)>,
+    /// Whether Twig configuration the module does not read exists, so any namespace
+    /// may have more directories.
+    unknown: bool,
+    /// Whether an environment adds main-namespace directories or another
+    /// `default_path`, which the module leaves out.
+    main_unknown: bool,
 }
 
 impl Templates {
     /// The `twig.paths` entries of `config/packages/twig.yaml`, then
-    /// `default_path` (`templates` by default) when it exists. A `when@<env>` block
+    /// `default_path` (`templates` by default) when it exists, then TwigBridge's form
+    /// themes. A `when@<env>` block
     /// adds only namespaced paths, after the others, since its main-namespace paths
     /// and `default_path` would shadow the other environments' templates.
     pub(crate) fn read(project: &Project) -> Templates {
         let dir = &project.dir;
-        let mut templates = Templates::default();
+        let mut templates = Templates {
+            unknown: has_unread_twig_configuration(&dir.join("config/packages")),
+            ..Templates::default()
+        };
         let mut default_path = format!("{PROJECT_DIR}/templates");
         for name in ["twig.yaml", "twig.yml"] {
             let Ok(text) = std::fs::read_to_string(dir.join("config/packages").join(name)) else {
@@ -45,6 +68,7 @@ impl Templates {
                     .filter_map(|(_, value)| value.get("twig"));
                 for twig in environments {
                     templates.read_paths(dir, twig.get("paths"), false);
+                    templates.main_unknown |= twig.get("default_path").is_some();
                 }
             }
         }
@@ -53,6 +77,10 @@ impl Templates {
             Some(_) => {}
             None => templates.paths.push((None, None)),
         }
+        // Without the installed bridge, the main namespace is not known in full.
+        let form_themes = dir.join(FORM_THEMES);
+        let form_themes = form_themes.is_dir().then_some(form_themes);
+        templates.paths.push((None, form_themes));
         templates
     }
 
@@ -78,6 +106,7 @@ impl Templates {
         };
         for (path, namespace) in entries {
             if namespace.is_none() && !main {
+                self.main_unknown = true;
                 continue;
             }
             self.paths
@@ -88,30 +117,99 @@ impl Templates {
     /// The first existing file `name` names: `@Ns/rest` in `Ns`'s directories,
     /// anything else in the main namespace's.
     pub(crate) fn file(&self, name: &str) -> Option<PathBuf> {
+        match self.status(name) {
+            TemplateStatus::Found(path) => Some(path),
+            TemplateStatus::Missing | TemplateStatus::Unknown => None,
+        }
+    }
+
+    /// Whether `name` resolves to a file, as Twig's loader looks for it.
+    pub(crate) fn status(&self, name: &str) -> TemplateStatus {
         let (namespace, rest) = match name.strip_prefix('@') {
-            Some(named) => {
-                let (namespace, rest) = named.split_once('/')?;
-                (Some(namespace), rest)
-            }
+            Some(named) => match named.split_once('/') {
+                Some((namespace, rest)) => (Some(namespace), rest),
+                None => return TemplateStatus::Unknown,
+            },
             None => (None, name),
         };
         let rest = rest.trim_start_matches('/');
         if rest.is_empty() || rest.split('/').any(|part| part == "..") {
-            return None;
+            return TemplateStatus::Unknown;
         }
+        let mut configured = false;
         for (_, dir) in self
             .paths
             .iter()
             .filter(|(ns, _)| ns.as_deref() == namespace)
         {
+            configured = true;
             // Twig would look in an unreadable directory first: its answer is unknown.
-            let path = dir.as_ref()?.join(rest);
+            let Some(dir) = dir else {
+                return TemplateStatus::Unknown;
+            };
+            let path = dir.join(rest);
             if path.is_file() {
-                return Some(path);
+                return TemplateStatus::Found(path);
             }
         }
-        None
+        if configured && !self.unknown && !(namespace.is_none() && self.main_unknown) {
+            TemplateStatus::Missing
+        } else {
+            TemplateStatus::Unknown
+        }
     }
+
+    /// Whether `path` is inside one of the configured template directories.
+    pub(crate) fn holds(&self, path: &Path) -> bool {
+        self.paths
+            .iter()
+            .filter_map(|(_, dir)| dir.as_deref())
+            .any(|dir| path.starts_with(dir))
+    }
+}
+
+/// Whether `packages`, the `config/packages` directory, holds Twig configuration
+/// other than `twig.yaml` and `twig.yml`: `twig.php`, a `twig:` section in another
+/// file, or an environment directory with Twig configuration.
+fn has_unread_twig_configuration(packages: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(packages) else {
+        return false;
+    };
+    entries.flatten().map(|entry| entry.path()).any(|path| {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.is_dir() {
+            return std::fs::read_dir(&path)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| n.starts_with("twig."))
+                });
+        }
+        if name == "twig.yaml" || name == "twig.yml" {
+            return false;
+        }
+        if name.ends_with(".php") {
+            return name == "twig.php";
+        }
+        if !(name.ends_with(".yaml") || name.ends_with(".yml")) {
+            return false;
+        }
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| yaml::parse(&text))
+            .is_some_and(|root| {
+                super::config::top_blocks(&root)
+                    .iter()
+                    .any(|block| block.get("twig").is_some())
+            })
+    })
 }
 
 /// A configured path with the project directory filled in; relative paths are

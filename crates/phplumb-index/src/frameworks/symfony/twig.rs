@@ -7,6 +7,16 @@ const TEMPLATE_TAGS: [&str; 6] = ["extends", "include", "embed", "import", "from
 /// one being used.
 const LIST_TAGS: [&str; 2] = ["extends", "include"];
 
+/// What a name written in a template stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TwigName {
+    Route,
+    Template,
+}
+
+/// Tags whose content Twig outputs as written.
+const VERBATIM_TAGS: [(&str, &str); 2] = [("verbatim", "endverbatim"), ("raw", "endraw")];
+
 /// A string literal inside a Twig expression or tag.
 struct Literal {
     /// The range between the delimiters of the `{{ }}` or `{% %}` around it.
@@ -46,9 +56,124 @@ pub(crate) fn template_name_at(source: &[u8], offset: u32) -> Option<(String, u3
     .then(|| literal.value(source))
 }
 
+/// Every route name and template name `source` writes as a whole literal argument,
+/// with its range inside the quotes. Names a template may lack, in an element of a
+/// list or with `ignore missing`, are left out, as is text inside `verbatim`.
+pub(crate) fn names(source: &[u8]) -> Vec<(TwigName, String, u32, u32)> {
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i + 1 < source.len() {
+        let close: &[u8] = match &source[i..i + 2] {
+            b"{{" => b"}}",
+            b"{%" => b"%}",
+            b"{#" => b"#}",
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let start = i + 2;
+        let end = find(source, start, close).unwrap_or(source.len());
+        i = end + 2;
+        if close == b"#}" {
+            continue;
+        }
+        let tag = close == b"%}";
+        let text = String::from_utf8_lossy(&source[start..end]);
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if tag
+            && let Some((_, closing)) = VERBATIM_TAGS.iter().find(|(opening, _)| {
+                words.first().map(|w| w.trim_start_matches(['-', '~'])) == Some(*opening)
+            })
+        {
+            // Up to the closing tag, whatever its spacing.
+            while let Some(next) = find(source, i, b"{%") {
+                let after = find(source, next + 2, b"%}").unwrap_or(source.len());
+                let inner = String::from_utf8_lossy(&source[next + 2..after]);
+                i = after + 2;
+                if inner.trim().trim_matches(['-', '~']).trim() == *closing {
+                    break;
+                }
+            }
+            continue;
+        }
+        let optional =
+            words.join(" ").contains("ignore missing") || text.contains("ignore_missing");
+        for literal in block_literals(source, start, end, tag) {
+            // `#{...}` interpolates an expression into a double-quoted string.
+            let interpolated = source[literal.quote] == b'"'
+                && find(source, literal.content, b"#{").is_some_and(|at| at < literal.close);
+            if interpolated {
+                continue;
+            }
+            // `ignore_missing` is the 4th argument of `include()`, the 2nd of `source()`.
+            let lenient = |function: &str, arguments: usize| {
+                is_function_argument(source, &literal, &[function])
+                    && argument_count(source, &literal) >= arguments
+            };
+            let kind = if is_function_argument(source, &literal, &["path", "url"]) {
+                TwigName::Route
+            } else if optional || lenient("include", 4) || lenient("source", 2) {
+                continue;
+            } else if is_function_argument(source, &literal, &["include", "source"])
+                || (is_tag_argument(source, &literal) && !in_list(source, &literal))
+            {
+                TwigName::Template
+            } else {
+                continue;
+            };
+            let (name, start, end) = literal.value(source);
+            found.push((kind, name, start, end));
+        }
+    }
+    found
+}
+
+/// How many arguments the call whose first argument is the literal has, counting
+/// the commas at its own depth up to its closing parenthesis.
+fn argument_count(source: &[u8], literal: &Literal) -> usize {
+    let mut count = 1;
+    let mut depth = 0;
+    let mut i = literal.close + 1;
+    while i < literal.block.1 {
+        match source[i] {
+            quote @ (b'\'' | b'"') => {
+                i += 1;
+                while i < literal.block.1 && source[i] != quote {
+                    i += if source[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' if depth == 0 => break,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => count += 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    count
+}
+
+/// Whether the literal is an element of a list rather than the tag's argument.
+fn in_list(source: &[u8], literal: &Literal) -> bool {
+    let mut i = literal.quote;
+    while i > literal.block.0 && source[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    i > literal.block.0 && matches!(source[i - 1], b'[' | b',')
+}
+
 /// The string literal under `offset` inside a `{{ }}` or `{% %}`.
 fn literal_at(source: &[u8], offset: usize) -> Option<Literal> {
     let (start, end, tag) = block_at(source, offset)?;
+    block_literals(source, start, end, tag)
+        .into_iter()
+        .find(|literal| literal.content <= offset && offset <= literal.close)
+}
+
+/// The string literals of the block between `start` and `end`.
+fn block_literals(source: &[u8], start: usize, end: usize, tag: bool) -> Vec<Literal> {
+    let mut found = Vec::new();
     let mut i = start;
     while i < end {
         let quote = source[i];
@@ -62,18 +187,16 @@ fn literal_at(source: &[u8], offset: usize) -> Option<Literal> {
             j += if source[j] == b'\\' { 2 } else { 1 };
         }
         let close = j.min(end);
-        if content <= offset && offset <= close {
-            return Some(Literal {
-                block: (start, end),
-                tag,
-                quote: i,
-                content,
-                close,
-            });
-        }
+        found.push(Literal {
+            block: (start, end),
+            tag,
+            quote: i,
+            content,
+            close,
+        });
         i = close + 1;
     }
-    None
+    found
 }
 
 /// The `{{ }}` or `{% %}` around `offset`: the range between its delimiters, and

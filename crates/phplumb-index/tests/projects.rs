@@ -374,3 +374,259 @@ fn doctrine_xml_stays_in_its_project() {
     let offset = String::from_utf8_lossy(&source).find("Thing\"").unwrap() as u32;
     assert!(index.definition(&path, &source, offset).is_empty());
 }
+
+const ABSTRACT_CONTROLLER: &str = "<?php\nnamespace Symfony\\Bundle\\FrameworkBundle\\Controller;\nabstract class AbstractController\n{\n    protected function redirectToRoute(string $route): object { return new \\stdClass(); }\n    protected function getParameter(string $name): mixed { return null; }\n}\n";
+
+const BROKEN_USES: &str = "<?php\nnamespace App\\Controller;\nuse Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController;\nclass Uses extends AbstractController\n{\n    public function run(): void\n    {\n        $this->redirectToRoute('missing_route');\n        $this->getParameter('app.nowhere');\n    }\n}\n";
+
+/// A Symfony project with a controller that names a missing route and a missing
+/// parameter, a route and a parameter it defines, and `files`.
+fn broken_symfony(files: &[(&str, &str)]) -> (TempDir, PathBuf) {
+    let (dir, root) = project();
+    lock(&root, ".", SYMFONY_LOCK);
+    let mut all = vec![
+        ("lib/AbstractController.php", ABSTRACT_CONTROLLER),
+        ("src/Controller/Uses.php", BROKEN_USES),
+        ("config/routes.yaml", "home:\n    path: /\n"),
+        ("config/services.yaml", "parameters:\n    app.name: x\n"),
+    ];
+    all.extend_from_slice(files);
+    for (file, content) in all {
+        let path = root.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    (dir, root)
+}
+
+fn broken_messages(root: &Path) -> Vec<String> {
+    let index = auto(root);
+    let path = root.join("src/Controller/Uses.php");
+    let source = fs::read(&path).unwrap();
+    index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+}
+
+#[test]
+fn certain_symfony_projects_flag_missing_names() {
+    let (_dir, root) = broken_symfony(&[]);
+    assert_eq!(
+        broken_messages(&root),
+        [
+            "Undefined route 'missing_route'",
+            "Undefined parameter 'app.nowhere'"
+        ]
+    );
+}
+
+#[test]
+fn unknown_route_imports_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "config/routes/acme.yaml",
+        "acme:\n    resource: '@AcmeBundle/Resources/config/routes.yaml'\n",
+    )]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn unreadable_route_names_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[
+        (
+            "lib/Route.php",
+            "<?php\nnamespace Symfony\\Component\\Routing\\Attribute;\n#[\\Attribute]\nclass Route\n{\n    public function __construct(string $path = '', ?string $name = null) {}\n}\n",
+        ),
+        (
+            "src/Controller/Named.php",
+            "<?php\nnamespace App\\Controller;\nuse Symfony\\Component\\Routing\\Attribute\\Route;\nclass Named\n{\n    const ROUTE = 'named';\n    #[Route('/named', name: self::ROUTE)]\n    public function show(): void {}\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn php_route_files_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[("config/routes/extra.php", "<?php\n")]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn php_configuration_silences_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[("config/services.php", "<?php\n")]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+#[test]
+fn computed_set_parameter_names_silence_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[
+        (
+            "lib/ContainerBuilder.php",
+            "<?php\nnamespace Symfony\\Component\\DependencyInjection;\nclass ContainerBuilder\n{\n    public function setParameter(string $name, mixed $value): void {}\n}\n",
+        ),
+        (
+            "src/Pass.php",
+            "<?php\nnamespace App;\nuse Symfony\\Component\\DependencyInjection\\ContainerBuilder;\nclass Pass\n{\n    public function process(ContainerBuilder $container, string $name): void\n    {\n        $container->setParameter('app.literal', 1);\n        $container->setParameter($name, 1);\n    }\n}\n",
+        ),
+    ]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+#[test]
+fn diagnostics_stay_in_their_module() {
+    let index = auto(&nested());
+    // The Drupal route is not a Symfony route.
+    assert_eq!(
+        diagnostics_in(&index, "templates/demo.html.twig"),
+        ["Undefined route 'demo.page'"]
+    );
+    assert!(
+        diagnostics_in(
+            &index,
+            "codebase/drupal/web/modules/custom/demo/demo.services.yml"
+        )
+        .is_empty()
+    );
+    assert!(diagnostics_in(&index, "config/services.yaml").is_empty());
+}
+
+#[test]
+fn the_compiled_container_is_not_configuration() {
+    let (_dir, root) = broken_symfony(&[(
+        "var/cache/dev/Container.php",
+        "<?php\nnamespace ContainerX;\nuse Symfony\\Component\\Config\\Loader\\LoaderInterface;\nclass Container\n{\n    public function load(LoaderInterface $loader, $c, string $name): void\n    {\n        $c->setParameter($name, 1);\n    }\n}\n",
+    )]);
+    assert_eq!(
+        broken_messages(&root),
+        [
+            "Undefined route 'missing_route'",
+            "Undefined parameter 'app.nowhere'"
+        ]
+    );
+}
+
+#[test]
+fn annotation_route_imports_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "config/routes/annotations.yaml",
+        "controllers:\n    resource: ../../src/Controller/\n    type: annotation\n",
+    )]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn class_route_imports_count_only_for_project_classes() {
+    let import = |class: &str| format!("acme:\n    resource: {class}\n    type: attribute\n");
+    let vendor = import("Acme\\Auth\\LoginController");
+    let (_dir, root) = broken_symfony(&[
+        ("config/routes/acme.yaml", vendor.as_str()),
+        (
+            "vendor/acme/auth/LoginController.php",
+            "<?php\nnamespace Acme\\Auth;\nclass LoginController {}\n",
+        ),
+    ]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+    let project = import("App\\Controller\\Uses");
+    let (_dir, root) = broken_symfony(&[("config/routes/uses.yaml", project.as_str())]);
+    assert_eq!(broken_messages(&root).len(), 2);
+}
+
+#[test]
+fn bundle_loaders_silence_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "src/Billing/BillingExtension.php",
+        "<?php\nnamespace App\\Billing;\nuse Symfony\\Component\\DependencyInjection\\Loader\\YamlFileLoader;\nclass BillingExtension\n{\n    public function load(YamlFileLoader $loader): void\n    {\n        $loader->load('services.yaml');\n    }\n}\n",
+    )]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+#[test]
+fn environment_imports_silence_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "config/packages/extra.yaml",
+        "when@prod:\n    imports:\n        - { resource: extra_prod.yaml }\n",
+    )]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+#[test]
+fn parameter_bag_sets_define_parameters() {
+    let (_dir, root) = broken_symfony(&[
+        (
+            "lib/ContainerBuilder.php",
+            "<?php\nnamespace Symfony\\Component\\DependencyInjection;\nuse Symfony\\Component\\DependencyInjection\\ParameterBag\\ParameterBagInterface;\nclass ContainerBuilder\n{\n    public function getParameterBag(): ParameterBagInterface {}\n}\n",
+        ),
+        (
+            "lib/ParameterBagInterface.php",
+            "<?php\nnamespace Symfony\\Component\\DependencyInjection\\ParameterBag;\ninterface ParameterBagInterface\n{\n    public function set(string $name, mixed $value): void;\n}\n",
+        ),
+        (
+            "src/Pass.php",
+            "<?php\nnamespace App;\nuse Symfony\\Component\\DependencyInjection\\ContainerBuilder;\nclass Pass\n{\n    public function process(ContainerBuilder $container): void\n    {\n        $container->getParameterBag()->set('app.nowhere', 1);\n    }\n}\n",
+        ),
+    ]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+/// The diagnostics of `templates/page.html.twig` in a Symfony project with `files`,
+/// where the page includes a template that exists nowhere.
+fn template_messages(files: &[(&str, &str)]) -> Vec<String> {
+    let mut all = vec![
+        (
+            "templates/page.html.twig",
+            "{% include 'nowhere.html.twig' %}\n",
+        ),
+        (
+            "vendor/symfony/twig-bridge/Resources/views/Form/form_div_layout.html.twig",
+            "",
+        ),
+    ];
+    all.extend_from_slice(files);
+    let (_dir, root) = broken_symfony(&all);
+    let index = auto(&root);
+    let path = root.join("templates/page.html.twig");
+    let source = fs::read(&path).unwrap();
+    index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+}
+
+#[test]
+fn unread_twig_configuration_silences_template_diagnostics() {
+    assert_eq!(
+        template_messages(&[]),
+        ["Undefined template 'nowhere.html.twig'"]
+    );
+    let unread: [(&str, &str); 3] = [
+        ("config/packages/twig.php", "<?php\n"),
+        (
+            "config/packages/views.yaml",
+            "twig:\n    paths: ['extra']\n",
+        ),
+        (
+            "config/packages/twig.yaml",
+            "when@dev:\n    twig:\n        paths: ['%kernel.project_dir%/dev']\n",
+        ),
+    ];
+    for file in unread {
+        assert!(template_messages(&[file]).is_empty(), "{file:?}");
+    }
+}

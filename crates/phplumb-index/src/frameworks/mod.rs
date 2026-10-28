@@ -19,7 +19,7 @@ use crate::filter::PHP_EXTENSION;
 use crate::index::{Index, Location};
 use crate::metadata::Metadata;
 use crate::phpdoc::TypeExpr;
-use crate::summary::{Declaration, Member, NameRef};
+use crate::summary::{Declaration, FileSummary, Member, NameRef, RefKey};
 
 pub use project::Project;
 
@@ -39,6 +39,14 @@ pub enum Activation {
 pub struct FrameworkSettings {
     pub drupal: Activation,
     pub symfony: Activation,
+}
+
+/// Whether the summary mentions one of `classes`.
+pub(crate) fn mentions(summary: &FileSummary, classes: &[&str]) -> bool {
+    classes.iter().any(|class| {
+        let key = RefKey::Class(class.to_string()).hash();
+        summary.ref_keys.binary_search(&key).is_ok()
+    })
 }
 
 /// What a framework sees of a call: what it targets and its literal arguments.

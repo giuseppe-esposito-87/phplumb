@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::filter::{PathFilter, is_yaml};
 use crate::frameworks::Project;
-use crate::frameworks::attributes::{RouteName, route_names};
+use crate::frameworks::attributes::{RouteName, has_route_aliases, route_names};
 use crate::frameworks::yaml::{self, Yaml};
 use crate::index::{Index, Location};
 use crate::summary::{Declaration, Member, MemberKind, SymbolKind};
@@ -18,9 +18,33 @@ pub struct RouteTarget {
     pub text: String,
 }
 
+/// Route resources of Symfony's bundles, whose routes all have names starting
+/// with `_`.
+const SYMFONY_RESOURCES: [&str; 5] = [
+    "@FrameworkBundle/",
+    "@WebProfilerBundle/",
+    "@SecurityBundle/",
+    "@TwigBundle/",
+    "security.route_loader.logout",
+];
+
+/// What a route import loads, as far as the module knows.
+enum Import {
+    /// Routes the module reads anyway: attribute routes of project code or a route
+    /// file it reads.
+    Read,
+    /// Routes of one of Symfony's bundles.
+    Symfony,
+    Unknown,
+}
+
 #[derive(Default)]
 pub(crate) struct Routes {
     by_name: HashMap<String, Vec<RouteTarget>>,
+    /// Whether a source of route names could not be read, so any name may exist.
+    unknown: bool,
+    /// Whether Symfony's own routes are imported.
+    symfony: bool,
 }
 
 impl Routes {
@@ -30,23 +54,46 @@ impl Routes {
         let mut routes = Routes::default();
         let mut routed: HashMap<String, bool> = HashMap::new();
         for (path, declaration) in index.declarations() {
+            if declaration.kind != SymbolKind::Class {
+                continue;
+            }
             // Path checks cost more than reading attributes, so they come last.
-            if declaration.kind == SymbolKind::Class
-                && has_routes(index, declaration, &mut routed)
-                && filter.in_scope(path)
-                && index.is_project_code(path)
-            {
-                routes.read_class(index, path, declaration);
+            let routing = has_routes(index, declaration, &mut routed);
+            let configures = declares_method(declaration, "configureRoutes");
+            if (routing || configures) && filter.in_scope(path) && index.is_project_code(path) {
+                // A kernel that configures its routes may load anything.
+                routes.unknown |= configures;
+                if routing {
+                    routes.read_class(index, path, declaration);
+                }
             }
         }
-        for file in route_files(&project.dir.join("config"), filter) {
-            routes.read_yaml(index, &file);
+        let config = project.dir.join("config");
+        let files = route_files(&config, filter);
+        routes.unknown |= has_unread_route_files(&config);
+        for file in &files {
+            routes.read_yaml(index, file, &files, &config);
         }
         routes
     }
 
     pub(crate) fn targets(&self, name: &str) -> &[RouteTarget] {
         self.by_name.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether no route is named `name`, as far as every source of route names was
+    /// read: an unread source, Symfony's own `_` routes, and the localized routes
+    /// `name.locale` of a route `name` keep it unknown.
+    pub(crate) fn missing(&self, name: &str) -> bool {
+        if self.unknown || !self.targets(name).is_empty() {
+            return false;
+        }
+        if self.symfony && name.starts_with('_') {
+            return false;
+        }
+        !name
+            .rsplit_once('.')
+            .is_some_and(|(base, _)| !self.targets(base).is_empty())
     }
 
     fn add(&mut self, name: String, target: RouteTarget) {
@@ -67,9 +114,13 @@ impl Routes {
         }
         let fqn = &class.fqn;
         let class_routes = route_names(&shape.metadata);
+        self.unknown |= has_route_aliases(&shape.metadata);
         let prefix = match class_routes.first() {
             Some(RouteName::Literal(prefix)) => prefix.clone(),
-            Some(RouteName::Unreadable) => return,
+            Some(RouteName::Unreadable) => {
+                self.unknown = true;
+                return;
+            }
             Some(RouteName::Missing) | None => String::new(),
         };
         let target = |(path, member): &(PathBuf, &Member)| RouteTarget {
@@ -86,6 +137,7 @@ impl Routes {
         for entry in &methods {
             let method = entry.1;
             let attributes = route_names(&method.metadata);
+            self.unknown |= has_route_aliases(&method.metadata);
             let mut defaults = 0;
             let mut names = Vec::new();
             for attribute in &attributes {
@@ -98,7 +150,7 @@ impl Routes {
                         ));
                         defaults += 1;
                     }
-                    RouteName::Unreadable => {}
+                    RouteName::Unreadable => self.unknown = true,
                 }
             }
             count += attributes.len();
@@ -127,7 +179,10 @@ impl Routes {
                         defaults += 1;
                         default_name(fqn, &invoke.1.name, defaults - 1)
                     }
-                    RouteName::Unreadable => continue,
+                    RouteName::Unreadable => {
+                        self.unknown = true;
+                        continue;
+                    }
                 };
                 invoke_routes.push(name.clone());
                 self.add(name, target(invoke));
@@ -143,13 +198,27 @@ impl Routes {
     }
 
     /// The routes of one YAML route file: top-level keys with a `path`, also inside
-    /// `when@<env>` blocks; imports define none.
-    fn read_yaml(&mut self, index: &Index, file: &Path) {
+    /// `when@<env>` blocks; imports define none, and say whether the routes they
+    /// load are known. `files` are the route files read, below `config`.
+    fn read_yaml(&mut self, index: &Index, file: &Path, files: &[PathBuf], config: &Path) {
         let Ok(text) = std::fs::read_to_string(file) else {
+            self.unknown = true;
             return;
         };
-        let Some(Yaml::Map(entries)) = yaml::parse(&text) else {
-            return;
+        let entries = match yaml::parse(&text) {
+            Some(Yaml::Map(entries)) => entries,
+            // A file of comments only holds no document.
+            None if text.lines().all(|line| {
+                let line = line.trim();
+                line.is_empty() || line.starts_with('#') || line == "---"
+            }) =>
+            {
+                return;
+            }
+            _ => {
+                self.unknown = true;
+                return;
+            }
         };
         let mut found: Vec<(&Yaml, &Yaml)> = Vec::new();
         for (key, value) in &entries {
@@ -170,7 +239,19 @@ impl Routes {
             else {
                 continue;
             };
-            if value.get("resource").is_some() || value.get("path").is_none() {
+            if value.get("resource").is_some() {
+                match import(index, file, value, files, config) {
+                    Import::Read => {}
+                    Import::Symfony => self.symfony = true,
+                    Import::Unknown => self.unknown = true,
+                }
+                continue;
+            }
+            if value.get("alias").is_some() {
+                self.unknown = true;
+                continue;
+            }
+            if value.get("path").is_none() {
                 continue;
             }
             let (start, end) = yaml::value_range(&text, name, *start, *end);
@@ -194,6 +275,107 @@ impl Routes {
             }
         }
     }
+}
+
+/// What the import `value` of the route file `file` loads.
+fn import(index: &Index, file: &Path, value: &Yaml, files: &[PathBuf], config: &Path) -> Import {
+    if value.get("name_prefix").is_some() {
+        return Import::Unknown;
+    }
+    let resource = value.get("resource");
+    let Some(resource) = resource
+        .and_then(Yaml::text)
+        .or_else(|| resource?.get("path")?.text())
+    else {
+        return Import::Unknown;
+    };
+    if resource == "routing.controllers" {
+        return Import::Read;
+    }
+    if SYMFONY_RESOURCES.iter().any(|r| resource.starts_with(r)) {
+        return Import::Symfony;
+    }
+    if resource.starts_with('@') || resource.contains(['*', '?', '{', '[']) {
+        return Import::Unknown;
+    }
+    let kind = value.get("type").and_then(Yaml::text);
+    // Routes in docblock annotations are not read.
+    if kind == Some("annotation") {
+        return Import::Unknown;
+    }
+    if kind == Some("attribute") {
+        // Attribute routes of project classes are read wherever they are.
+        if resource.contains('\\') && !resource.contains('/') {
+            let project = index
+                .classes_named(resource.trim_start_matches('\\'))
+                .iter()
+                .any(|class| index.is_project_code(class.path));
+            return if project {
+                Import::Read
+            } else {
+                Import::Unknown
+            };
+        }
+        let resolved = normalize(&file.parent().unwrap_or(config).join(resource));
+        let outside = config.parent().is_none_or(|dir| !resolved.starts_with(dir))
+            || resolved.components().any(|c| c.as_os_str() == "vendor");
+        return if outside {
+            Import::Unknown
+        } else {
+            Import::Read
+        };
+    }
+    if kind.is_some_and(|k| k != "yaml" && k != "directory") {
+        return Import::Unknown;
+    }
+    let resolved = normalize(&file.parent().unwrap_or(config).join(resource));
+    let read = files.contains(&resolved)
+        || (resolved.is_dir() && resolved.starts_with(config.join("routes")));
+    if read { Import::Read } else { Import::Unknown }
+}
+
+/// `path` with `.` and `..` components resolved without touching the disk.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Whether `config` holds route files the module does not read: `routes.php`, or
+/// PHP or XML files below `config/routes`.
+fn has_unread_route_files(config: &Path) -> bool {
+    fn below(dir: &Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        entries.flatten().map(|entry| entry.path()).any(|path| {
+            let kind = path.extension().and_then(|e| e.to_str());
+            if path.is_dir() {
+                below(&path)
+            } else {
+                matches!(kind, Some("php" | "xml"))
+            }
+        })
+    }
+    config.join("routes.php").is_file() || below(&config.join("routes"))
+}
+
+/// Whether `class` declares a method named `name`.
+fn declares_method(class: &Declaration, name: &str) -> bool {
+    class.class.as_ref().is_some_and(|shape| {
+        shape
+            .members
+            .iter()
+            .any(|m| m.kind == MemberKind::Method && m.name.eq_ignore_ascii_case(name))
+    })
 }
 
 /// Whether `class`, one of its traits or one of its parents has a `#[Route]`,

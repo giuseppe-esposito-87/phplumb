@@ -1,0 +1,4 @@
+when@dev:
+    _wdt:
+        resource: '@WebProfilerBundle/Resources/config/routing/wdt.php'
+        prefix: /_wdt

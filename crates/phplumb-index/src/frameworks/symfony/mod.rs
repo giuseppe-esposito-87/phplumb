@@ -1,5 +1,6 @@
 //! Symfony: the module that answers for a project built on the Symfony framework.
 
+mod broken;
 mod config;
 mod doctrine;
 mod messenger;
@@ -8,8 +9,9 @@ mod templates;
 mod twig;
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::diagnostics::Diagnostic;
 use crate::filter::is_doctrine_xml;
@@ -20,12 +22,13 @@ use crate::frameworks::{
 };
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
-use crate::summary::NameRef;
+use crate::summary::{NameRef, RefKey, summarize};
 
 use doctrine::Mappings;
 use messenger::Handlers;
 pub use routes::RouteTarget;
 use routes::Routes;
+pub use templates::TemplateStatus;
 use templates::Templates;
 
 /// Methods whose argument 0 is a route name, by the class that declares them.
@@ -72,6 +75,27 @@ const DISPATCH: [(&str, &[&str]); 1] = [(
     "Symfony\\Component\\Messenger\\MessageBusInterface",
     &["dispatch"],
 )];
+
+/// Classes whose `setParameter()` defines a container parameter.
+const PARAMETER_HOLDERS: [&str; 4] = [
+    "Symfony\\Component\\DependencyInjection\\Container",
+    "Symfony\\Component\\DependencyInjection\\ContainerBuilder",
+    "Symfony\\Component\\DependencyInjection\\ContainerInterface",
+    "Symfony\\Component\\DependencyInjection\\ParameterBag\\ParameterBagInterface",
+];
+
+/// Classes through which PHP code configures the container or loads configuration
+/// files, as kernels and bundle extensions do, so it may define any parameter.
+const CONFIGURATORS: [&str; 8] = [
+    "Symfony\\Component\\DependencyInjection\\Loader\\Configurator\\ContainerConfigurator",
+    "Symfony\\Component\\Config\\Loader\\LoaderInterface",
+    "Symfony\\Component\\DependencyInjection\\Loader\\YamlFileLoader",
+    "Symfony\\Component\\DependencyInjection\\Loader\\XmlFileLoader",
+    "Symfony\\Component\\DependencyInjection\\Loader\\PhpFileLoader",
+    "Symfony\\Component\\DependencyInjection\\Extension\\ExtensionInterface",
+    "Symfony\\Component\\DependencyInjection\\Extension\\Extension",
+    "Symfony\\Component\\HttpKernel\\DependencyInjection\\Extension",
+];
 
 /// The attribute that injects a parameter, service or value into an argument.
 const AUTOWIRE_ATTRIBUTE: &str = "Symfony\\Component\\DependencyInjection\\Attribute\\Autowire";
@@ -157,6 +181,11 @@ pub struct Symfony {
     handlers: Handlers,
     /// Parameter definitions, by name.
     parameters: HashMap<String, Vec<RouteTarget>>,
+    /// Whether configuration the module does not read may define parameters.
+    parameters_unknown: bool,
+    /// The parameters project code sets with `setParameter()`, or none when one of
+    /// those calls computes its name; found on first use after each read.
+    set_parameters: OnceLock<Option<HashSet<String>>>,
     /// Service definitions, by id.
     services: HashMap<String, Vec<RouteTarget>>,
     mappings: Mappings,
@@ -175,6 +204,98 @@ impl Symfony {
     /// The file the template `name` resolves to, as Twig's loader finds it.
     pub fn template_file(&self, name: &str) -> Option<PathBuf> {
         self.templates.file(name)
+    }
+
+    /// Whether the template `name` resolves to a file, is missing from every
+    /// directory of its namespace, or cannot be known.
+    pub fn template_status(&self, name: &str) -> TemplateStatus {
+        self.templates.status(name)
+    }
+
+    /// Whether no route is named `name`, with every source of route names read.
+    pub fn route_missing(&self, name: &str) -> bool {
+        self.routes.missing(name)
+    }
+
+    /// Whether no parameter is named `name`, with every source of parameters read.
+    /// Bundles define their own parameters, so only a name whose first segment
+    /// starts a parameter of the project counts; `kernel.*` and `env(...)` never do.
+    pub fn parameter_missing(&self, index: &Index, name: &str) -> bool {
+        if self.parameters_unknown
+            || self.parameters.contains_key(name)
+            || name.starts_with("kernel.")
+            || name.starts_with("env(")
+        {
+            return false;
+        }
+        let family = |name: &str| name.split('.').next().unwrap_or_default().to_string();
+        let ours = family(name);
+        if !self
+            .parameters
+            .keys()
+            .any(|defined| family(defined) == ours)
+        {
+            return false;
+        }
+        self.set_parameters(index)
+            .is_some_and(|set| !set.contains(name))
+    }
+
+    /// Whether `path` is code of the project, not a dependency nor what Symfony
+    /// generates in `var`, such as the compiled container.
+    fn is_source(&self, index: &Index, path: &Path) -> bool {
+        self.project.contains(path)
+            && index.is_project_code(path)
+            && !path.starts_with(self.project.dir.join("var"))
+    }
+
+    /// The literal names `setParameter()` calls and parameter bag `set()` calls in
+    /// project code give the container, or none when one of them is computed. Only
+    /// files that mention a container class are read: a `setParameter()` whose
+    /// receiver stays unknown there counts.
+    fn set_parameters(&self, index: &Index) -> Option<&HashSet<String>> {
+        self.set_parameters
+            .get_or_init(|| {
+                let holders: Vec<&Path> = PARAMETER_HOLDERS
+                    .iter()
+                    .flat_map(|class| index.candidate_files(&RefKey::Class(class.to_string())))
+                    .collect();
+                let mut files: Vec<&Path> = ["setParameter", "getParameterBag"]
+                    .iter()
+                    .flat_map(|name| index.candidate_files(&RefKey::Member(name.to_string())))
+                    .filter(|path| holders.contains(path))
+                    .filter(|path| self.is_source(index, path))
+                    .collect();
+                files.sort();
+                files.dedup();
+                let mut names = HashSet::new();
+                for path in files {
+                    let source = std::fs::read(path).ok()?;
+                    let summary = summarize(&source);
+                    let calls = crate::infer::calls_named(
+                        index,
+                        path,
+                        &summary,
+                        &source,
+                        &["setParameter", "set"],
+                    );
+                    for call in calls {
+                        let (start, end) = (call.location.start, call.location.end);
+                        let method = String::from_utf8_lossy(&source[start as usize..end as usize]);
+                        let holder = call.targets.iter().any(|target| {
+                            matches!(target, CallTarget::Method { class, .. }
+                                if is_a(index, class, &PARAMETER_HOLDERS))
+                        });
+                        let unknown =
+                            call.targets.is_empty() && method.eq_ignore_ascii_case("setParameter");
+                        if holder || unknown {
+                            names.insert(call.strings.first().cloned().flatten()?);
+                        }
+                    }
+                }
+                Some(names)
+            })
+            .as_ref()
     }
 
     /// The handler methods of the message class `message`, at their names.
@@ -300,6 +421,13 @@ impl Symfony {
         let filter = index.filter().scoped(&self.project);
         let files = config::config_files(&self.project, &filter);
         self.parameters = config::read_parameters(&files);
+        let configured_in_php = CONFIGURATORS
+            .iter()
+            .flat_map(|class| index.candidate_files(&RefKey::Class(class.to_string())))
+            .any(|path| self.is_source(index, path));
+        self.parameters_unknown =
+            configured_in_php || config::has_unread_configuration(&self.project, &files);
+        self.set_parameters = OnceLock::new();
         self.services = config::read_services(&files);
         self.mappings = Mappings::read(index, &filter, &self.mapping_files);
         self.routes = Routes::read(index, &filter, &self.project);
@@ -472,8 +600,19 @@ impl Framework for Symfony {
         Vec::new()
     }
 
-    fn diagnostics(&self, _index: &Index, _path: &Path, _source: &[u8]) -> Vec<Diagnostic> {
-        Vec::new()
+    /// Route, template and parameter names that are defined nowhere, in PHP, Twig
+    /// templates and YAML configuration.
+    fn diagnostics(&self, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+        if crate::filter::is_twig(path) {
+            return broken::find_in_twig(self, index, path, source);
+        }
+        if crate::filter::is_yaml(path) {
+            return broken::find_in_yaml(self, index, path, source);
+        }
+        if crate::filter::is_framework_file(path) {
+            return Vec::new();
+        }
+        broken::find(self, index, path, source)
     }
 
     fn class_implementations(&self, _index: &Index, _class: &str) -> Vec<(Location, String)> {

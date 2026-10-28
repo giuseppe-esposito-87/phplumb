@@ -342,8 +342,11 @@ impl Framework for Drupal {
         navigation::targets(self, index, path, source, offset)
     }
 
-    /// Service ids, route names and plugin ids defined nowhere on disk.
+    /// Service ids, route names and plugin ids in PHP defined nowhere on disk.
     fn diagnostics(&self, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+        if crate::filter::is_framework_file(path) {
+            return Vec::new();
+        }
         broken::find(self, index, path, source)
     }
 

@@ -2,6 +2,21 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 6g broken Symfony references
+
+Same machine and checkouts as step 6f. Route, template and parameter names defined nowhere are flagged in PHP, Twig and YAML, and the diagnostics sweep now also checks the YAML, Twig and Doctrine XML files below its directory. The build before this step ran first.
+
+| Metric               | Drupal reference                | Symfony reference          |
+| -------------------- | ------------------------------- | -------------------------- |
+| Member coverage      | 42,929, the same as before      | 13,097, the same as before |
+| Cold index           | 6.0 s (6.1 s before)            | 0.8 s (1.0 s before)       |
+| Update of one file   | 96 ms (95 ms before)            | 25 ms (24 ms before)       |
+| Peak resident memory | 612 MB                          | 260 MB                     |
+| All cases            | 87 passed, 7 failed, as before  | 31 passed, 0 failed        |
+| Diagnostics          | 94 in custom modules, as before | 0                          |
+
+The Symfony sweep covers `src`, `templates`, `config` and `tests` (1,047 files, slowest 5 ms) and finds no broken name. Its templates and parameters are certain: names injected into a template and into `services.yaml` were flagged in a probe. Its route names stay silent, because two routes are named by a class constant the module cannot read; a review copy with those two names written as literals found no route diagnostic either, and flagged an injected one. The Drupal sweep now also reads 1,256 YAML and Twig files of the custom modules, which get no diagnostic. A first run found no parameter diagnostic at all: the compiled container under `var/cache` counted as PHP configuration, and the module now leaves `var` out.
+
 ## 2026-10-28, step 6f Doctrine mapping
 
 Same machine and checkouts as step 6e. Class and property names in `*.orm.xml` mappings open their declarations, and `getRepository(X::class)` is typed from the mappings. The build before this step ran first.

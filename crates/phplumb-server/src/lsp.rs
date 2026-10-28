@@ -431,8 +431,18 @@ impl Server<'_> {
         let changed: Vec<PathBuf> = changed.into_iter().collect();
         let removed: Vec<PathBuf> = removed.into_iter().collect();
         let stats = index.update(&changed, &removed);
+        // YAML, Twig and XML files define what the frameworks check without being
+        // indexed themselves.
+        let framework_files = changed
+            .iter()
+            .chain(&removed)
+            .any(|path| phplumb_index::filter::is_framework_file(path));
         if stats.reparsed == 0 && stats.removed == 0 {
-            return Ok(());
+            return if framework_files {
+                self.refresh_diagnostics()
+            } else {
+                Ok(())
+            };
         }
         self.log_info(format!(
             "Reindexed {} files, removed {} in {} ms",
