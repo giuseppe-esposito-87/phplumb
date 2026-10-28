@@ -63,7 +63,12 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **`#[Template]` answers anywhere inside the attribute.** A cursor on another argument of the same attribute opens the template, because attribute arguments keep no positions. Found in the step 6c review.
 - **Some step 6c behaviour has no test.** `renderBlock()`, `renderBlockView()`, `stream()`, `Environment::display()` and `load()`, list-form and relative `paths`, a `default_path` override, and a Twig file of a nested Drupal project are untested. Found in the step 6c review.
 
-- **Some message flows are not followed.** Messages wrapped in `new Envelope(...)`, messages the Scheduler sends with `RecurringMessage`, handlers configured in YAML or service tags, handler methods a handler class inherits, and the `bus` and `fromTransport` options of `#[AsMessageHandler]` are not read. Found in step 6d.
+- **Some message flows are not followed.** Messages wrapped in `new Envelope(...)`, messages the Scheduler sends with `RecurringMessage`, handlers configured in YAML or service tags, handler methods a handler class inherits or takes from a trait, `handles: '*'` and namespace wildcards, `HandleTrait::handle()`, and named arguments such as `dispatch(message: new X())` are not read. Found in step 6d.
+- **Handlers of another bus are listed.** The `bus` and `fromTransport` options of `#[AsMessageHandler]` are not read, so a dispatch lists the handlers of every bus. Found in step 6d.
+- **An interface-typed message lists only that interface's handlers.** `dispatch($notify)` with `Notify $notify` misses the handlers of implementing classes, and those handlers do not list that dispatch. Found in the step 6d review.
+- **Every method-name definition pays for the dispatch check.** On a project with an active framework, `call_at` parses the file again for every definition on a method name; the Drupal coverage sweep went from about 11.5 to 13.6 s. Check the method name against the names frameworks answer before inference. Found in the step 6d review.
+- **Handlers under a symlinked root do not list their dispatches.** `handled_by` compares the request path with canonical handler paths. Found in the step 6d review.
+- **Some step 6d behaviour has no test.** A `dispatch()` on something other than a message bus, and multi-line and null-safe dispatch calls, are untested. Found in the step 6d review.
 - **A bare class-level `#[AsMessageHandler]` cannot lead to dispatches.** The attribute is only its name, which opens the attribute class; the handler method does lead to them. Found in step 6d.
 
 ## Accepted for now
