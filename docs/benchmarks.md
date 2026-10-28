@@ -2,6 +2,21 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 6e Symfony parameters and YAML
+
+Same machine and checkouts as step 6d. Parameter names in PHP attributes, `getParameter()` and YAML lead to their definitions, and class names and `@id` references in Symfony YAML configuration open their class or service. This time the build before this step ran first.
+
+| Metric               | Drupal reference                | Symfony reference          |
+| -------------------- | ------------------------------- | -------------------------- |
+| Member coverage      | 42,929, the same as before      | 13,097, the same as before |
+| Cold index           | 6.4 s (7.2 s before, run first) | 0.9 s                      |
+| Update of one file   | 99 ms (109 ms before)           | 19 ms, the same as before  |
+| Peak resident memory | 616 MB                          | 259 MB                     |
+| All cases            | 87 passed, 7 failed, as before  | 27 passed, 0 failed        |
+| Diagnostics          | 94, the same as before          | 0, the same as before      |
+
+All 41 parameter names in `#[Autowire]` attributes of the Symfony reference project resolve, apart from the kernel's and environment variables, which have no target. Every `@id` and class name in its `services.yaml` resolves; a probe that also matched `@sha256` image digests, `when@` keys and namespace prefixes found 75 of 83. New cases cover an `#[Autowire(param:)]` name, a `%x%` in YAML, a class key and an `@id` in `services.yaml`, and a kernel parameter expecting nothing.
+
 ## 2026-10-28, step 6d Symfony Messenger
 
 Same machine and checkouts as step 6c. `dispatch()` lists the handlers of its message, and a handler lists the dispatches of its messages. Both projects were measured with this branch and with the build before it.

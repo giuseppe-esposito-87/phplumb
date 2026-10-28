@@ -70,6 +70,9 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Some step 6d behaviour has no test.** A `dispatch()` on something other than a message bus, and multi-line and null-safe dispatch calls, are untested. Found in the step 6d review.
 - **A bare class-level `#[AsMessageHandler]` cannot lead to dispatches.** The attribute is only its name, which opens the attribute class; the handler method does lead to them. Found in step 6d.
 
+- **Some configuration is not read.** Services and parameters defined by bundles, in XML or PHP configuration, in `config/packages/*.yml` or `config/packages/<env>/`, and parameters set from PHP code give nothing; `_instanceof` and `bind` are not followed. Found in step 6e.
+- **`@id` on an alias opens the alias, not the service it points to.** Following aliases is one more click away. Found in step 6e.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.
