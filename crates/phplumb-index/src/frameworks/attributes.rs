@@ -17,6 +17,17 @@ pub(crate) enum RouteName {
     Missing,
 }
 
+/// Whether a route attribute in `metadata` gives its route aliases.
+pub(crate) fn has_route_aliases(metadata: &[Metadata]) -> bool {
+    metadata.iter().any(|m| {
+        !m.annotation
+            && ROUTE_ATTRIBUTES
+                .iter()
+                .any(|a| m.name.eq_ignore_ascii_case(a))
+            && m.argument("alias").is_some()
+    })
+}
+
 /// The names of the route attributes in `metadata`: the `name` argument, named or at
 /// position 1.
 pub(crate) fn route_names(metadata: &[Metadata]) -> Vec<RouteName> {

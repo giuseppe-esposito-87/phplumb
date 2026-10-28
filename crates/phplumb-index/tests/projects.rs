@@ -374,3 +374,110 @@ fn doctrine_xml_stays_in_its_project() {
     let offset = String::from_utf8_lossy(&source).find("Thing\"").unwrap() as u32;
     assert!(index.definition(&path, &source, offset).is_empty());
 }
+
+const ABSTRACT_CONTROLLER: &str = "<?php\nnamespace Symfony\\Bundle\\FrameworkBundle\\Controller;\nabstract class AbstractController\n{\n    protected function redirectToRoute(string $route): object { return new \\stdClass(); }\n    protected function getParameter(string $name): mixed { return null; }\n}\n";
+
+const BROKEN_USES: &str = "<?php\nnamespace App\\Controller;\nuse Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController;\nclass Uses extends AbstractController\n{\n    public function run(): void\n    {\n        $this->redirectToRoute('missing_route');\n        $this->getParameter('app.nowhere');\n    }\n}\n";
+
+/// A Symfony project with a controller that names a missing route and a missing
+/// parameter, a route and a parameter it defines, and `files`.
+fn broken_symfony(files: &[(&str, &str)]) -> (TempDir, PathBuf) {
+    let (dir, root) = project();
+    lock(&root, ".", SYMFONY_LOCK);
+    let mut all = vec![
+        ("lib/AbstractController.php", ABSTRACT_CONTROLLER),
+        ("src/Controller/Uses.php", BROKEN_USES),
+        ("config/routes.yaml", "home:\n    path: /\n"),
+        ("config/services.yaml", "parameters:\n    app.name: x\n"),
+    ];
+    all.extend_from_slice(files);
+    for (file, content) in all {
+        let path = root.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    (dir, root)
+}
+
+fn broken_messages(root: &Path) -> Vec<String> {
+    let index = auto(root);
+    let path = root.join("src/Controller/Uses.php");
+    let source = fs::read(&path).unwrap();
+    index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+}
+
+#[test]
+fn certain_symfony_projects_flag_missing_names() {
+    let (_dir, root) = broken_symfony(&[]);
+    assert_eq!(
+        broken_messages(&root),
+        [
+            "Undefined route 'missing_route'",
+            "Undefined parameter 'app.nowhere'"
+        ]
+    );
+}
+
+#[test]
+fn unknown_route_imports_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "config/routes/acme.yaml",
+        "acme:\n    resource: '@AcmeBundle/Resources/config/routes.yaml'\n",
+    )]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn unreadable_route_names_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[
+        (
+            "lib/Route.php",
+            "<?php\nnamespace Symfony\\Component\\Routing\\Attribute;\n#[\\Attribute]\nclass Route\n{\n    public function __construct(string $path = '', ?string $name = null) {}\n}\n",
+        ),
+        (
+            "src/Controller/Named.php",
+            "<?php\nnamespace App\\Controller;\nuse Symfony\\Component\\Routing\\Attribute\\Route;\nclass Named\n{\n    const ROUTE = 'named';\n    #[Route('/named', name: self::ROUTE)]\n    public function show(): void {}\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn php_route_files_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[("config/routes/extra.php", "<?php\n")]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn php_configuration_silences_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[("config/services.php", "<?php\n")]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+#[test]
+fn computed_set_parameter_names_silence_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[
+        (
+            "lib/ContainerBuilder.php",
+            "<?php\nnamespace Symfony\\Component\\DependencyInjection;\nclass ContainerBuilder\n{\n    public function setParameter(string $name, mixed $value): void {}\n}\n",
+        ),
+        (
+            "src/Pass.php",
+            "<?php\nnamespace App;\nuse Symfony\\Component\\DependencyInjection\\ContainerBuilder;\nclass Pass\n{\n    public function process(ContainerBuilder $container, string $name): void\n    {\n        $container->setParameter('app.literal', 1);\n        $container->setParameter($name, 1);\n    }\n}\n",
+        ),
+    ]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}

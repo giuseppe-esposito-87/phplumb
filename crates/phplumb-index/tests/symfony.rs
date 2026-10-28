@@ -950,7 +950,10 @@ fn string_repository_classes_are_qualified_and_must_exist() {
     );
     assert_eq!(
         definition_on_line(&mut index, POSTS, 25, "find("),
-        [pair("vendor/doctrine/persistence/src/ObjectRepository.php", "find")]
+        [pair(
+            "vendor/doctrine/persistence/src/ObjectRepository.php",
+            "find"
+        )]
     );
 }
 
@@ -974,5 +977,53 @@ fn excluded_mappings_are_not_read() {
     assert_eq!(
         symfony.repository_of("App\\Entity\\Post"),
         Some("App\\Repository\\PostRepository")
+    );
+}
+
+const BROKEN: &str = "src/Controller/BrokenController.php";
+
+/// The diagnostics of `file`, each as its message and the text at its range.
+fn diagnostics(index: &Index, file: &str) -> Vec<(String, String)> {
+    let path = fixture().join(file);
+    let source = std::fs::read(&path).unwrap();
+    index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| {
+            let text = String::from_utf8_lossy(&source[d.start as usize..d.end as usize]);
+            (d.message, text.into_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn broken_symfony_references_are_flagged() {
+    let index = build();
+    assert_eq!(
+        diagnostics(&index, BROKEN),
+        [
+            pair("Undefined parameter 'app.missing'", "app.missing"),
+            pair("Undefined parameter 'app.gone'", "app.gone"),
+            pair("Undefined route 'missing_route'", "missing_route"),
+            pair(
+                "Undefined template 'nowhere.html.twig'",
+                "nowhere.html.twig"
+            ),
+            pair("Undefined parameter 'app.nowhere'", "app.nowhere"),
+            pair("Undefined template 'gone.html.twig'", "gone.html.twig"),
+        ]
+    );
+}
+
+#[test]
+fn twig_bridge_form_themes_are_templates() {
+    let index = build();
+    let symfony = index.framework::<Symfony>().expect("symfony is active");
+    assert_eq!(
+        symfony.template_file("form_div_layout.html.twig"),
+        Some(
+            fixture()
+                .join("vendor/symfony/twig-bridge/Resources/views/Form/form_div_layout.html.twig")
+        )
     );
 }

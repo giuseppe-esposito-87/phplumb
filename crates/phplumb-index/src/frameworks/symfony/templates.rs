@@ -9,6 +9,19 @@ use crate::frameworks::yaml::{self, Yaml};
 /// The placeholder for the project directory in configured paths.
 const PROJECT_DIR: &str = "%kernel.project_dir%";
 
+/// TwigBridge's form themes, which FrameworkBundle adds to the main namespace last.
+const FORM_THEMES: &str = "vendor/symfony/twig-bridge/Resources/views/Form";
+
+/// Whether a template name resolves to a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TemplateStatus {
+    Found(PathBuf),
+    /// Every directory of its namespace was read, and none holds it.
+    Missing,
+    /// Its namespace is not configured, or a directory of it cannot be read.
+    Unknown,
+}
+
 #[derive(Default)]
 pub(crate) struct Templates {
     /// Each directory with its namespace, `None` for the main namespace, in order;
@@ -18,7 +31,8 @@ pub(crate) struct Templates {
 
 impl Templates {
     /// The `twig.paths` entries of `config/packages/twig.yaml`, then
-    /// `default_path` (`templates` by default) when it exists. A `when@<env>` block
+    /// `default_path` (`templates` by default) when it exists, then TwigBridge's form
+    /// themes. A `when@<env>` block
     /// adds only namespaced paths, after the others, since its main-namespace paths
     /// and `default_path` would shadow the other environments' templates.
     pub(crate) fn read(project: &Project) -> Templates {
@@ -53,6 +67,10 @@ impl Templates {
             Some(_) => {}
             None => templates.paths.push((None, None)),
         }
+        // Without the installed bridge, the main namespace is not known in full.
+        let form_themes = dir.join(FORM_THEMES);
+        let form_themes = form_themes.is_dir().then_some(form_themes);
+        templates.paths.push((None, form_themes));
         templates
     }
 
@@ -88,29 +106,46 @@ impl Templates {
     /// The first existing file `name` names: `@Ns/rest` in `Ns`'s directories,
     /// anything else in the main namespace's.
     pub(crate) fn file(&self, name: &str) -> Option<PathBuf> {
+        match self.status(name) {
+            TemplateStatus::Found(path) => Some(path),
+            TemplateStatus::Missing | TemplateStatus::Unknown => None,
+        }
+    }
+
+    /// Whether `name` resolves to a file, as Twig's loader looks for it.
+    pub(crate) fn status(&self, name: &str) -> TemplateStatus {
         let (namespace, rest) = match name.strip_prefix('@') {
-            Some(named) => {
-                let (namespace, rest) = named.split_once('/')?;
-                (Some(namespace), rest)
-            }
+            Some(named) => match named.split_once('/') {
+                Some((namespace, rest)) => (Some(namespace), rest),
+                None => return TemplateStatus::Unknown,
+            },
             None => (None, name),
         };
         let rest = rest.trim_start_matches('/');
         if rest.is_empty() || rest.split('/').any(|part| part == "..") {
-            return None;
+            return TemplateStatus::Unknown;
         }
+        let mut configured = false;
         for (_, dir) in self
             .paths
             .iter()
             .filter(|(ns, _)| ns.as_deref() == namespace)
         {
+            configured = true;
             // Twig would look in an unreadable directory first: its answer is unknown.
-            let path = dir.as_ref()?.join(rest);
+            let Some(dir) = dir else {
+                return TemplateStatus::Unknown;
+            };
+            let path = dir.join(rest);
             if path.is_file() {
-                return Some(path);
+                return TemplateStatus::Found(path);
             }
         }
-        None
+        if configured {
+            TemplateStatus::Missing
+        } else {
+            TemplateStatus::Unknown
+        }
     }
 }
 
