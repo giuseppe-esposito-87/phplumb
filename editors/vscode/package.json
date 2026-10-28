@@ -55,6 +55,16 @@
           "default": "auto",
           "description": "Drupal support, such as types for services. auto turns it on when a composer.lock in the project folder or up to three directories below it requires drupal/core."
         },
+        "phplumb.frameworks.symfony": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "default": "auto",
+          "description": "Symfony support. auto turns it on when a composer.lock in the project folder or up to three directories below it requires symfony/framework-bundle."
+        },
         "phplumb.trace.server": {
           "type": "string",
           "enum": [

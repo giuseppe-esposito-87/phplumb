@@ -17,7 +17,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Phplum
   context.subscriptions.push(
     vscode.commands.registerCommand("phplumb.restartServer", () => restart(context)),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      const restarts = ["phplumb.root", "phplumb.exclude", "phplumb.server.path", "phplumb.diagnostics.enabled", "phplumb.frameworks.drupal"];
+      const restarts = ["phplumb.root", "phplumb.exclude", "phplumb.server.path", "phplumb.diagnostics.enabled", "phplumb.frameworks.drupal", "phplumb.frameworks.symfony"];
       if (restarts.some((section) => event.affectsConfiguration(section))) {
         void restart(context);
       }
@@ -68,7 +68,10 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
       exclude: config.get<string[]>("exclude", []),
       cacheDir: cacheDir(context),
       diagnostics: config.get<boolean>("diagnostics.enabled", true),
-      frameworks: { drupal: config.get<string>("frameworks.drupal", "auto") },
+      frameworks: {
+        drupal: config.get<string>("frameworks.drupal", "auto"),
+        symfony: config.get<string>("frameworks.symfony", "auto"),
+      },
     },
     diagnosticPullOptions: { onChange: true, onSave: true },
     middleware: {

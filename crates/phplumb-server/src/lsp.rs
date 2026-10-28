@@ -58,7 +58,7 @@ const DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// Parsed from `initializationOptions`:
 /// `{ "root": "src/drupal", "exclude": ["vendor/rector/rector/**"],
-/// "cacheDir": "/path/to/storage", "diagnostics": true, "frameworks": {"drupal": "auto"} }`.
+/// "cacheDir": "/path/to/storage", "diagnostics": true, "frameworks": {"drupal": "auto", "symfony": "auto"} }`.
 #[derive(Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ServerSettings {
