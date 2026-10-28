@@ -1,6 +1,38 @@
 # Benchmarks
 
-Results of `phplumb bench` on the reference Drupal project. The case file lives outside the repository because it points into client code.
+Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
+
+## 2026-10-28, step 5a built-in class members
+
+Same machine. Built-in classes, functions, constants and their members lead to their declaration in the phpstorm stubs, and their return types carry navigation on.
+
+Drupal reference project:
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,824 of 46,204 accesses (92.7%) | at least 42,455 |
+| Cold index                              | 5.7 to 6.8 s                      | under 10 s      |
+| Warm start from the cache               | 4.7 s                             | under 2 s       |
+| Update of one file                      | 90 to 97 ms                       | under 0.5 s     |
+| Update of 1,000 files                   | 6.8 to 6.9 s                      | under 5 s       |
+| Peak resident memory                    | 483 to 612 MB                     | under 1024 MB   |
+| Slowest query case                      | 120 to 153 ms                     | under 1 s       |
+| All cases                               | 91 passed, 0 failed               | all pass        |
+| Diagnostics in `web/modules/custom`     | 94, the same as before            | no new ones     |
+
+The warm start and the update of 1,000 files miss their targets, and the build before this step measures the same (4.7 s and 6.8 s), so the miss is older than this step. The stubs add about 40 MB of memory. The `count()` case now expects its stub, and new cases cover `getMessage()` on a caught exception and `format()` after `new \DateTimeImmutable()`.
+
+Symfony reference project, 16,931 PHP files:
+
+| Metric                   | Value                             | Target        |
+| ------------------------ | --------------------------------- | ------------- |
+| Member coverage in `src` | 12,801 of 13,211 accesses (96.9%) | above 12,568  |
+| Cold index               | 1.7 s                             | under 10 s    |
+| Peak resident memory     | 175 to 186 MB                     | under 1024 MB |
+| All cases                | 4 passed, 0 failed                | all pass      |
+| Diagnostics in `src`     | 0, the same as before             | no new ones   |
+
+Coverage was 12,568 (95.1%) before this step. The cases cover `getMessage()` on a caught `RuntimeException`, `format()` on a `DateTimeImmutable` property, a qualified `\count()`, and a method reached through an injected interface, which keeps its target.
 
 ## 2026-10-27, names in docblocks
 
