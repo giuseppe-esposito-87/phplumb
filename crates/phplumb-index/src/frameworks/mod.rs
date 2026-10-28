@@ -59,12 +59,10 @@ pub enum FrameworkDeclaration<'a> {
         declaration: &'a Declaration,
         file: &'a [Declaration],
     },
-    /// A method, by its name or one of its attributes; `offset` is the cursor.
     Method {
         path: &'a Path,
         class: &'a Declaration,
         member: &'a Member,
-        offset: u32,
     },
     /// One of the class's own attributes.
     Class {
@@ -72,6 +70,20 @@ pub enum FrameworkDeclaration<'a> {
         class: &'a Declaration,
         metadata: &'a Metadata,
     },
+}
+
+/// A string literal under the cursor that is an argument of a PHP attribute, on a
+/// class, function, method, property or parameter.
+pub struct AttributeString {
+    /// The attribute's fully qualified class name.
+    pub attribute: String,
+    /// The argument's name, when it is given by name.
+    pub key: Option<String>,
+    /// The argument's position among the attribute's arguments.
+    pub position: usize,
+    pub value: String,
+    /// Where the value starts, inside the quotes.
+    pub start: u32,
 }
 
 /// A method call found in the index, with its literal arguments.
@@ -148,6 +160,14 @@ pub trait Framework: Send + Sync {
         index: &Index,
         call: &FrameworkCall<'_>,
         arguments: &[TypeExpr],
+    ) -> Vec<(Location, String)>;
+    /// Targets of a string literal under the cursor at `offset` that is an argument
+    /// of an attribute, each with the text expected at its range.
+    fn attribute_targets(
+        &self,
+        index: &Index,
+        found: &AttributeString,
+        offset: u32,
     ) -> Vec<(Location, String)>;
     /// Targets of a string literal that is the value of the array key `key`, each
     /// with the text expected at its range. `call` is the call whose positional

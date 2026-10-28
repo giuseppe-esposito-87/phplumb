@@ -717,3 +717,25 @@ fn get_parameter_leads_to_the_definition() {
     );
     assert!(definition(&mut index, params, "'kernel.project_dir'").is_empty());
 }
+
+const CONFIGURED: &str = "src/Service/Configured.php";
+
+#[test]
+fn autowire_parameters_lead_to_their_definitions() {
+    let mut index = build();
+    let mut name = definition(&mut index, CONFIGURED, "app.name");
+    name.sort();
+    assert_eq!(
+        name,
+        [
+            pair("config/packages/framework.yaml", "app.name"),
+            pair("config/services.yaml", "app.name"),
+        ]
+    );
+    assert_eq!(
+        definition(&mut index, CONFIGURED, "app.limit"),
+        [pair("config/services.yaml", "app.limit")]
+    );
+    assert!(definition(&mut index, CONFIGURED, "kernel.project_dir").is_empty());
+    assert!(definition(&mut index, CONFIGURED, "APP_X").is_empty());
+}

@@ -297,6 +297,15 @@ impl Framework for Drupal {
         )
     }
 
+    fn attribute_targets(
+        &self,
+        _index: &Index,
+        _found: &crate::frameworks::AttributeString,
+        _offset: u32,
+    ) -> Vec<(Location, String)> {
+        Vec::new()
+    }
+
     fn call_targets(
         &self,
         _index: &Index,

@@ -13,9 +13,10 @@ use std::path::{Path, PathBuf};
 use crate::diagnostics::Diagnostic;
 use crate::frameworks::ancestry::is_a;
 use crate::frameworks::yaml::{self, Yaml};
-use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration, Project};
+use crate::frameworks::{
+    AttributeString, CallTarget, Framework, FrameworkCall, FrameworkDeclaration, Project,
+};
 use crate::index::{Index, Location};
-use crate::metadata::MetaValue;
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
 
@@ -62,6 +63,9 @@ const DISPATCH: [(&str, &[&str]); 1] = [(
     "Symfony\\Component\\Messenger\\MessageBusInterface",
     &["dispatch"],
 )];
+
+/// The attribute that injects a parameter, service or value into an argument.
+const AUTOWIRE_ATTRIBUTE: &str = "Symfony\\Component\\DependencyInjection\\Attribute\\Autowire";
 
 /// The attribute that names a controller method's template.
 const TEMPLATE_ATTRIBUTE: &str = "Symfony\\Bridge\\Twig\\Attribute\\Template";
@@ -132,35 +136,6 @@ impl Symfony {
     /// The message classes the handler method named at `start` in `path` handles.
     pub fn handled_by(&self, path: &Path, start: u32) -> Vec<String> {
         self.handlers.handled_by(path, start)
-    }
-
-    /// The template a `#[Template]` attribute under the cursor names.
-    fn template_targets(&self, declaration: &FrameworkDeclaration<'_>) -> Vec<(Location, String)> {
-        let FrameworkDeclaration::Method { member, offset, .. } = declaration else {
-            return Vec::new();
-        };
-        member
-            .metadata
-            .iter()
-            .filter(|m| {
-                m.name.eq_ignore_ascii_case(TEMPLATE_ATTRIBUTE)
-                    && m.span.0 <= *offset
-                    && *offset <= m.span.1
-            })
-            .filter_map(|m| {
-                let template = m.argument("template").or_else(|| {
-                    m.arguments
-                        .first()
-                        .filter(|(key, _)| key.is_none())
-                        .map(|(_, v)| v)
-                });
-                match template {
-                    Some(MetaValue::String(name)) => self.template_file(name),
-                    _ => None,
-                }
-            })
-            .map(file_start)
-            .collect()
     }
 
     /// The `dispatch()` calls of the project whose message is, extends or
@@ -298,6 +273,37 @@ impl Framework for Symfony {
     }
 
     /// A `dispatch()` on a message bus lists the handlers of its message.
+    /// A parameter in `#[Autowire]` leads to its definitions; a template in
+    /// `#[Template]` opens its file.
+    fn attribute_targets(
+        &self,
+        _index: &Index,
+        found: &AttributeString,
+        offset: u32,
+    ) -> Vec<(Location, String)> {
+        let first = found.key.is_none() && found.position == 0;
+        if found.attribute.eq_ignore_ascii_case(AUTOWIRE_ATTRIBUTE) {
+            return match found.key.as_deref() {
+                Some("param") => targets_of(self.parameter_targets(&found.value)),
+                Some("value") | None if first || found.key.is_some() => {
+                    config::parameter_at(&found.value, offset.saturating_sub(found.start) as usize)
+                        .map(|name| targets_of(self.parameter_targets(&name)))
+                        .unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+        }
+        let template = found.key.as_deref() == Some("template") || first;
+        if found.attribute.eq_ignore_ascii_case(TEMPLATE_ATTRIBUTE) && template {
+            return self
+                .template_file(&found.value)
+                .into_iter()
+                .map(file_start)
+                .collect();
+        }
+        Vec::new()
+    }
+
     fn call_targets(
         &self,
         index: &Index,
@@ -379,18 +385,13 @@ impl Framework for Symfony {
             .collect()
     }
 
-    /// The template of a `#[Template]` attribute under the cursor opens its file; a
-    /// message handler, by its method or its `#[AsMessageHandler]`, lists the
+    /// A message handler, by its method or its `#[AsMessageHandler]`, lists the
     /// dispatches of its messages.
     fn declaration_targets(
         &self,
         index: &Index,
         declaration: &FrameworkDeclaration<'_>,
     ) -> Vec<(Location, String)> {
-        let templates = self.template_targets(declaration);
-        if !templates.is_empty() {
-            return templates;
-        }
         let handled = match declaration {
             FrameworkDeclaration::Method { path, member, .. } => {
                 self.handled_by(path, member.name_start)

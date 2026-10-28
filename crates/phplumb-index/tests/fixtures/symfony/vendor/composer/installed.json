@@ -44,6 +44,15 @@
                     "Symfony\\Component\\Messenger\\": ""
                 }
             }
+        },
+        {
+            "name": "symfony/dependency-injection",
+            "install-path": "../symfony/dependency-injection",
+            "autoload": {
+                "psr-4": {
+                    "Symfony\\Component\\DependencyInjection\\": ""
+                }
+            }
         }
     ]
 }

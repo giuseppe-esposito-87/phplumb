@@ -1403,6 +1403,23 @@ impl Index {
         (!found.is_empty()).then_some(found)
     }
 
+    /// What the frameworks give for a string literal inside an attribute.
+    fn framework_attribute(
+        &self,
+        path: &Path,
+        summary: &FileSummary,
+        source: &[u8],
+        offset: u32,
+    ) -> Option<Vec<(Location, String)>> {
+        self.frameworks_for(path).next()?;
+        let found = infer::attribute_string_at(summary, source, offset)?;
+        let targets: Vec<(Location, String)> = self
+            .frameworks_for(path)
+            .flat_map(|f| f.attribute_targets(self, &found, offset))
+            .collect();
+        (!targets.is_empty()).then_some(targets)
+    }
+
     /// What the frameworks give for a cursor on the name of a method call, from what
     /// it targets and the types of its arguments.
     fn framework_call(
@@ -1498,7 +1515,6 @@ impl Index {
                     path,
                     class: d,
                     member,
-                    offset,
                 });
             }
             let metadata = shape
@@ -1616,6 +1632,11 @@ impl Index {
                     }
                 }
             };
+        }
+        if declarations
+            && let Some(found) = self.framework_attribute(path, &summary, source, offset)
+        {
+            return found;
         }
         // Only a definition request: hover, references and hierarchies keep the
         // method's own declaration.

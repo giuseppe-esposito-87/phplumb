@@ -30,18 +30,19 @@ use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_before_position;
 use mago_syntax::cst::{
     Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
-    AssignmentOperator, Binary, BinaryOperator, Call, ClassLikeConstantSelector,
+    AssignmentOperator, Attribute, Binary, BinaryOperator, Call, ClassLikeConstantSelector,
     ClassLikeMemberSelector, Closure, CompositeString, DoWhile, Expression, For, Foreach,
     ForeachTarget, Function, FunctionCall, FunctionLikeParameterList, Global, Hint, If, IfBody,
     InterpolatedString, KeyValueArrayElement, Literal, LiteralString, Method, MethodCall,
-    NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem,
-    StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable, While,
+    NullSafeMethodCall, NullSafePropertyAccess, PartialArgument, Program, PropertyAccess, Static,
+    StaticItem, StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable,
+    While,
 };
 use mago_syntax::parser::parse_file_content;
 use mago_syntax::walker::Walker;
 
 use crate::calls::{self, CallKind};
-use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
+use crate::frameworks::{AttributeString, CallTarget, FoundCall, FrameworkCall};
 use crate::generics::{array_element, element_type, offset_type, substitute, supertype_args};
 use crate::index::{Index, Location};
 use crate::phpdoc::{TypeExpr, array_of, parse_docblock, parse_type};
@@ -143,6 +144,68 @@ pub(crate) fn string_argument_at(
         .iter()
         .rev()
         .find_map(|call| ctx.string_argument(call, offset))
+}
+
+/// Every attribute of a file.
+struct Attributes;
+
+impl<'ast, 'arena> Walker<'ast, 'arena, Vec<&'ast Attribute<'arena>>> for Attributes {
+    fn walk_in_attribute(
+        &self,
+        attribute: &'ast Attribute<'arena>,
+        found: &mut Vec<&'ast Attribute<'arena>>,
+    ) {
+        found.push(attribute);
+    }
+}
+
+/// The string literal under `offset` that is an argument of an attribute, with the
+/// attribute's class as the file's names resolve it.
+pub(crate) fn attribute_string_at(
+    summary: &FileSummary,
+    source: &[u8],
+    offset: u32,
+) -> Option<AttributeString> {
+    let arena = LocalArena::new();
+    let program = parse_file_content(&arena, FileId::zero(), source);
+    let mut attributes: Vec<&Attribute<'_>> = Vec::new();
+    Attributes.walk_program(program, &mut attributes);
+    attributes.iter().find_map(|attribute| {
+        let list = attribute.argument_list.as_ref()?;
+        list.arguments
+            .iter()
+            .enumerate()
+            .find_map(|(position, argument)| {
+                let (key, value) = match argument {
+                    PartialArgument::Positional(argument) => (None, argument.value),
+                    PartialArgument::Named(argument) => (
+                        Some(String::from_utf8_lossy(argument.name.value).into_owned()),
+                        argument.value,
+                    ),
+                    _ => return None,
+                };
+                let Expression::Literal(Literal::String(literal)) = value else {
+                    return None;
+                };
+                let span = literal.span();
+                if !(span.start.offset < offset && offset < span.end.offset) {
+                    return None;
+                }
+                let name_start = attribute.name.span().start.offset;
+                let attribute_name = summary
+                    .names
+                    .iter()
+                    .find(|n| n.start == name_start)
+                    .map(|n| n.fqn.clone())?;
+                Some(AttributeString {
+                    attribute: attribute_name,
+                    key,
+                    position,
+                    value: String::from_utf8_lossy(literal.value?).into_owned(),
+                    start: span.start.offset + 1,
+                })
+            })
+    })
 }
 
 /// A method call under the cursor: what it targets, its literal arguments and
