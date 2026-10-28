@@ -804,3 +804,25 @@ fn yaml_comments_give_nothing() {
     let mut index = build();
     assert!(definition_on_line(&mut index, SERVICES, 10, "App\\Service").is_empty());
 }
+
+#[test]
+fn translations_have_no_parameters() {
+    let mut index = build();
+    assert!(definition(&mut index, "translations/messages.en.yaml", "app.name").is_empty());
+}
+
+#[test]
+fn alias_and_decorates_open_their_service() {
+    let mut index = build();
+    let mailer = [pair(SERVICES, "app.mailer")];
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 22, "app.mailer"),
+        mailer,
+        "alias"
+    );
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 25, "app.mailer"),
+        mailer,
+        "decorates"
+    );
+}

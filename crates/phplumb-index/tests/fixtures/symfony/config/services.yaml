@@ -18,3 +18,8 @@ services:
     App\Service\Notifier:
         class: App\Service\Mailer
         arguments: ['@app.mailer', !service { class: App\Service\Mailer }]
+    app.alias:
+        alias: app.mailer
+    app.decorator:
+        class: App\Service\Notifier
+        decorates: app.mailer

@@ -59,6 +59,7 @@ pub enum FrameworkDeclaration<'a> {
         declaration: &'a Declaration,
         file: &'a [Declaration],
     },
+    /// A method, by its name or one of its attributes.
     Method {
         path: &'a Path,
         class: &'a Declaration,

@@ -202,16 +202,36 @@ impl Symfony {
 
     /// In a YAML configuration file: a `%parameter%`, an `@id` service reference, or a
     /// class name under `offset`.
-    fn yaml_targets(&self, index: &Index, source: &[u8], offset: u32) -> Vec<(Location, String)> {
+    fn yaml_targets(
+        &self,
+        index: &Index,
+        path: &Path,
+        source: &[u8],
+        offset: u32,
+    ) -> Vec<(Location, String)> {
+        // Elsewhere, such as in translations, `%name%` is a placeholder.
+        let config = self.project.dir.join("config");
+        if !index.filter().under_root(path).starts_with(&config) {
+            return Vec::new();
+        }
         let Ok(text) = std::str::from_utf8(source) else {
             return Vec::new();
         };
         let Some(root) = yaml::parse(text) else {
             return Vec::new();
         };
-        let Some((_, Yaml::Scalar { value, start, end })) = yaml::scalar_at(&root, offset) else {
+        let Some((steps, Yaml::Scalar { value, start, end })) = yaml::scalar_at(&root, offset)
+        else {
             return Vec::new();
         };
+        let in_services = steps.contains(&yaml::Step::Key("services"));
+        let names_a_service = matches!(
+            steps.last(),
+            Some(yaml::Step::Key("alias" | "decorates" | "parent"))
+        );
+        if in_services && names_a_service {
+            return self.service_targets(index, value);
+        }
         let raw = &text[*start as usize..*end as usize];
         if let Some(name) = config::parameter_at(raw, (offset - start) as usize) {
             return targets_of(self.parameter_targets(&name));
@@ -227,6 +247,17 @@ impl Symfony {
             return class_targets(index, value);
         }
         Vec::new()
+    }
+
+    /// The `%name%` under the cursor in the value of an attribute.
+    fn value_parameter_targets(
+        &self,
+        found: &AttributeString,
+        offset: u32,
+    ) -> Vec<(Location, String)> {
+        config::parameter_at(&found.value, offset.saturating_sub(found.start) as usize)
+            .map(|name| targets_of(self.parameter_targets(&name)))
+            .unwrap_or_default()
     }
 
     fn read(&mut self, index: &Index) {
@@ -318,9 +349,8 @@ impl Framework for Symfony {
             .collect()
     }
 
-    /// A `dispatch()` on a message bus lists the handlers of its message.
-    /// A parameter in `#[Autowire]` leads to its definitions; a template in
-    /// `#[Template]` opens its file.
+    /// A parameter or service in `#[Autowire]` leads to its definitions; a template
+    /// in `#[Template]` opens its file.
     fn attribute_targets(
         &self,
         index: &Index,
@@ -332,11 +362,8 @@ impl Framework for Symfony {
             return match found.key.as_deref() {
                 Some("param") => targets_of(self.parameter_targets(&found.value)),
                 Some("service") => self.service_targets(index, &found.value),
-                Some("value") | None if first || found.key.is_some() => {
-                    config::parameter_at(&found.value, offset.saturating_sub(found.start) as usize)
-                        .map(|name| targets_of(self.parameter_targets(&name)))
-                        .unwrap_or_default()
-                }
+                Some("value") => self.value_parameter_targets(found, offset),
+                None if first => self.value_parameter_targets(found, offset),
                 _ => Vec::new(),
             };
         }
@@ -351,6 +378,7 @@ impl Framework for Symfony {
         Vec::new()
     }
 
+    /// A `dispatch()` on a message bus lists the handlers of its message.
     fn call_targets(
         &self,
         index: &Index,
@@ -412,7 +440,7 @@ impl Framework for Symfony {
         offset: u32,
     ) -> Vec<(Location, String)> {
         if crate::filter::is_yaml(path) {
-            return self.yaml_targets(index, source, offset);
+            return self.yaml_targets(index, path, source, offset);
         }
         if !crate::filter::is_twig(path) {
             return Vec::new();
