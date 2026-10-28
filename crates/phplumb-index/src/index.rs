@@ -865,6 +865,25 @@ impl Index {
         }
     }
 
+    /// The lowercase global name of the PHP function a call to `name` reaches when
+    /// no project file declares it: the name itself in the global namespace, or
+    /// its last segment through PHP's global fallback for an unqualified, not
+    /// imported name. Vendor polyfills give way, as they do for definitions.
+    pub(crate) fn builtin_function(&self, name: &NameRef) -> Option<String> {
+        let key = name.fqn.to_ascii_lowercase();
+        let global = match key.rsplit_once('\\') {
+            None => key,
+            Some((_, global)) if !name.qualified && !name.imported => {
+                if !lookup(&self.functions, &key).is_empty() {
+                    return None;
+                }
+                global.to_string()
+            }
+            Some(_) => return None,
+        };
+        (!self.project_declares(SymbolKind::Function, &global)).then_some(global)
+    }
+
     /// Whether project code declares `key` of `kind`.
     fn project_declares(&self, kind: SymbolKind, key: &str) -> bool {
         lookup(self.table(kind), key).iter().any(|entry| {

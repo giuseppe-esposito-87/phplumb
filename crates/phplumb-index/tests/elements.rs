@@ -230,3 +230,73 @@ fn unbound_templates_give_nothing() {
     let mut index = build();
     assert!(label(&mut index, "app/Shelf.php", 10).is_empty());
 }
+
+/// Go to definition on the `nth` `label()` of `app/Arrays.php`.
+fn in_arrays(index: &mut Index, nth: usize) -> Vec<(String, String)> {
+    described(&definition(index, "app/Arrays.php", "label()", nth))
+}
+
+#[test]
+fn array_map_callbacks_receive_elements() {
+    let mut index = build();
+    assert_eq!(in_arrays(&mut index, 0), item_label());
+}
+
+#[test]
+fn array_map_feeds_each_array_to_its_parameter() {
+    let mut index = build();
+    assert_eq!(in_arrays(&mut index, 1), item_label());
+}
+
+#[test]
+fn array_filter_modes() {
+    let mut index = build();
+    assert_eq!(in_arrays(&mut index, 2), item_label(), "default");
+    assert_eq!(in_arrays(&mut index, 3), item_label(), "both");
+    assert!(in_arrays(&mut index, 4).is_empty(), "key");
+}
+
+#[test]
+fn sort_and_reduce_callbacks() {
+    let mut index = build();
+    for nth in [5, 6, 7] {
+        assert_eq!(in_arrays(&mut index, nth), item_label(), "{nth}");
+    }
+    assert!(in_arrays(&mut index, 8).is_empty(), "carry");
+}
+
+#[test]
+fn typed_callback_parameters_keep_their_type() {
+    let mut index = build();
+    assert_eq!(
+        in_arrays(&mut index, 9),
+        [("app/Other.php".to_string(), "label".to_string())]
+    );
+}
+
+#[test]
+fn callbacks_on_undeclared_arrays_give_nothing() {
+    let mut index = build();
+    assert!(in_arrays(&mut index, 10).is_empty());
+}
+
+#[test]
+fn named_arguments_give_nothing() {
+    let mut index = build();
+    assert!(in_arrays(&mut index, 11).is_empty());
+}
+
+#[test]
+fn project_functions_named_like_built_ins_give_nothing() {
+    let mut index = build();
+    let found = definition(&mut index, "app/Shadow.php", "label()", 0);
+    assert!(found.is_empty());
+}
+
+#[test]
+fn array_functions_keep_element_types() {
+    let mut index = build();
+    for nth in [12, 13, 14] {
+        assert_eq!(in_arrays(&mut index, nth), item_label(), "{nth}");
+    }
+}

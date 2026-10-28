@@ -361,7 +361,8 @@ impl TypeParser<'_> {
     }
 }
 
-fn array_of(element: TypeExpr) -> TypeExpr {
+/// An array of `element`, or `Other` when the element is unknown.
+pub(crate) fn array_of(element: TypeExpr) -> TypeExpr {
     match element {
         TypeExpr::Other => TypeExpr::Other,
         element => TypeExpr::ArrayOf(Box::new(element)),

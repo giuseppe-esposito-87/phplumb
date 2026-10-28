@@ -6,7 +6,7 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::Index;
 use crate::infer::union;
-use crate::phpdoc::TypeExpr;
+use crate::phpdoc::{TypeExpr, array_of};
 
 /// How many classes a walk through parents visits at most.
 const MAX_CLASSES: usize = 16;
@@ -55,10 +55,7 @@ pub(crate) fn substitute(ty: &TypeExpr, templates: &[String], args: &[TypeExpr])
             Some(i) => args.get(i).cloned().unwrap_or(TypeExpr::Other),
             None => ty.clone(),
         },
-        TypeExpr::ArrayOf(element) => match substitute(element, templates, args) {
-            TypeExpr::Other => TypeExpr::Other,
-            element => TypeExpr::ArrayOf(Box::new(element)),
-        },
+        TypeExpr::ArrayOf(element) => array_of(substitute(element, templates, args)),
         TypeExpr::Generic { class, args: inner } => TypeExpr::Generic {
             class: class.clone(),
             args: inner

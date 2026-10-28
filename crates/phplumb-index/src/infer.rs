@@ -32,7 +32,7 @@ use mago_syntax::cst::{
     Access, AnonymousClass, Argument, ArgumentList, ArrayElement, ArrowFunction, Assignment,
     AssignmentOperator, Binary, BinaryOperator, Call, ClassLikeConstantSelector,
     ClassLikeMemberSelector, Closure, CompositeString, DoWhile, Expression, For, Foreach,
-    ForeachTarget, Function, FunctionLikeParameterList, Global, Hint, If, IfBody,
+    ForeachTarget, Function, FunctionCall, FunctionLikeParameterList, Global, Hint, If, IfBody,
     InterpolatedString, KeyValueArrayElement, Literal, LiteralString, Method, MethodCall,
     NullSafeMethodCall, NullSafePropertyAccess, Program, PropertyAccess, Static, StaticItem,
     StaticMethodCall, StringPart, Switch, TriviaKind, Try, TryCatchClause, Variable, While,
@@ -44,7 +44,7 @@ use crate::calls::{self, CallKind};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
 use crate::generics::{element_type, offset_type, substitute, supertype_args};
 use crate::index::{Index, Location};
-use crate::phpdoc::{TypeExpr, parse_docblock, parse_type};
+use crate::phpdoc::{TypeExpr, array_of, parse_docblock, parse_type};
 use crate::summary::{
     FileSummary, MemberKind, NameKind, NameRef, SymbolKind, pick_type, summarize,
 };
@@ -933,6 +933,14 @@ struct BranchFact {
     statement_end: u32,
 }
 
+/// A closure or arrow function written as a positional argument of a function call.
+struct CallbackFact<'ast, 'arena> {
+    /// Where the closure starts, as its scope does.
+    start: u32,
+    call: &'ast FunctionCall<'arena>,
+    position: usize,
+}
+
 #[derive(Default)]
 struct Facts<'ast, 'arena> {
     accesses: Vec<AccessFact<'arena>>,
@@ -943,6 +951,7 @@ struct Facts<'ast, 'arena> {
     catches: Vec<CatchFact<'ast, 'arena>>,
     narrowings: Vec<NarrowFact>,
     branches: Vec<BranchFact>,
+    callbacks: Vec<CallbackFact<'ast, 'arena>>,
     /// Every direct variable: name without `$`, start, end.
     variables: Vec<(String, u32, u32)>,
 }
@@ -1008,6 +1017,24 @@ impl<'ast, 'arena> Facts<'ast, 'arena> {
 struct Collect;
 
 impl<'ast, 'arena> Walker<'ast, 'arena, Facts<'ast, 'arena>> for Collect {
+    fn walk_in_function_call(&self, call: &'ast FunctionCall<'arena>, f: &mut Facts<'ast, 'arena>) {
+        for (position, argument) in call.argument_list.arguments.iter().enumerate() {
+            let Argument::Positional(argument) = argument else {
+                continue;
+            };
+            let start = match argument.value {
+                Expression::Closure(closure) => closure.span().start.offset,
+                Expression::ArrowFunction(arrow) => arrow.span().start.offset,
+                _ => continue,
+            };
+            f.callbacks.push(CallbackFact {
+                start,
+                call,
+                position,
+            });
+        }
+    }
+
     fn walk_in_method_call(&self, call: &'ast MethodCall<'arena>, f: &mut Facts<'ast, 'arena>) {
         f.access(call.object, &call.method, MemberKind::Method);
     }
@@ -1529,7 +1556,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     forwarded.as_deref(),
                 )
             }
-            Expression::Call(Call::Function(call)) => self.function_returns(call.function),
+            Expression::Call(Call::Function(call)) => self.function_call(call, at, depth),
             Expression::Access(Access::Property(access)) => self.member_on(
                 &self.expr(access.object, at, depth),
                 &access.property,
@@ -2026,7 +2053,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
 
     fn binding_state(&self, binding: &Binding<'_, '_, '_>, depth: u32) -> State {
         match binding {
-            Binding::Param(scope, i) => State::of(self.param_type(scope, *i)),
+            Binding::Param(scope, i) => State::of(self.param_type(scope, *i, depth)),
             Binding::Assign(assignment) => {
                 if let Some(ty) = self.assignment_doc(assignment) {
                     return State::of(ty);
@@ -2052,7 +2079,7 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
     }
 
     /// A parameter's PHPDoc `@param` type when it names a class, else its declared type.
-    fn param_type(&self, scope: &ScopeFact<'_, '_>, i: usize) -> TypeExpr {
+    fn param_type(&self, scope: &ScopeFact<'_, '_>, i: usize, depth: u32) -> TypeExpr {
         let Some(param) = scope.params.parameters.iter().nth(i) else {
             return TypeExpr::Other;
         };
@@ -2068,8 +2095,97 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                 .find(|(n, _)| *n == name)
                 .map(|(_, ty)| ty)
             });
+        if param.hint.is_none() && doc_type.is_none() {
+            return self.callback_param(scope, i, depth);
+        }
         let declared = param.hint.as_ref().map(|hint| self.hint_type(hint));
         pick_type(doc_type, declared).unwrap_or(TypeExpr::Other)
+    }
+
+    /// The element type that PHP passes to parameter `i` of a callback written at
+    /// a positional argument of a built-in array function.
+    fn callback_param(&self, scope: &ScopeFact<'_, '_>, i: usize, depth: u32) -> TypeExpr {
+        let Some(callback) = self.facts.callbacks.iter().find(|c| c.start == scope.start) else {
+            return TypeExpr::Other;
+        };
+        let Some(function) = self.builtin_function(callback.call.function) else {
+            return TypeExpr::Other;
+        };
+        let arguments = &callback.call.argument_list;
+        let array = match (function.as_str(), callback.position, i) {
+            ("array_map", 0, i) => i + 1,
+            ("array_filter", 1, 0) if self.filters_values(arguments) => 0,
+            ("array_reduce", 1, 1) => 0,
+            ("usort" | "uasort", 1, 0 | 1) => 0,
+            ("array_walk" | "array_find" | "array_find_key" | "array_any" | "array_all", 1, 0) => 0,
+            _ => return TypeExpr::Other,
+        };
+        match positional(arguments, array) {
+            Some(value) => element_type(
+                self.index,
+                &self.expr(value, value.span().start.offset, depth + 1),
+            ),
+            None => TypeExpr::Other,
+        }
+    }
+
+    /// Whether an `array_filter` call passes values to its callback: no mode, or
+    /// `ARRAY_FILTER_USE_BOTH`.
+    fn filters_values(&self, arguments: &ArgumentList<'_>) -> bool {
+        match arguments.arguments.iter().nth(2) {
+            None => true,
+            Some(Argument::Positional(mode)) => match mode.value {
+                Expression::ConstantAccess(access) => {
+                    let span = access.name.span();
+                    self.text(span.start.offset, span.end.offset)
+                        .trim_start_matches('\\')
+                        == "ARRAY_FILTER_USE_BOTH"
+                }
+                _ => false,
+            },
+            Some(Argument::Named(_)) => false,
+        }
+    }
+
+    /// The global name of the built-in PHP function `function` calls, if it does.
+    fn builtin_function(&self, function: &Expression<'_>) -> Option<String> {
+        let Expression::Identifier(identifier) = function else {
+            return None;
+        };
+        let name = self
+            .names
+            .get(&identifier.span().start.offset)
+            .filter(|n| n.kind == NameKind::Function)?;
+        self.index.builtin_function(name)
+    }
+
+    /// The type a function call returns: the element types built-in array
+    /// functions keep, or the declared return type.
+    fn function_call(&self, call: &FunctionCall<'_>, at: u32, depth: u32) -> TypeExpr {
+        let Some(function) = self.builtin_function(call.function) else {
+            return self.function_returns(call.function);
+        };
+        let first = || {
+            positional(&call.argument_list, 0)
+                .map_or(TypeExpr::Other, |value| self.expr(value, at, depth))
+        };
+        match function.as_str() {
+            "array_filter" | "array_values" | "array_reverse" | "array_slice" | "array_unique"
+            | "array_diff" | "array_intersect" | "iterator_to_array" => {
+                array_of(element_type(self.index, &first()))
+            }
+            "reset" | "end" | "current" | "array_pop" | "array_shift" | "array_first"
+            | "array_last" => element_type(self.index, &first()),
+            "array_map" => {
+                let hint = match positional(&call.argument_list, 0) {
+                    Some(Expression::Closure(closure)) => closure.return_type_hint.as_ref(),
+                    Some(Expression::ArrowFunction(arrow)) => arrow.return_type_hint.as_ref(),
+                    _ => None,
+                };
+                hint.map_or(TypeExpr::Other, |hint| array_of(self.hint_type(&hint.hint)))
+            }
+            _ => self.function_returns(call.function),
+        }
     }
 
     /// The `@var` type of a docblock right before an assignment, when it names a
@@ -2252,5 +2368,17 @@ pub(crate) fn union(types: Vec<TypeExpr>) -> TypeExpr {
         0 => TypeExpr::Other,
         1 => members.pop().expect("one member"),
         _ => TypeExpr::Union(members),
+    }
+}
+
+/// The value of the argument at `position`, when it is positional. PHP puts every
+/// positional argument before the named ones.
+fn positional<'a, 'arena>(
+    arguments: &'a ArgumentList<'arena>,
+    position: usize,
+) -> Option<&'a Expression<'arena>> {
+    match arguments.arguments.iter().nth(position)? {
+        Argument::Positional(argument) => Some(argument.value),
+        Argument::Named(_) => None,
     }
 }
