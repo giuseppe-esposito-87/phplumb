@@ -42,6 +42,7 @@ use mago_syntax::walker::Walker;
 
 use crate::calls::{self, CallKind};
 use crate::frameworks::{CallTarget, FoundCall, FrameworkCall};
+use crate::generics::{element_type, offset_type};
 use crate::index::{Index, Location};
 use crate::phpdoc::{TypeExpr, parse_docblock, parse_type};
 use crate::summary::{
@@ -1552,6 +1553,9 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     _ => TypeExpr::Other,
                 }
             }
+            Expression::ArrayAccess(access) => {
+                offset_type(self.index, &self.expr(access.array, at, depth))
+            }
             Expression::Access(Access::ClassConstant(access)) => {
                 match (self.class_of(access.class, at), &access.constant) {
                     (Some(class), ClassLikeConstantSelector::Identifier(name)) => {
@@ -2023,11 +2027,10 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
                     None => State::Unknown,
                 }
             }
-            Binding::ForeachValue(foreach) => State::of(element_of(&self.expr(
-                foreach.iterable,
-                foreach.start,
-                depth + 1,
-            ))),
+            Binding::ForeachValue(foreach) => State::of(element_type(
+                self.index,
+                &self.expr(foreach.iterable, foreach.start, depth + 1),
+            )),
             Binding::Unknown => State::Unknown,
             Binding::Catch(catch) => State::of(self.hint_type(catch.hint)),
             Binding::Narrow(class) => match self.names.get(class) {
@@ -2203,16 +2206,8 @@ pub(crate) fn class_names(ty: &TypeExpr) -> Vec<String> {
     }
 }
 
-fn element_of(ty: &TypeExpr) -> TypeExpr {
-    match ty {
-        TypeExpr::ArrayOf(element) => (**element).clone(),
-        TypeExpr::Union(members) => union(members.iter().map(element_of).collect()),
-        _ => TypeExpr::Other,
-    }
-}
-
 /// Flattens and deduplicates; `Other` members drop and a single member stands alone.
-fn union(types: Vec<TypeExpr>) -> TypeExpr {
+pub(crate) fn union(types: Vec<TypeExpr>) -> TypeExpr {
     let mut members: Vec<TypeExpr> = Vec::new();
     for ty in types {
         match ty {

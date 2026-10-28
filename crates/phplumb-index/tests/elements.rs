@@ -32,14 +32,12 @@ fn at(file: &str, needle: &str, nth: usize) -> (PathBuf, Vec<u8>, u32) {
     (path, source, offset as u32)
 }
 
-#[allow(dead_code)]
 fn definition(index: &mut Index, file: &str, needle: &str, nth: usize) -> Vec<Location> {
     let (path, source, offset) = at(file, needle, nth);
     index.definition(&path, &source, offset)
 }
 
 /// Each location as its path relative to the fixture and the text at its range.
-#[allow(dead_code)]
 fn described(locations: &[Location]) -> Vec<(String, String)> {
     locations
         .iter()
@@ -125,4 +123,79 @@ fn hover_shows_generic_arguments() {
         "{}",
         hover.markdown
     );
+}
+
+/// The `label` method of `App\Item`.
+fn item_label() -> [(String, String); 1] {
+    [("app/Item.php".to_string(), "label".to_string())]
+}
+
+/// Go to definition on the `nth` `label();` of `file`.
+fn label(index: &mut Index, file: &str, nth: usize) -> Vec<(String, String)> {
+    described(&definition(index, file, "label();", nth))
+}
+
+#[test]
+fn foreach_over_a_generic_collection() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Shelf.php", 0), item_label());
+}
+
+#[test]
+fn foreach_over_a_concrete_collection_subclass() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Uses.php", 0), item_label());
+}
+
+#[test]
+fn foreach_over_single_argument_iterables() {
+    let mut index = build();
+    assert_eq!(
+        label(&mut index, "app/Uses.php", 1),
+        item_label(),
+        "Iterator"
+    );
+    assert_eq!(
+        label(&mut index, "app/Uses.php", 2),
+        item_label(),
+        "Generator"
+    );
+}
+
+#[test]
+fn foreach_over_a_nullable_typed_array() {
+    let mut index = build();
+    assert_eq!(
+        label(&mut index, "app/Uses.php", 3),
+        item_label(),
+        "foreach"
+    );
+    assert_eq!(label(&mut index, "app/Uses.php", 4), item_label(), "access");
+}
+
+#[test]
+fn array_access_on_typed_arrays() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Shelf.php", 1), item_label());
+    assert_eq!(label(&mut index, "app/Shelf.php", 2), item_label());
+}
+
+#[test]
+fn array_access_on_a_generic_collection() {
+    let mut index = build();
+    assert_eq!(label(&mut index, "app/Shelf.php", 3), item_label());
+}
+
+#[test]
+fn undeclared_elements_give_nothing() {
+    let mut index = build();
+    for nth in [4, 5, 6] {
+        assert!(label(&mut index, "app/Shelf.php", nth).is_empty(), "{nth}");
+    }
+}
+
+#[test]
+fn cyclic_generic_supertypes_end() {
+    let mut index = build();
+    assert!(label(&mut index, "app/Uses.php", 5).is_empty());
 }
