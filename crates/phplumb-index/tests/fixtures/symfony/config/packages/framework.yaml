@@ -6,3 +6,6 @@ framework:
 when@dev:
     parameters:
         app.name: 'Dev demo'
+
+broken:
+    value: '%app.nowhere%'

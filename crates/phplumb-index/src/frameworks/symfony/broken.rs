@@ -1,13 +1,16 @@
-//! Broken Symfony references: route, template and parameter names written in PHP
-//! that are defined nowhere. Any doubt stays silent.
+//! Broken Symfony references: route, template and parameter names written in PHP,
+//! Twig templates and YAML configuration that are defined nowhere. Any doubt stays
+//! silent.
 
 use std::path::Path;
 
+use super::twig::{self, TwigName};
 use super::{
     AUTOWIRE_ATTRIBUTE, PARAMETER_METHODS, ROUTE_METHODS, Symfony, TEMPLATE_ATTRIBUTE,
     TEMPLATE_METHODS, TemplateStatus, calls_one_of, config,
 };
 use crate::diagnostics::{Diagnostic, Severity};
+use crate::frameworks::yaml::{self, Yaml};
 use crate::frameworks::{FrameworkCall, mentions};
 use crate::index::Index;
 use crate::infer;
@@ -106,6 +109,82 @@ pub(super) fn find(
         }
     }
     found
+}
+
+/// Route and template names a Twig template writes as literals.
+pub(super) fn find_in_twig(symfony: &Symfony, index: &Index, source: &[u8]) -> Vec<Diagnostic> {
+    if index.has_exclusions() {
+        return Vec::new();
+    }
+    twig::names(source)
+        .into_iter()
+        .filter_map(|(kind, name, start, end)| {
+            let message = match kind {
+                TwigName::Route if symfony.route_missing(&name) => {
+                    format!("Undefined route '{name}'")
+                }
+                TwigName::Template if symfony.template_status(&name) == TemplateStatus::Missing => {
+                    format!("Undefined template '{name}'")
+                }
+                _ => return None,
+            };
+            Some(diagnostic((start, end), message))
+        })
+        .collect()
+}
+
+/// Parameters written as `%name%` in YAML configuration under `config`.
+pub(super) fn find_in_yaml(
+    symfony: &Symfony,
+    index: &Index,
+    path: &Path,
+    source: &[u8],
+) -> Vec<Diagnostic> {
+    // Elsewhere, such as in translations, `%name%` is a placeholder.
+    let config = symfony.project.dir.join("config");
+    if index.has_exclusions() || !index.filter().under_root(path).starts_with(&config) {
+        return Vec::new();
+    }
+    let Ok(text) = std::str::from_utf8(source) else {
+        return Vec::new();
+    };
+    let Some(root) = yaml::parse(text) else {
+        return Vec::new();
+    };
+    let mut scalars = Vec::new();
+    collect_scalars(&root, &mut scalars);
+    let mut found = Vec::new();
+    for (start, end) in scalars {
+        let raw = &text[start as usize..end as usize];
+        for (name, from, to) in config::parameters_in(raw) {
+            if symfony.parameter_missing(index, name) {
+                found.push(diagnostic(
+                    (start + from as u32, start + to as u32),
+                    format!("Undefined parameter '{name}'"),
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// The range of every scalar below `node`, keys included.
+fn collect_scalars(node: &Yaml, found: &mut Vec<(u32, u32)>) {
+    match node {
+        Yaml::Scalar { start, end, .. } => found.push((*start, *end)),
+        Yaml::Map(entries) => {
+            for (key, value) in entries {
+                collect_scalars(key, found);
+                collect_scalars(value, found);
+            }
+        }
+        Yaml::Sequence(items) => {
+            for item in items {
+                collect_scalars(item, found);
+            }
+        }
+        Yaml::Other => {}
+    }
 }
 
 fn diagnostic((start, end): (u32, u32), message: String) -> Diagnostic {

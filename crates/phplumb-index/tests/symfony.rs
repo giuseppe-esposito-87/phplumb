@@ -1027,3 +1027,31 @@ fn twig_bridge_form_themes_are_templates() {
         )
     );
 }
+
+#[test]
+fn broken_names_in_twig_are_flagged() {
+    let index = build();
+    assert_eq!(
+        diagnostics(&index, "templates/broken.html.twig"),
+        [
+            pair("Undefined route 'missing_route'", "missing_route"),
+            pair(
+                "Undefined template 'nowhere.html.twig'",
+                "nowhere.html.twig"
+            ),
+        ]
+    );
+    // A list names templates to try in turn.
+    assert!(diagnostics(&index, "templates/page.html.twig").is_empty());
+}
+
+#[test]
+fn broken_parameters_in_yaml_are_flagged() {
+    let index = build();
+    assert_eq!(
+        diagnostics(&index, "config/packages/framework.yaml"),
+        [pair("Undefined parameter 'app.nowhere'", "app.nowhere")]
+    );
+    // Translations use `%name%` placeholders.
+    assert!(diagnostics(&index, "translations/messages.en.yaml").is_empty());
+}

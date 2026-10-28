@@ -577,8 +577,18 @@ impl Framework for Symfony {
         Vec::new()
     }
 
-    /// Route, template and parameter names that are defined nowhere.
+    /// Route, template and parameter names that are defined nowhere, in PHP, Twig
+    /// templates and YAML configuration.
     fn diagnostics(&self, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
+        if crate::filter::is_twig(path) {
+            return broken::find_in_twig(self, index, source);
+        }
+        if crate::filter::is_yaml(path) {
+            return broken::find_in_yaml(self, index, path, source);
+        }
+        if crate::filter::is_framework_file(path) {
+            return Vec::new();
+        }
         broken::find(self, index, path, source)
     }
 

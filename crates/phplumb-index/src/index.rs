@@ -503,10 +503,12 @@ impl Index {
     /// Broken references in `source`, the content of the file at `path`, sorted by
     /// offset. Every rule must prove the target missing; uncertainty stays silent.
     pub fn diagnostics(&self, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
-        if is_framework_file(path) {
-            return Vec::new();
-        }
-        let mut found = diagnostics::find(self, path, source);
+        // Only the frameworks read YAML, Twig and Doctrine XML files.
+        let mut found = if is_framework_file(path) {
+            Vec::new()
+        } else {
+            diagnostics::find(self, path, source)
+        };
         // `*.api.php` files document hooks with example code that never runs.
         let documentation = path
             .file_name()

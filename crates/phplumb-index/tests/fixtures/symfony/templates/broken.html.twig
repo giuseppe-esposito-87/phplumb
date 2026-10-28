@@ -1,0 +1,7 @@
+{% extends 'base.html.twig' %}
+{{ path('home') }}
+{{ path('missing_route') }}
+{% include 'nowhere.html.twig' %}
+{% include 'gone.html.twig' ignore missing %}
+{% use 'form_div_layout.html.twig' %}
+{% verbatim %}{{ path('not_a_route') }}{% endverbatim %}
