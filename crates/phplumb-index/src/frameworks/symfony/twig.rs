@@ -97,11 +97,23 @@ pub(crate) fn names(source: &[u8]) -> Vec<(TwigName, String, u32, u32)> {
             }
             continue;
         }
-        let optional = text.contains("ignore missing") || text.contains("ignore_missing");
+        let optional =
+            words.join(" ").contains("ignore missing") || text.contains("ignore_missing");
         for literal in block_literals(source, start, end, tag) {
+            // `#{...}` interpolates an expression into a double-quoted string.
+            let interpolated = source[literal.quote] == b'"'
+                && find(source, literal.content, b"#{").is_some_and(|at| at < literal.close);
+            if interpolated {
+                continue;
+            }
+            // `ignore_missing` is the 4th argument of `include()`, the 2nd of `source()`.
+            let lenient = |function: &str, arguments: usize| {
+                is_function_argument(source, &literal, &[function])
+                    && argument_count(source, &literal) >= arguments
+            };
             let kind = if is_function_argument(source, &literal, &["path", "url"]) {
                 TwigName::Route
-            } else if optional {
+            } else if optional || lenient("include", 4) || lenient("source", 2) {
                 continue;
             } else if is_function_argument(source, &literal, &["include", "source"])
                 || (is_tag_argument(source, &literal) && !in_list(source, &literal))
@@ -115,6 +127,31 @@ pub(crate) fn names(source: &[u8]) -> Vec<(TwigName, String, u32, u32)> {
         }
     }
     found
+}
+
+/// How many arguments the call whose first argument is the literal has, counting
+/// the commas at its own depth up to its closing parenthesis.
+fn argument_count(source: &[u8], literal: &Literal) -> usize {
+    let mut count = 1;
+    let mut depth = 0;
+    let mut i = literal.close + 1;
+    while i < literal.block.1 {
+        match source[i] {
+            quote @ (b'\'' | b'"') => {
+                i += 1;
+                while i < literal.block.1 && source[i] != quote {
+                    i += if source[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' if depth == 0 => break,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => count += 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    count
 }
 
 /// Whether the literal is an element of a list rather than the tag's argument.

@@ -27,6 +27,12 @@ pub(crate) struct Templates {
     /// Each directory with its namespace, `None` for the main namespace, in order;
     /// a directory the module cannot read is `None` and ends its namespace.
     paths: Vec<(Option<String>, Option<PathBuf>)>,
+    /// Whether Twig configuration the module does not read exists, so any namespace
+    /// may have more directories.
+    unknown: bool,
+    /// Whether an environment adds main-namespace directories or another
+    /// `default_path`, which the module leaves out.
+    main_unknown: bool,
 }
 
 impl Templates {
@@ -37,7 +43,10 @@ impl Templates {
     /// and `default_path` would shadow the other environments' templates.
     pub(crate) fn read(project: &Project) -> Templates {
         let dir = &project.dir;
-        let mut templates = Templates::default();
+        let mut templates = Templates {
+            unknown: has_unread_twig_configuration(&dir.join("config/packages")),
+            ..Templates::default()
+        };
         let mut default_path = format!("{PROJECT_DIR}/templates");
         for name in ["twig.yaml", "twig.yml"] {
             let Ok(text) = std::fs::read_to_string(dir.join("config/packages").join(name)) else {
@@ -59,6 +68,7 @@ impl Templates {
                     .filter_map(|(_, value)| value.get("twig"));
                 for twig in environments {
                     templates.read_paths(dir, twig.get("paths"), false);
+                    templates.main_unknown |= twig.get("default_path").is_some();
                 }
             }
         }
@@ -96,6 +106,7 @@ impl Templates {
         };
         for (path, namespace) in entries {
             if namespace.is_none() && !main {
+                self.main_unknown = true;
                 continue;
             }
             self.paths
@@ -141,12 +152,64 @@ impl Templates {
                 return TemplateStatus::Found(path);
             }
         }
-        if configured {
+        if configured && !self.unknown && !(namespace.is_none() && self.main_unknown) {
             TemplateStatus::Missing
         } else {
             TemplateStatus::Unknown
         }
     }
+
+    /// Whether `path` is inside one of the configured template directories.
+    pub(crate) fn holds(&self, path: &Path) -> bool {
+        self.paths
+            .iter()
+            .filter_map(|(_, dir)| dir.as_deref())
+            .any(|dir| path.starts_with(dir))
+    }
+}
+
+/// Whether `packages`, the `config/packages` directory, holds Twig configuration
+/// other than `twig.yaml` and `twig.yml`: `twig.php`, a `twig:` section in another
+/// file, or an environment directory with Twig configuration.
+fn has_unread_twig_configuration(packages: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(packages) else {
+        return false;
+    };
+    entries.flatten().map(|entry| entry.path()).any(|path| {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.is_dir() {
+            return std::fs::read_dir(&path)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| n.starts_with("twig."))
+                });
+        }
+        if name == "twig.yaml" || name == "twig.yml" {
+            return false;
+        }
+        if name.ends_with(".php") {
+            return name == "twig.php";
+        }
+        if !(name.ends_with(".yaml") || name.ends_with(".yml")) {
+            return false;
+        }
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| yaml::parse(&text))
+            .is_some_and(|root| {
+                super::config::top_blocks(&root)
+                    .iter()
+                    .any(|block| block.get("twig").is_some())
+            })
+    })
 }
 
 /// A configured path with the project directory filled in; relative paths are

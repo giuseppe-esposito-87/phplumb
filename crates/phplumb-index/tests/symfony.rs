@@ -1055,3 +1055,12 @@ fn broken_parameters_in_yaml_are_flagged() {
     // Translations use `%name%` placeholders.
     assert!(diagnostics(&index, "translations/messages.en.yaml").is_empty());
 }
+
+#[test]
+fn self_built_twig_environments_and_generators_stay_silent() {
+    let index = build();
+    assert!(diagnostics(&index, "tests/Twig/ExtensionTest.php").is_empty());
+    assert!(diagnostics(&index, "tests/Routing/GeneratorTest.php").is_empty());
+    // Templates outside the configured directories are not the app's.
+    assert!(diagnostics(&index, "tests/Fixtures/views/page.html.twig").is_empty());
+}

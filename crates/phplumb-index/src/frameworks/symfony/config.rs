@@ -196,7 +196,7 @@ pub(crate) fn parameters_in(text: &str) -> Vec<(&str, usize, usize)> {
 
 /// Whether the project has configuration the module does not read, which may define
 /// parameters: PHP configuration files, environment directories below
-/// `config/packages`, or YAML files that import others.
+/// `config/packages`, or YAML files that import others, also inside `when@<env>`.
 pub(crate) fn has_unread_configuration(project: &Project, files: &[PathBuf]) -> bool {
     let config = project.dir.join("config");
     let php = |name: &str| name.ends_with(".php");
@@ -214,7 +214,7 @@ pub(crate) fn has_unread_configuration(project: &Project, files: &[PathBuf]) -> 
         std::fs::read_to_string(file)
             .ok()
             .and_then(|text| yaml::parse(&text))
-            .is_some_and(|root| root.get("imports").is_some())
+            .is_some_and(|root| top_blocks(&root).iter().any(|b| b.get("imports").is_some()))
     });
     services_php || packages || imports
 }

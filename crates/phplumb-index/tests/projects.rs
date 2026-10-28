@@ -514,3 +514,119 @@ fn the_compiled_container_is_not_configuration() {
         ]
     );
 }
+
+#[test]
+fn annotation_route_imports_silence_route_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "config/routes/annotations.yaml",
+        "controllers:\n    resource: ../../src/Controller/\n    type: annotation\n",
+    )]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+}
+
+#[test]
+fn class_route_imports_count_only_for_project_classes() {
+    let import = |class: &str| format!("acme:\n    resource: {class}\n    type: attribute\n");
+    let vendor = import("Acme\\Auth\\LoginController");
+    let (_dir, root) = broken_symfony(&[
+        ("config/routes/acme.yaml", vendor.as_str()),
+        (
+            "vendor/acme/auth/LoginController.php",
+            "<?php\nnamespace Acme\\Auth;\nclass LoginController {}\n",
+        ),
+    ]);
+    assert_eq!(
+        broken_messages(&root),
+        ["Undefined parameter 'app.nowhere'"]
+    );
+    let project = import("App\\Controller\\Uses");
+    let (_dir, root) = broken_symfony(&[("config/routes/uses.yaml", project.as_str())]);
+    assert_eq!(broken_messages(&root).len(), 2);
+}
+
+#[test]
+fn bundle_loaders_silence_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "src/Billing/BillingExtension.php",
+        "<?php\nnamespace App\\Billing;\nuse Symfony\\Component\\DependencyInjection\\Loader\\YamlFileLoader;\nclass BillingExtension\n{\n    public function load(YamlFileLoader $loader): void\n    {\n        $loader->load('services.yaml');\n    }\n}\n",
+    )]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+#[test]
+fn environment_imports_silence_parameter_diagnostics() {
+    let (_dir, root) = broken_symfony(&[(
+        "config/packages/extra.yaml",
+        "when@prod:\n    imports:\n        - { resource: extra_prod.yaml }\n",
+    )]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+#[test]
+fn parameter_bag_sets_define_parameters() {
+    let (_dir, root) = broken_symfony(&[
+        (
+            "lib/ContainerBuilder.php",
+            "<?php\nnamespace Symfony\\Component\\DependencyInjection;\nuse Symfony\\Component\\DependencyInjection\\ParameterBag\\ParameterBagInterface;\nclass ContainerBuilder\n{\n    public function getParameterBag(): ParameterBagInterface {}\n}\n",
+        ),
+        (
+            "lib/ParameterBagInterface.php",
+            "<?php\nnamespace Symfony\\Component\\DependencyInjection\\ParameterBag;\ninterface ParameterBagInterface\n{\n    public function set(string $name, mixed $value): void;\n}\n",
+        ),
+        (
+            "src/Pass.php",
+            "<?php\nnamespace App;\nuse Symfony\\Component\\DependencyInjection\\ContainerBuilder;\nclass Pass\n{\n    public function process(ContainerBuilder $container): void\n    {\n        $container->getParameterBag()->set('app.nowhere', 1);\n    }\n}\n",
+        ),
+    ]);
+    assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
+}
+
+/// The diagnostics of `templates/page.html.twig` in a Symfony project with `files`,
+/// where the page includes a template that exists nowhere.
+fn template_messages(files: &[(&str, &str)]) -> Vec<String> {
+    let mut all = vec![
+        (
+            "templates/page.html.twig",
+            "{% include 'nowhere.html.twig' %}\n",
+        ),
+        (
+            "vendor/symfony/twig-bridge/Resources/views/Form/form_div_layout.html.twig",
+            "",
+        ),
+    ];
+    all.extend_from_slice(files);
+    let (_dir, root) = broken_symfony(&all);
+    let index = auto(&root);
+    let path = root.join("templates/page.html.twig");
+    let source = fs::read(&path).unwrap();
+    index
+        .diagnostics(&path, &source)
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+}
+
+#[test]
+fn unread_twig_configuration_silences_template_diagnostics() {
+    assert_eq!(
+        template_messages(&[]),
+        ["Undefined template 'nowhere.html.twig'"]
+    );
+    let unread: [(&str, &str); 3] = [
+        ("config/packages/twig.php", "<?php\n"),
+        (
+            "config/packages/views.yaml",
+            "twig:\n    paths: ['extra']\n",
+        ),
+        (
+            "config/packages/twig.yaml",
+            "when@dev:\n    twig:\n        paths: ['%kernel.project_dir%/dev']\n",
+        ),
+    ];
+    for file in unread {
+        assert!(template_messages(&[file]).is_empty(), "{file:?}");
+    }
+}

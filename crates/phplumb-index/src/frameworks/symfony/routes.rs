@@ -240,7 +240,7 @@ impl Routes {
                 continue;
             };
             if value.get("resource").is_some() {
-                match import(file, value, files, config) {
+                match import(index, file, value, files, config) {
                     Import::Read => {}
                     Import::Symfony => self.symfony = true,
                     Import::Unknown => self.unknown = true,
@@ -278,7 +278,7 @@ impl Routes {
 }
 
 /// What the import `value` of the route file `file` loads.
-fn import(file: &Path, value: &Yaml, files: &[PathBuf], config: &Path) -> Import {
+fn import(index: &Index, file: &Path, value: &Yaml, files: &[PathBuf], config: &Path) -> Import {
     if value.get("name_prefix").is_some() {
         return Import::Unknown;
     }
@@ -299,16 +299,30 @@ fn import(file: &Path, value: &Yaml, files: &[PathBuf], config: &Path) -> Import
         return Import::Unknown;
     }
     let kind = value.get("type").and_then(Yaml::text);
-    if matches!(kind, Some("attribute" | "annotation")) {
+    // Routes in docblock annotations are not read.
+    if kind == Some("annotation") {
+        return Import::Unknown;
+    }
+    if kind == Some("attribute") {
         // Attribute routes of project classes are read wherever they are.
+        if resource.contains('\\') && !resource.contains('/') {
+            let project = index
+                .classes_named(resource.trim_start_matches('\\'))
+                .iter()
+                .any(|class| index.is_project_code(class.path));
+            return if project {
+                Import::Read
+            } else {
+                Import::Unknown
+            };
+        }
         let resolved = normalize(&file.parent().unwrap_or(config).join(resource));
         let outside = config.parent().is_none_or(|dir| !resolved.starts_with(dir))
             || resolved.components().any(|c| c.as_os_str() == "vendor");
-        let class = resource.contains('\\') && !resource.contains('/');
-        return if class || !outside {
-            Import::Read
-        } else {
+        return if outside {
             Import::Unknown
+        } else {
+            Import::Read
         };
     }
     if kind.is_some_and(|k| k != "yaml" && k != "directory") {

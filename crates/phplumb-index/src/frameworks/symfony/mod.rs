@@ -85,10 +85,16 @@ const PARAMETER_HOLDERS: [&str; 4] = [
 ];
 
 /// Classes through which PHP code configures the container or loads configuration
-/// files, so it may define any parameter.
-const CONFIGURATORS: [&str; 2] = [
+/// files, as kernels and bundle extensions do, so it may define any parameter.
+const CONFIGURATORS: [&str; 8] = [
     "Symfony\\Component\\DependencyInjection\\Loader\\Configurator\\ContainerConfigurator",
     "Symfony\\Component\\Config\\Loader\\LoaderInterface",
+    "Symfony\\Component\\DependencyInjection\\Loader\\YamlFileLoader",
+    "Symfony\\Component\\DependencyInjection\\Loader\\XmlFileLoader",
+    "Symfony\\Component\\DependencyInjection\\Loader\\PhpFileLoader",
+    "Symfony\\Component\\DependencyInjection\\Extension\\ExtensionInterface",
+    "Symfony\\Component\\DependencyInjection\\Extension\\Extension",
+    "Symfony\\Component\\HttpKernel\\DependencyInjection\\Extension",
 ];
 
 /// The attribute that injects a parameter, service or value into an argument.
@@ -243,9 +249,10 @@ impl Symfony {
             && !path.starts_with(self.project.dir.join("var"))
     }
 
-    /// The literal names `setParameter()` calls in project code give the container,
-    /// or none when one of them is computed. Only files that mention a container
-    /// class are read: a call whose receiver stays unknown there counts.
+    /// The literal names `setParameter()` calls and parameter bag `set()` calls in
+    /// project code give the container, or none when one of them is computed. Only
+    /// files that mention a container class are read: a `setParameter()` whose
+    /// receiver stays unknown there counts.
     fn set_parameters(&self, index: &Index) -> Option<&HashSet<String>> {
         self.set_parameters
             .get_or_init(|| {
@@ -253,9 +260,9 @@ impl Symfony {
                     .iter()
                     .flat_map(|class| index.candidate_files(&RefKey::Class(class.to_string())))
                     .collect();
-                let mut files: Vec<&Path> = index
-                    .candidate_files(&RefKey::Member("setParameter".to_string()))
-                    .into_iter()
+                let mut files: Vec<&Path> = ["setParameter", "getParameterBag"]
+                    .iter()
+                    .flat_map(|name| index.candidate_files(&RefKey::Member(name.to_string())))
                     .filter(|path| holders.contains(path))
                     .filter(|path| self.is_source(index, path))
                     .collect();
@@ -265,15 +272,23 @@ impl Symfony {
                 for path in files {
                     let source = std::fs::read(path).ok()?;
                     let summary = summarize(&source);
-                    for call in
-                        crate::infer::calls_named(index, path, &summary, &source, &["setParameter"])
-                    {
-                        let container = call.targets.is_empty()
-                            || call.targets.iter().any(|target| {
-                                matches!(target, CallTarget::Method { class, .. }
-                                    if is_a(index, class, &PARAMETER_HOLDERS))
-                            });
-                        if container {
+                    let calls = crate::infer::calls_named(
+                        index,
+                        path,
+                        &summary,
+                        &source,
+                        &["setParameter", "set"],
+                    );
+                    for call in calls {
+                        let (start, end) = (call.location.start, call.location.end);
+                        let method = String::from_utf8_lossy(&source[start as usize..end as usize]);
+                        let holder = call.targets.iter().any(|target| {
+                            matches!(target, CallTarget::Method { class, .. }
+                                if is_a(index, class, &PARAMETER_HOLDERS))
+                        });
+                        let unknown =
+                            call.targets.is_empty() && method.eq_ignore_ascii_case("setParameter");
+                        if holder || unknown {
                             names.insert(call.strings.first().cloned().flatten()?);
                         }
                     }
@@ -589,7 +604,7 @@ impl Framework for Symfony {
     /// templates and YAML configuration.
     fn diagnostics(&self, index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
         if crate::filter::is_twig(path) {
-            return broken::find_in_twig(self, index, source);
+            return broken::find_in_twig(self, index, path, source);
         }
         if crate::filter::is_yaml(path) {
             return broken::find_in_yaml(self, index, path, source);

@@ -16,11 +16,20 @@ use crate::index::Index;
 use crate::infer;
 use crate::summary::summarize;
 
-/// Exceptions a missing route, template or parameter throws: a file that mentions
-/// one may catch it, so its names of that kind stay unchecked.
-const ROUTE_NOT_FOUND: [&str; 1] =
-    ["Symfony\\Component\\Routing\\Exception\\RouteNotFoundException"];
-const TEMPLATE_NOT_FOUND: [&str; 1] = ["Twig\\Error\\LoaderError"];
+/// Classes that leave a file's names of one kind unchecked: the exception a
+/// missing route, template or parameter throws, which the file may catch, and the
+/// classes a file uses to build its own router or Twig environment, as tests do.
+const ROUTE_NOT_FOUND: [&str; 3] = [
+    "Symfony\\Component\\Routing\\Exception\\RouteNotFoundException",
+    "Symfony\\Component\\Routing\\Generator\\UrlGenerator",
+    "Symfony\\Component\\Routing\\RouteCollection",
+];
+const TEMPLATE_NOT_FOUND: [&str; 4] = [
+    "Twig\\Error\\LoaderError",
+    "Twig\\Loader\\ArrayLoader",
+    "Twig\\Loader\\ChainLoader",
+    "Twig\\Loader\\FilesystemLoader",
+];
 const PARAMETER_NOT_FOUND: [&str; 1] =
     ["Symfony\\Component\\DependencyInjection\\Exception\\ParameterNotFoundException"];
 
@@ -111,9 +120,15 @@ pub(super) fn find(
     found
 }
 
-/// Route and template names a Twig template writes as literals.
-pub(super) fn find_in_twig(symfony: &Symfony, index: &Index, source: &[u8]) -> Vec<Diagnostic> {
-    if index.has_exclusions() {
+/// Route and template names a template of the configured directories writes as
+/// literals; other Twig files, such as test fixtures, belong to other loaders.
+pub(super) fn find_in_twig(
+    symfony: &Symfony,
+    index: &Index,
+    path: &Path,
+    source: &[u8],
+) -> Vec<Diagnostic> {
+    if index.has_exclusions() || !symfony.templates.holds(&index.filter().under_root(path)) {
         return Vec::new();
     }
     twig::names(source)
