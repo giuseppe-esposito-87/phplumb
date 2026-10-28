@@ -58,6 +58,7 @@ fn finds_drupal_php_extensions_when_drupal_is_active() {
     let opts = DiscoverOptions {
         frameworks: FrameworkSettings {
             drupal: Activation::On,
+            ..FrameworkSettings::default()
         },
         ..DiscoverOptions::default()
     };

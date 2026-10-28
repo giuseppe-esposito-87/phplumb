@@ -13,7 +13,7 @@ use crate::calls::{self, CallItem, CallKind, Calls};
 use crate::diagnostics::{self, Diagnostic};
 use crate::discover::{self, DiscoverOptions, discover_in, discover_with};
 use crate::filter::{PHP_EXTENSION, PathFilter, is_yaml};
-use crate::frameworks::{self, FoundCall, Framework, FrameworkCall, FrameworkDeclaration};
+use crate::frameworks::{self, FoundCall, Framework, FrameworkCall, FrameworkDeclaration, Project};
 use crate::hover::{self, Hover};
 use crate::infer::{self, Assigning, PropertyTypes, Receiver};
 use crate::members;
@@ -433,6 +433,14 @@ impl Index {
     /// The framework modules active for this project.
     pub(crate) fn frameworks(&self) -> &[Box<dyn Framework>] {
         &self.frameworks
+    }
+
+    /// The project of the active framework module named `name`.
+    pub fn framework_project(&self, name: &str) -> Option<&Project> {
+        self.frameworks
+            .iter()
+            .find(|f| f.name() == name)
+            .map(|f| f.project())
     }
 
     /// The names of the framework modules active for this project.

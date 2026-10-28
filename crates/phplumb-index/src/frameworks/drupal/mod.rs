@@ -15,11 +15,8 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use ignore::WalkBuilder;
-
 use crate::diagnostics::Diagnostic;
-use crate::filter::SKIPPED_DIR_NAMES;
-use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration};
+use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration, Project};
 use crate::index::{Index, Location};
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
@@ -46,14 +43,11 @@ pub struct Drupal {
     routes: Routes,
     /// What PHP code may define as ids.
     literals: PhpLiterals,
+    project: Project,
 }
 
 /// Services the kernel sets itself.
 const SYNTHETIC: [&str; 3] = ["service_container", "kernel", "class_loader"];
-
-/// How deep below the root detection looks for `composer.lock`: a project whose
-/// Drupal site sits in `src/drupal` keeps its lock at depth 3.
-const LOCK_DEPTH: usize = 4;
 
 impl Drupal {
     /// Whether `id` is an entity type stored as `storage` asks.
@@ -148,29 +142,16 @@ impl Framework for Drupal {
         "drupal"
     }
 
-    /// A Drupal project's `composer.lock` lists `drupal/core`; the project may sit in
-    /// a directory below the root, outside hidden directories, `vendor` and
-    /// `node_modules`.
-    fn detect(&self, root: &Path) -> bool {
-        WalkBuilder::new(root)
-            .standard_filters(false)
-            .hidden(true)
-            .max_depth(Some(LOCK_DEPTH))
-            .filter_entry(|entry| {
-                let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-                !(is_dir
-                    && (entry.file_name() == "vendor"
-                        || SKIPPED_DIR_NAMES
-                            .iter()
-                            .any(|name| entry.file_name() == *name)))
-            })
-            .build()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry.file_name() == "composer.lock"
-                    && entry.file_type().is_some_and(|t| t.is_file())
-            })
-            .any(|entry| requires_drupal_core(entry.path()))
+    fn package(&self) -> &'static str {
+        "drupal/core"
+    }
+
+    fn project(&self) -> &Project {
+        &self.project
+    }
+
+    fn set_project(&mut self, project: Project) {
+        self.project = project;
     }
 
     /// Contributed extensions, then core itself.
@@ -378,21 +359,6 @@ impl Framework for Drupal {
 }
 
 const CONFIG_STORAGE: &str = "Drupal\\Core\\Config\\Entity\\ConfigEntityStorage";
-
-/// Whether the `composer.lock` at `path` lists `drupal/core`.
-fn requires_drupal_core(path: &Path) -> bool {
-    let Ok(text) = std::fs::read(path) else {
-        return false;
-    };
-    let Ok(lock) = serde_json::from_slice::<serde_json::Value>(&text) else {
-        return false;
-    };
-    ["packages", "packages-dev"].iter().any(|section| {
-        lock[section]
-            .as_array()
-            .is_some_and(|packages| packages.iter().any(|p| p["name"] == "drupal/core"))
-    })
-}
 
 /// The tag a storage carries: this prefix, then the entity type id.
 const ENTITY_TAG: &str = "drupal.entity:";

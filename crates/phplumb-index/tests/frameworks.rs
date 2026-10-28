@@ -19,7 +19,10 @@ fn project(composer_lock: Option<&str>) -> (TempDir, PathBuf) {
 
 fn active(root: &Path, drupal: Activation) -> Vec<&'static str> {
     let opts = DiscoverOptions {
-        frameworks: FrameworkSettings { drupal },
+        frameworks: FrameworkSettings {
+            drupal,
+            ..FrameworkSettings::default()
+        },
         ..DiscoverOptions::default()
     };
     Index::build(root, &opts).unwrap().0.active_frameworks()
@@ -250,6 +253,7 @@ fn temp_drupal(files: &[(&str, &str)]) -> (TempDir, PathBuf, Index) {
     let opts = DiscoverOptions {
         frameworks: FrameworkSettings {
             drupal: Activation::On,
+            ..FrameworkSettings::default()
         },
         ..DiscoverOptions::default()
     };
@@ -330,6 +334,7 @@ fn symlinked_modules_are_read_once_and_follow_edits() {
     let opts = DiscoverOptions {
         frameworks: FrameworkSettings {
             drupal: Activation::On,
+            ..FrameworkSettings::default()
         },
         ..DiscoverOptions::default()
     };
@@ -1748,6 +1753,7 @@ fn services_registered_in_php_follow_updates_through_symlinks() {
     let opts = DiscoverOptions {
         frameworks: FrameworkSettings {
             drupal: Activation::On,
+            ..FrameworkSettings::default()
         },
         ..DiscoverOptions::default()
     };

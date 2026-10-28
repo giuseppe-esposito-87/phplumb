@@ -116,7 +116,10 @@ fn workspace_with(files: &[(&str, &str)], drupal: Activation) -> (TempDir, PathB
         fs::write(path, format!("<?php\n{content}")).unwrap();
     }
     let opts = DiscoverOptions {
-        frameworks: FrameworkSettings { drupal },
+        frameworks: FrameworkSettings {
+            drupal,
+            ..FrameworkSettings::default()
+        },
         ..DiscoverOptions::default()
     };
     let index = Index::build(&root, &opts).unwrap().0;

@@ -3,6 +3,8 @@
 //! `Framework` and `registered`.
 
 pub mod drupal;
+mod project;
+pub mod symfony;
 
 use std::any::Any;
 use std::path::{Path, PathBuf};
@@ -15,6 +17,8 @@ use crate::index::{Index, Location};
 use crate::metadata::Metadata;
 use crate::phpdoc::TypeExpr;
 use crate::summary::{Declaration, Member, NameRef};
+
+pub use project::Project;
 
 /// Whether a framework module runs: detected from the project, or forced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -31,6 +35,7 @@ pub enum Activation {
 #[serde(default)]
 pub struct FrameworkSettings {
     pub drupal: Activation,
+    pub symfony: Activation,
 }
 
 /// What a framework sees of a call: what it targets and its literal arguments.
@@ -98,8 +103,11 @@ pub enum CallTarget {
 pub trait Framework: Send + Sync {
     /// The name shown in the log.
     fn name(&self) -> &'static str;
-    /// Whether the framework applies to the project at `root`.
-    fn detect(&self, root: &Path) -> bool;
+    /// The Composer package whose presence in a `composer.lock` marks a project.
+    fn package(&self) -> &'static str;
+    /// The part of the workspace the module reads and answers for.
+    fn project(&self) -> &Project;
+    fn set_project(&mut self, project: Project);
     /// Names of the directories holding code the framework installs rather than the
     /// project's own, nearest to project code first.
     fn dependency_directories(&self) -> &'static [&'static str];
@@ -167,7 +175,10 @@ pub trait Framework: Send + Sync {
 
 /// Every framework the engine knows, each with its setting.
 pub fn registered(settings: &FrameworkSettings) -> Vec<(Activation, Box<dyn Framework>)> {
-    vec![(settings.drupal, Box::new(drupal::Drupal::default()))]
+    vec![
+        (settings.drupal, Box::new(drupal::Drupal::default())),
+        (settings.symfony, Box::new(symfony::Symfony::default())),
+    ]
 }
 
 /// Extensions of the files read as PHP in the project at `root`: `php`, then those
@@ -187,15 +198,34 @@ pub(crate) fn extensions(frameworks: &[Box<dyn Framework>]) -> Vec<&'static str>
         .collect()
 }
 
-/// The frameworks to run for the project at `root`.
+/// The frameworks to run for the workspace at `root`, each with its project: the
+/// directory of its nearest `composer.lock`, or the root when forced on without one,
+/// without the projects of the other active modules inside it.
 pub(crate) fn active(root: &Path, settings: &FrameworkSettings) -> Vec<Box<dyn Framework>> {
-    registered(settings)
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let found: Vec<(Box<dyn Framework>, PathBuf)> = registered(settings)
         .into_iter()
-        .filter(|(activation, framework)| match activation {
-            Activation::On => true,
-            Activation::Off => false,
-            Activation::Auto => framework.detect(root),
+        .filter_map(|(activation, framework)| {
+            let lock = project::nearest_lock(&root, framework.package());
+            let dir = match activation {
+                Activation::Off => return None,
+                Activation::On => lock.unwrap_or_else(|| root.clone()),
+                Activation::Auto => lock?,
+            };
+            Some((framework, dir))
         })
-        .map(|(_, framework)| framework)
+        .collect();
+    let dirs: Vec<PathBuf> = found.iter().map(|(_, dir)| dir.clone()).collect();
+    found
+        .into_iter()
+        .map(|(mut framework, dir)| {
+            let excluded = dirs
+                .iter()
+                .filter(|other| **other != dir && other.starts_with(&dir))
+                .cloned()
+                .collect();
+            framework.set_project(Project { dir, excluded });
+            framework
+        })
         .collect()
 }
