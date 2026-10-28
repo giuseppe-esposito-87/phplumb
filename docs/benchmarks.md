@@ -11,11 +11,11 @@ Same machine and checkouts as step 6a. Route names in `redirectToRoute()`, `gene
 | Member coverage      | 42,929, the same as before     | 13,097, the same as before |
 | Cold index           | 7.5 s (6.3 s before)           | 1.0 s                      |
 | Peak resident memory | 558 MB                         | 189 MB                     |
-| Update of one file   | 105 ms (95 ms before)          |                            |
+| Update of one file   | 105 ms (95 ms before)          | 20 ms (10 ms before)       |
 | All cases            | 87 passed, 7 failed, as before | 16 passed, 0 failed        |
 | Diagnostics          | 94, the same as before         | 0, the same as before      |
 
-Of the 383 literal route names in the Symfony reference project's PHP and Twig files, 381 resolve. The other 2 name a route whose attribute gives its name through a class constant. New cases cover a `redirectToRoute()` name, a `generate()` name and a Twig `path()` name. The Drupal timings vary from run to run as in earlier steps.
+Of the 383 literal route names in the Symfony reference project's PHP and Twig files, 381 resolve. The other 2 name a route whose attribute gives its name through a class constant. New cases cover a `redirectToRoute()` name, a `generate()` name and a Twig `path()` name. On the Symfony reference project every PHP update reads the routes again, which the module keeps to about 10 ms by checking route attributes before paths. The Drupal timings vary from run to run as in earlier steps.
 
 ## 2026-10-28, step 6a Symfony module skeleton
 

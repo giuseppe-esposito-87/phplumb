@@ -51,6 +51,11 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 
 - **Route names given by class constants are not read.** `#[Route('/dev/login', name: DevLoginAuthenticator::ROUTE)]` makes no route, so 2 of 383 route names in the Symfony reference project resolve to nothing. Found in step 6b.
 - **Route imports with `name_prefix` are not read.** Attribute routes under a YAML import that sets `name_prefix` keep their plain names. Found in step 6b.
+- **Some route definitions are not read.** The `alias` argument of `#[Route]` and YAML `alias:` routes, localized routes such as `loc.en`, `config/routes.php` and `config/routes/*.php`, and YAML files imported from outside `config/routes` define no route. A localized method also gets a `Class::method` alias that Symfony does not create. Found in the step 6b review.
+- **A class-level `#[Route]` with `name: null` drops the whole class.** Symfony reads it as no prefix. Found in the step 6b review.
+- **Named arguments give no route.** `redirectToRoute(route: 'home')`, `generate(name: 'x')`, Twig `path(name: 'home')` and names interpolated in Twig strings, such as `"#{path('home')}"`, give nothing. Found in the step 6b review.
+- **Route files are read more widely than Symfony loads them.** Nested directories and `.yml` files below `config/routes` count, a symlink loop there repeats targets, and updates match the `.yaml` extension case-sensitively while reading does not. Found in the step 6b review.
+- **Some step 6b behaviour has no test.** `Symfony::update` is untested, and the Twig guard tests pass without the guards; a Twig fixture holding `<?php ... ?>` would make the hover test meaningful. Found in the step 6b review.
 - **Routes from bundles are not read.** Routes that bundles define, such as `_wdt` or `_security_logout`, have no target. Found in step 6b.
 
 ## Accepted for now
