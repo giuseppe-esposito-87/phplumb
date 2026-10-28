@@ -28,8 +28,11 @@ impl Routes {
     /// routes of `config/routes.yaml` and the YAML files below `config/routes`.
     pub(crate) fn read(index: &Index, filter: &PathFilter, project: &Project) -> Routes {
         let mut routes = Routes::default();
+        let mut routed: HashMap<String, bool> = HashMap::new();
         for (path, declaration) in index.declarations() {
+            // Path checks cost more than reading attributes, so they come last.
             if declaration.kind == SymbolKind::Class
+                && has_routes(index, declaration, &mut routed)
                 && filter.in_scope(path)
                 && index.is_project_code(path)
             {
@@ -191,6 +194,34 @@ impl Routes {
             }
         }
     }
+}
+
+/// Whether `class`, one of its traits or one of its parents has a `#[Route]`,
+/// memoized by lowercased name.
+fn has_routes(index: &Index, class: &Declaration, memo: &mut HashMap<String, bool>) -> bool {
+    let key = class.fqn.to_ascii_lowercase();
+    if let Some(&known) = memo.get(&key) {
+        return known;
+    }
+    // A cycle in the hierarchy reads as no routes.
+    memo.insert(key.clone(), false);
+    let Some(shape) = &class.class else {
+        return false;
+    };
+    let own = !route_names(&shape.metadata).is_empty()
+        || shape
+            .members
+            .iter()
+            .any(|m| m.kind == MemberKind::Method && !route_names(&m.metadata).is_empty());
+    let found = own
+        || shape.parent.iter().chain(&shape.traits).any(|name| {
+            index
+                .classes_named(name)
+                .first()
+                .is_some_and(|ancestor| has_routes(index, ancestor.declaration, memo))
+        });
+    memo.insert(key, found);
+    found
 }
 
 /// The methods of `class` as reflection lists them: its own, then those of its
