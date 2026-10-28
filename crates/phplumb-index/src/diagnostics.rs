@@ -28,6 +28,9 @@ pub struct Diagnostic {
 /// Methods every enum has without declaring them.
 const ENUM_METHODS: [&str; 3] = ["cases", "from", "tryfrom"];
 
+/// The interfaces PHP gives every enum, whose members PHP fixes.
+const ENUM_INTERFACES: [&str; 2] = ["UnitEnum", "BackedEnum"];
+
 pub(crate) fn find(index: &Index, path: &Path, source: &[u8]) -> Vec<Diagnostic> {
     // `*.api.php` files document hooks with example code that never runs.
     if path
@@ -277,6 +280,9 @@ fn fully_known(index: &Index, class: &str, check_magic: bool) -> bool {
     let mut pending = vec![class.to_string()];
     while let Some(next) = pending.pop() {
         if !seen.insert(next.to_ascii_lowercase()) {
+            continue;
+        }
+        if ENUM_INTERFACES.iter().any(|i| next.eq_ignore_ascii_case(i)) {
             continue;
         }
         let declarations = index.classes_named(&next);

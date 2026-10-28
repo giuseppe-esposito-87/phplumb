@@ -48,6 +48,7 @@ class Members extends NoConstructor
         Suit::from('h');
         Suit::tryFrom('h');
         Plain::cases();
+        Plain::/*@broken*/nowhereDeclared();
         self::helper();
         static::helper();
         self::/*@broken*/absent();

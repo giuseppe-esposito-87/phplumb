@@ -590,7 +590,12 @@ pub fn summarize(source: &[u8]) -> FileSummary {
                 }
                 ClassShape {
                     parent: shape.parent.and_then(fqn_at),
-                    interfaces: shape.interfaces.into_iter().filter_map(fqn_at).collect(),
+                    interfaces: shape
+                        .interfaces
+                        .into_iter()
+                        .filter_map(fqn_at)
+                        .chain(shape.implicit.iter().map(|name| name.to_string()))
+                        .collect(),
                     traits: shape.traits.into_iter().filter_map(fqn_at).collect(),
                     magic: documented_magic || members.iter().any(handles_calls),
                     aliases: shape.aliases,
@@ -818,6 +823,8 @@ type MembersFound = (
 struct PendingShape {
     parent: Option<u32>,
     interfaces: Vec<u32>,
+    /// Interfaces PHP gives the class-like without naming them, after `interfaces`.
+    implicit: &'static [&'static str],
     traits: Vec<u32>,
     aliases: Vec<String>,
     members: Vec<Member>,
@@ -900,6 +907,7 @@ struct ClassHead {
     left_brace: u32,
     parent: Option<u32>,
     interfaces: Vec<u32>,
+    implicit: &'static [&'static str],
     attributes: Vec<PendingMeta>,
 }
 
@@ -1261,6 +1269,7 @@ impl Collector<'_> {
             shape: Some(PendingShape {
                 parent: head.parent,
                 interfaces: head.interfaces,
+                implicit: head.implicit,
                 traits,
                 aliases,
                 members,
@@ -1662,6 +1671,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: class.left_brace.start.offset,
                 parent,
                 interfaces,
+                implicit: &[],
                 attributes: c.attributes(&class.attribute_lists),
             },
             &class.members,
@@ -1735,6 +1745,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: interface.left_brace.start.offset,
                 parent: None,
                 interfaces,
+                implicit: &[],
                 attributes: c.attributes(&interface.attribute_lists),
             },
             &interface.members,
@@ -1753,6 +1764,7 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: r#trait.left_brace.start.offset,
                 parent: None,
                 interfaces: Vec::new(),
+                implicit: &[],
                 attributes: c.attributes(&r#trait.attribute_lists),
             },
             &r#trait.members,
@@ -1776,6 +1788,11 @@ impl<'ast, 'arena> Walker<'ast, 'arena, Collector<'arena>> for SyntaxVisitor {
                 left_brace: r#enum.left_brace.start.offset,
                 parent: None,
                 interfaces,
+                implicit: if r#enum.backing_type_hint.is_some() {
+                    &["UnitEnum", "BackedEnum"]
+                } else {
+                    &["UnitEnum"]
+                },
                 attributes: c.attributes(&r#enum.attribute_lists),
             },
             &r#enum.members,
