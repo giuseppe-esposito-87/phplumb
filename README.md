@@ -50,6 +50,7 @@ PHPlumb starts with Drupal, because its code calls almost everything through int
 PHPlumb turns on its Symfony support when the project's `composer.lock` requires `symfony/framework-bundle`. What works today:
 
 - **Routes.** Cmd+click on a route name in `redirectToRoute()`, `generateUrl()`, `UrlGeneratorInterface::generate()`, or `path()` and `url()` in a Twig template, opens the controller method of a `#[Route]` attribute, or the route in `config/routes.yaml` and its controller. Route names follow Symfony's rules: class name prefixes, generated default names and `Class::method` aliases.
+- **Templates.** Cmd+click on a template name in `render()`, `renderView()`, `#[Template]`, or in Twig `extends`, `include`, `embed`, `import`, `from`, `use`, `include()` and `source()`, opens the Twig file. Namespaces such as `@Blog` come from `twig.paths` in `config/packages/twig.yaml`, and plain names resolve against those paths without a namespace, then `templates/`.
 
 ## Speed
 

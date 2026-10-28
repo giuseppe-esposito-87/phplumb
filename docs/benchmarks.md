@@ -2,6 +2,21 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 6c Symfony templates
+
+Same machine and checkouts as step 6b. Template names in PHP and Twig open their Twig file. Both projects were measured with this branch and with the build before it.
+
+| Metric               | Drupal reference               | Symfony reference          |
+| -------------------- | ------------------------------ | -------------------------- |
+| Member coverage      | 42,929, the same as before     | 13,097, the same as before |
+| Cold index           | 6.8 s (5.8 s before)           | 1.1 s (0.9 s before)       |
+| Update of one file   | 98 ms (92 ms before)           | 15 ms (16 ms before)       |
+| Peak resident memory | 525 MB                         | 235 MB                     |
+| All cases            | 87 passed, 7 failed, as before | 20 passed, 0 failed        |
+| Diagnostics          | 94, the same as before         | 0, the same as before      |
+
+Of the 307 literal template names the Symfony reference project writes in `render()`, `renderView()`, `#[Template]` and Twig tags and functions, 302 resolve. Of the other 5, one is built by concatenation, three are JavaScript imports inside a Markdown template, and one is TwigBridge's `form_div_layout.html.twig`. New cases cover a namespaced `render()` name, a plain `extends` name, an `include()` name and an `import` name. Cold index times vary from run to run, as in earlier steps.
+
 ## 2026-10-28, step 6b Symfony routes
 
 Same machine and checkouts as step 6a. Route names in `redirectToRoute()`, `generateUrl()`, `UrlGeneratorInterface::generate()` and Twig `path()` and `url()` lead to the route's controller method or YAML definition. Both projects were measured with this branch and with the build before it.

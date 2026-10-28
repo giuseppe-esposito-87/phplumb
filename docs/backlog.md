@@ -58,6 +58,9 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Some step 6b behaviour has no test.** `Symfony::update` is untested, and the Twig guard tests pass without the guards; a Twig fixture holding `<?php ... ?>` would make the hover test meaningful. Found in the step 6b review.
 - **Routes from bundles are not read.** Routes that bundles define, such as `_wdt` or `_security_logout`, have no target. Found in step 6b.
 
+- **Templates from bundles and bridges are not found.** Bundle namespaces such as `@Twig` or `@WebProfiler`, their overrides in `templates/bundles`, and TwigBridge's form themes such as `form_div_layout.html.twig` give nothing. Found in step 6c.
+- **Template names in YAML are not read.** `form_themes` in `twig.yaml` and other configuration that names templates give nothing. Found in step 6c.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.
