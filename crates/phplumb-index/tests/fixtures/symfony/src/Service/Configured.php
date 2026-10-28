@@ -11,6 +11,7 @@ final class Configured
         #[Autowire('%app.limit%')] private int $limit,
         #[Autowire('%kernel.project_dir%/x')] private string $dir,
         #[Autowire(env: 'APP_X')] private string $x,
+        #[Autowire(service: 'app.mailer')] private object $mailer,
     ) {
     }
 }

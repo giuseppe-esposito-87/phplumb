@@ -739,3 +739,68 @@ fn autowire_parameters_lead_to_their_definitions() {
     assert!(definition(&mut index, CONFIGURED, "kernel.project_dir").is_empty());
     assert!(definition(&mut index, CONFIGURED, "APP_X").is_empty());
 }
+
+const SERVICES: &str = "config/services.yaml";
+
+#[test]
+fn yaml_class_names_open_their_class() {
+    let mut index = build();
+    let mailer = [pair("src/Service/Mailer.php", "Mailer")];
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 14, "App\\Service\\Mailer"),
+        mailer,
+        "key"
+    );
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 19, "App\\Service\\Mailer"),
+        mailer,
+        "class:"
+    );
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 20, "App\\Service\\Mailer"),
+        mailer,
+        "!service"
+    );
+    assert_eq!(
+        definition_on_line(
+            &mut index,
+            "config/packages/messenger.yaml",
+            4,
+            "App\\Message"
+        ),
+        [pair("src/Message/SendEmail.php", "SendEmail")]
+    );
+}
+
+#[test]
+fn yaml_service_references_open_their_definition() {
+    let mut index = build();
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 20, "app.mailer"),
+        [pair(SERVICES, "app.mailer")]
+    );
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 15, "App\\Service"),
+        [pair(SERVICES, "App\\Service\\Mailer")]
+    );
+    assert_eq!(
+        definition_on_line(&mut index, SERVICES, 16, "app.mailer"),
+        [pair(SERVICES, "app.mailer")]
+    );
+    assert!(definition_on_line(&mut index, SERVICES, 17, "service(").is_empty());
+}
+
+#[test]
+fn autowire_service_opens_its_definition() {
+    let mut index = build();
+    assert_eq!(
+        definition(&mut index, CONFIGURED, "'app.mailer'"),
+        [pair(SERVICES, "app.mailer")]
+    );
+}
+
+#[test]
+fn yaml_comments_give_nothing() {
+    let mut index = build();
+    assert!(definition_on_line(&mut index, SERVICES, 10, "App\\Service").is_empty());
+}

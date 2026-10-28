@@ -344,3 +344,24 @@ fn an_unreadable_path_stops_its_namespace() {
         Some("theme/base.html.twig")
     );
 }
+
+#[test]
+fn drupal_and_symfony_yaml_stay_apart() {
+    let mut index = auto(&nested());
+    let path = nested().join("config/services.yaml");
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8_lossy(&source).find("demo.thing").unwrap() as u32 + 1;
+    assert!(index.definition(&path, &source, offset).is_empty());
+    let drupal = nested().join("codebase/drupal/web/modules/custom/demo/demo.services.yml");
+    let source = fs::read(&drupal).unwrap();
+    let offset = String::from_utf8_lossy(&source).find("Thing").unwrap() as u32 + 1;
+    let targets: Vec<PathBuf> = index
+        .definition(&drupal, &source, offset)
+        .into_iter()
+        .map(|location| location.path)
+        .collect();
+    assert_eq!(
+        targets,
+        [nested().join("codebase/drupal/web/modules/custom/demo/src/Thing.php")]
+    );
+}

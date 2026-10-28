@@ -76,6 +76,58 @@ pub(crate) fn read_parameters(files: &[PathBuf]) -> HashMap<String, Vec<RouteTar
     found
 }
 
+/// The services the configuration files define under `services:`, also inside
+/// `when@<env>` blocks, each at its key; `_defaults`, `_instanceof` and prototypes
+/// (keys with a `resource`) are no services.
+pub(crate) fn read_services(files: &[PathBuf]) -> HashMap<String, Vec<RouteTarget>> {
+    let mut found: HashMap<String, Vec<RouteTarget>> = HashMap::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let Some(root) = yaml::parse(&text) else {
+            continue;
+        };
+        for block in top_blocks(&root) {
+            let Some(Yaml::Map(entries)) = block.get("services") else {
+                continue;
+            };
+            for (key, value) in entries {
+                let Yaml::Scalar {
+                    value: id,
+                    start,
+                    end,
+                } = key
+                else {
+                    continue;
+                };
+                if id == "_defaults" || id == "_instanceof" || value.get("resource").is_some() {
+                    continue;
+                }
+                let (start, end) = yaml::value_range(&text, id, *start, *end);
+                found.entry(id.clone()).or_default().push(RouteTarget {
+                    location: Location {
+                        path: file.clone(),
+                        start,
+                        end,
+                    },
+                    text: id.clone(),
+                });
+            }
+        }
+    }
+    found
+}
+
+/// Whether `text` is written like a fully qualified class name.
+pub(crate) fn looks_like_class(text: &str) -> bool {
+    let name = text.trim_start_matches('\\');
+    name.contains('\\')
+        && name
+            .split('\\')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_alphanumeric() || c == '_'))
+}
+
 /// The document itself, then each `when@<env>` block in it.
 pub(crate) fn top_blocks(root: &Yaml) -> Vec<&Yaml> {
     let mut blocks = vec![root];

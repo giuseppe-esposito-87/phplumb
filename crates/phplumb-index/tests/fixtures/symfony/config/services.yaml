@@ -6,3 +6,15 @@ parameters:
 services:
     _defaults:
         autowire: true
+
+    # App\Service\Mailer sends the mail.
+    App\:
+        resource: '../src/'
+
+    App\Service\Mailer: ~
+    app.mailer: '@App\Service\Mailer'
+    app.optional: '@?app.mailer'
+    app.computed: '@=service("app.mailer")'
+    App\Service\Notifier:
+        class: App\Service\Mailer
+        arguments: ['@app.mailer', !service { class: App\Service\Mailer }]
