@@ -2,6 +2,38 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 5c element types
+
+Same machine and checkouts as step 5b. Element types flow from declared arrays and generic collections to `foreach` values, array access, untyped callback parameters of built-in array functions, and members of generic receivers such as `$items->first()` and `->toArray()`. Both projects were measured with this branch and with the build before it.
+
+Drupal reference project:
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,929 of 45,837 accesses (93.7%) | at least 42,514 |
+| Cold index                              | 6.1 s                             | under 10 s      |
+| Warm start from the cache               | 4.8 s                             | under 2 s       |
+| Update of one file                      | 92 ms                             | under 0.5 s     |
+| Update of 1,000 files                   | 7.0 s                             | under 5 s       |
+| Peak resident memory                    | 619 MB                            | under 1024 MB   |
+| Slowest query case                      | 158 ms                            | under 1 s       |
+| All cases                               | 87 passed, 7 failed               | all pass        |
+| Diagnostics in `web/modules/custom`     | 94, the same as before            | no new ones     |
+
+The build before this step resolves 42,514 accesses, and no access it resolves is lost. Most of the 415 new ones are entities from `loadMultiple()` reaching callbacks and array access. The 7 failing cases point into files this branch of the project does not have, as in step 5b. The warm start and the update of 1,000 files still miss their targets, as before this step. A new case covers an untyped `array_map` callback over `array_filter()` of loaded roles.
+
+Symfony reference project, 16,931 PHP files:
+
+| Metric                   | Value                             | Target        |
+| ------------------------ | --------------------------------- | ------------- |
+| Member coverage in `src` | 13,097 of 13,211 accesses (99.1%) | above 13,001  |
+| Cold index               | 1.9 s                             | under 10 s    |
+| Peak resident memory     | 196 MB                            | under 1024 MB |
+| All cases                | 13 passed, 0 failed               | all pass      |
+| Diagnostics in `src`     | 0, the same as before             | no new ones   |
+
+New cases cover a `foreach` over a `Collection<int, X>` property, an untyped `array_map` callback over a `list<X>` result, array access on a typed list, a value from `->toArray()` of a collection, and a parameter with no element type of its own, which resolves to nothing. Doctrine's `ReadableCollection` mixes `@phpstan-template` and `@template`, so templates are read in docblock order whatever their prefix. The 114 accesses left come from array shapes and destructuring, invokable objects called as `($this->handler)(...)`, method-level templates such as `getRepository(X::class)`, parameter types documented only on the interface, and arrays built by assignment.
+
 ## 2026-10-28, step 5b enums
 
 Same machine. Every enum implements `UnitEnum`, and a backed enum `BackedEnum` too, so `from()`, `tryFrom()`, `cases()`, `->value` and `->name` lead to their stubs. An enum case has its enum's type, so `Role::PlatformAdmin->label()` and `Status::from($x)->label()` resolve.

@@ -23,6 +23,16 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Stub enums list `UnitEnum` twice.** Stubs such as `enum RoundingMode implements \UnitEnum` already name it, and the implicit interface is appended again. Lookups skip names already visited, so nothing breaks today. Skip an implicit name already in `interfaces`. Found in the step 5b review.
 - **Some case accesses get no type.** `$this::Low->label()` and `$severity::from('low')->label()` resolve to nothing, because a variable class gives no class. `self::Low->label()` in a trait the enum uses resolves `self` to the trait. Found in the step 5b review.
 
+### Element types
+
+- **Array shapes are not read.** `$record['startedAt']->format()` on an `array{startedAt: \DateTimeImmutable}`, `foreach ($rows as [$a, $b])` and `[$a, $b] = $pair` give nothing. Found in step 5c.
+- **Invokable objects give no return type.** `($this->saveTrack)(new SaveTrack(...))->toString()` does not read the `__invoke()` return type. Found in step 5c.
+- **Method-level templates are not bound.** `$em->getRepository(Concept::class)->findBy([])` gives nothing, because `@template T` with `@param class-string<T>` on a method is not resolved. Found in step 5c.
+- **Implementations do not inherit `@param` types.** A parameter typed `array` in an implementation gets no element type from the `@param list<X>` of the interface method. Found in step 5c.
+- **Callbacks of generic methods get no element type.** `$items->filter(fn ($i) => $i->label())` on a `Collection<int, Item>` leaves `$i` unknown; only built-in array functions type their callbacks. Found in step 5c.
+- **`static` returns on a generic receiver lose its arguments.** A method returning `static` on an `ArrayCollection<int, Item>` gives a plain `ArrayCollection`. Found in step 5c.
+- **`instanceof` inside `match (true)` arms does not narrow.** `$message instanceof RunEvidence => $message->ownerId` gives nothing. Found in step 5c.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.
@@ -33,3 +43,5 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **`from()` and `tryFrom()` on a pure enum are not flagged.** Diagnostics count `cases`, `from` and `tryFrom` on every enum. Navigation gives no target for them on a pure enum.
 - **Typed class constants get no type.** `const Severity DEFAULT = Severity::Low` gives nothing after `Severity::DEFAULT->`, because only enum cases get a type.
 - **Hover on `->value` shows `int|string`.** The type comes from the `BackedEnum` stub, not from the enum's backing type.
+- **Arrays built by assignment have no element type.** `$teams[$id] = $team` in a loop gives `$teams` no element type, as the design takes element types only from declarations.
+- **Template bounds are not used.** A template with no argument gives nothing, even with `@template T of Item`.
