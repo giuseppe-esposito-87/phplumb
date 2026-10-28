@@ -94,6 +94,9 @@ pub struct FoundCall {
     pub ranges: Vec<Option<(u32, u32)>>,
     /// The receiver's type; `Other` when unknown.
     pub receiver: TypeExpr,
+    /// The type of each positional argument, up to the first named or spread one;
+    /// `Other` when unknown.
+    pub arguments: Vec<TypeExpr>,
     /// The method or function holding the call: `Class::method` with the declaring
     /// class's fully qualified name, or the function's fully qualified name.
     pub caller: Option<String>,

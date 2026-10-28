@@ -131,6 +131,27 @@ impl Handlers {
     }
 }
 
+/// The method a class-level `#[AsMessageHandler]` names, when `attribute` is one.
+pub(crate) fn handler_method<'a>(
+    class: &'a Declaration,
+    attribute: &Metadata,
+) -> Option<&'a Member> {
+    if !is_handler(attribute) {
+        return None;
+    }
+    let name = match argument(attribute, "method", 3) {
+        Some(MetaValue::String(method)) => method.as_str(),
+        Some(_) => return None,
+        None => "__invoke",
+    };
+    class
+        .class
+        .as_ref()?
+        .members
+        .iter()
+        .find(|m| m.kind == MemberKind::Method && m.name.eq_ignore_ascii_case(name))
+}
+
 fn is_handler(metadata: &Metadata) -> bool {
     !metadata.annotation && metadata.name.eq_ignore_ascii_case(HANDLER_ATTRIBUTE)
 }

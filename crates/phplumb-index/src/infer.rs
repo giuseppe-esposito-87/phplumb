@@ -180,16 +180,7 @@ pub(crate) fn call_at(
             return None;
         }
         let parts = ctx.call_parts(call)?;
-        let arguments = arguments
-            .arguments
-            .iter()
-            .map_while(|argument| match argument {
-                Argument::Positional(argument) if argument.ellipsis.is_none() => {
-                    Some(ctx.expr(argument.value, argument.value.span().start.offset, 0))
-                }
-                _ => None,
-            })
-            .collect();
+        let arguments = ctx.argument_types(arguments);
         Some(CallAt { parts, arguments })
     })
 }
@@ -620,6 +611,7 @@ pub(crate) fn calls_named(
                 shapes: argument_shapes(arguments),
                 ranges: argument_ranges(arguments),
                 receiver: receiver.clone(),
+                arguments: ctx.argument_types(arguments),
                 caller: match caller.kind {
                     CallKind::Method => Some(format!("{}::{}", caller.detail, caller.name)),
                     CallKind::Function if caller.detail.is_empty() => Some(caller.name),
@@ -1797,6 +1789,20 @@ impl<'a, 'ast, 'arena> Ctx<'a, 'ast, 'arena> {
             position: 0,
             value: String::new(),
         })
+    }
+
+    /// The type of each positional argument, up to the first named or spread one.
+    fn argument_types(&self, arguments: &ArgumentList<'_>) -> Vec<TypeExpr> {
+        arguments
+            .arguments
+            .iter()
+            .map_while(|argument| match argument {
+                Argument::Positional(argument) if argument.ellipsis.is_none() => {
+                    Some(self.expr(argument.value, argument.value.span().start.offset, 0))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Positional arguments that are string literals or `X::class`, by position.

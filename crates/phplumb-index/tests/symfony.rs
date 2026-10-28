@@ -529,3 +529,63 @@ fn dispatch_without_handlers_keeps_its_declaration() {
         );
     }
 }
+
+/// Go to definition at `needle` on `line` of `file`, as (line, text) pairs sorted.
+fn lines_of(index: &mut Index, file: &str, line: usize, needle: &str) -> Vec<(usize, String)> {
+    let path = fixture().join(file);
+    let source = std::fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&source).into_owned();
+    let line_start: usize = text
+        .split_inclusive('\n')
+        .take(line - 1)
+        .map(str::len)
+        .sum();
+    let offset = (line_start + text[line_start..].find(needle).unwrap() + 1) as u32;
+    let mut found: Vec<(usize, String)> = index
+        .definition(&path, &source, offset)
+        .into_iter()
+        .map(|location| {
+            let content = String::from_utf8(std::fs::read(&location.path).unwrap()).unwrap();
+            let at = content[..location.start as usize].matches('\n').count() + 1;
+            (
+                at,
+                content[location.start as usize..location.end as usize].to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn handlers_list_their_dispatches() {
+    let mut index = build();
+    let dispatch = |line: usize| (line, "dispatch".to_string());
+    assert_eq!(
+        lines_of(
+            &mut index,
+            "src/Handler/SendEmailHandler.php",
+            11,
+            "__invoke"
+        ),
+        [dispatch(19)]
+    );
+    assert_eq!(
+        lines_of(&mut index, "src/Handler/NotifyLogger.php", 15, "handle"),
+        [dispatch(19), dispatch(20)]
+    );
+    assert_eq!(
+        lines_of(&mut index, "src/Handler/Explicit.php", 11, "run"),
+        [dispatch(20)]
+    );
+}
+
+#[test]
+fn the_handler_attribute_lists_the_dispatches() {
+    let mut index = build();
+    // Inside the attribute's arguments: its name opens the attribute class.
+    assert_eq!(
+        lines_of(&mut index, "src/Handler/NotifyLogger.php", 8, "method:"),
+        [(19, "dispatch".to_string()), (20, "dispatch".to_string())]
+    );
+}

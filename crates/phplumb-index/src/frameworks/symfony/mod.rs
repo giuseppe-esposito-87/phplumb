@@ -122,6 +122,60 @@ impl Symfony {
         self.handlers.handled_by(path, start)
     }
 
+    /// The template a `#[Template]` attribute under the cursor names.
+    fn template_targets(&self, declaration: &FrameworkDeclaration<'_>) -> Vec<(Location, String)> {
+        let FrameworkDeclaration::Method { member, offset, .. } = declaration else {
+            return Vec::new();
+        };
+        member
+            .metadata
+            .iter()
+            .filter(|m| {
+                m.name.eq_ignore_ascii_case(TEMPLATE_ATTRIBUTE)
+                    && m.span.0 <= *offset
+                    && *offset <= m.span.1
+            })
+            .filter_map(|m| {
+                let template = m.argument("template").or_else(|| {
+                    m.arguments
+                        .first()
+                        .filter(|(key, _)| key.is_none())
+                        .map(|(_, v)| v)
+                });
+                match template {
+                    Some(MetaValue::String(name)) => self.template_file(name),
+                    _ => None,
+                }
+            })
+            .map(file_start)
+            .collect()
+    }
+
+    /// The `dispatch()` calls of the project whose message is, extends or
+    /// implements one of `handled`, at their method name.
+    fn dispatches(&self, index: &Index, handled: &[String]) -> Vec<(Location, String)> {
+        let handled: Vec<&str> = handled.iter().map(String::as_str).collect();
+        index
+            .calls_named(&["dispatch"])
+            .into_iter()
+            .filter(|call| self.project.contains(&call.location.path))
+            .filter(|call| {
+                let found = FrameworkCall {
+                    targets: &call.targets,
+                    strings: &call.strings,
+                    receiver: Some(&call.receiver),
+                };
+                calls_one_of(index, &found, &DISPATCH)
+                    && call.arguments.first().is_some_and(|message| {
+                        crate::infer::class_names(message)
+                            .iter()
+                            .any(|class| is_a(index, class, &handled))
+                    })
+            })
+            .map(|call| (call.location, "dispatch".to_string()))
+            .collect()
+    }
+
     fn read(&mut self, index: &Index) {
         let filter = index.filter().scoped(&self.project);
         self.routes = Routes::read(index, &filter, &self.project);
@@ -285,36 +339,35 @@ impl Framework for Symfony {
             .collect()
     }
 
-    /// The template of a `#[Template]` attribute under the cursor opens its file.
+    /// The template of a `#[Template]` attribute under the cursor opens its file; a
+    /// message handler, by its method or its `#[AsMessageHandler]`, lists the
+    /// dispatches of its messages.
     fn declaration_targets(
         &self,
-        _index: &Index,
+        index: &Index,
         declaration: &FrameworkDeclaration<'_>,
     ) -> Vec<(Location, String)> {
-        let FrameworkDeclaration::Method { member, offset, .. } = declaration else {
-            return Vec::new();
+        let templates = self.template_targets(declaration);
+        if !templates.is_empty() {
+            return templates;
+        }
+        let handled = match declaration {
+            FrameworkDeclaration::Method { path, member, .. } => {
+                self.handled_by(path, member.name_start)
+            }
+            FrameworkDeclaration::Class {
+                path,
+                class,
+                metadata,
+            } => messenger::handler_method(class, metadata)
+                .map(|method| self.handled_by(path, method.name_start))
+                .unwrap_or_default(),
+            FrameworkDeclaration::Function { .. } => Vec::new(),
         };
-        member
-            .metadata
-            .iter()
-            .filter(|m| {
-                m.name.eq_ignore_ascii_case(TEMPLATE_ATTRIBUTE)
-                    && m.span.0 <= *offset
-                    && *offset <= m.span.1
-            })
-            .filter_map(|m| {
-                match m.argument("template").or_else(|| {
-                    m.arguments
-                        .first()
-                        .filter(|(key, _)| key.is_none())
-                        .map(|(_, v)| v)
-                }) {
-                    Some(MetaValue::String(name)) => self.template_file(name),
-                    _ => None,
-                }
-            })
-            .map(file_start)
-            .collect()
+        if handled.is_empty() {
+            return Vec::new();
+        }
+        self.dispatches(index, &handled)
     }
 
     fn as_any(&self) -> &dyn Any {
