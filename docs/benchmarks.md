@@ -2,6 +2,38 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 6a Symfony module skeleton
+
+Same machine and checkouts as step 5c. Each framework module now reads and answers only for its own project. A Symfony module turns on with `symfony/framework-bundle` and does nothing else yet. Both projects were measured with this branch and with the build before it.
+
+Drupal reference project, where Drupal is the only module and reads the whole root:
+
+| Metric                                  | Value                             | Target          |
+| --------------------------------------- | --------------------------------- | --------------- |
+| Member coverage in `web/modules/custom` | 42,929 of 45,837 accesses (93.7%) | at least 42,929 |
+| Cold index                              | 7.6 s                             | under 10 s      |
+| Warm start from the cache               | 5.2 s                             | under 2 s       |
+| Update of one file                      | 139 ms                            | under 0.5 s     |
+| Update of 1,000 files                   | 7.6 s                             | under 5 s       |
+| Peak resident memory                    | 580 MB                            | under 1024 MB   |
+| Slowest query case                      | 189 ms                            | under 1 s       |
+| All cases                               | 87 passed, 7 failed               | all pass        |
+| Diagnostics in `web/modules/custom`     | 94, the same as before            | no new ones     |
+
+Coverage, cases and diagnostics match the build before this step, which measures 6.6 s cold, 109 ms for one update and 597 MB in the same run. The 7 failing cases point into files this branch of the project does not have, as in step 5b.
+
+Symfony reference project, 16,931 PHP files:
+
+| Metric                   | Value                             | Target          |
+| ------------------------ | --------------------------------- | --------------- |
+| Member coverage in `src` | 13,097 of 13,211 accesses (99.1%) | at least 13,097 |
+| Cold index               | 1.2 s                             | under 10 s      |
+| Peak resident memory     | 180 MB                            | under 1024 MB   |
+| All cases                | 13 passed, 0 failed               | all pass        |
+| Diagnostics in `src`     | 0, the same as before             | no new ones     |
+
+Both modules are active: Drupal reads `codebase/drupal`, and Symfony reads the root without it. Before this step Drupal read the whole tree, Symfony code included; the build before measures 2.2 s cold and 206 MB. No access in `src` resolved through Drupal, so coverage is unchanged.
+
 ## 2026-10-28, step 5c element types
 
 Same machine and checkouts as step 5b. Element types flow from declared arrays and generic collections to `foreach` values, array access, untyped callback parameters of built-in array functions, and members of generic receivers such as `$items->first()` and `->toArray()`. Both projects were measured with this branch and with the build before it.
