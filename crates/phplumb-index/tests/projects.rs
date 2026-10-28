@@ -481,3 +481,21 @@ fn computed_set_parameter_names_silence_parameter_diagnostics() {
     ]);
     assert_eq!(broken_messages(&root), ["Undefined route 'missing_route'"]);
 }
+
+#[test]
+fn diagnostics_stay_in_their_module() {
+    let index = auto(&nested());
+    // The Drupal route is not a Symfony route.
+    assert_eq!(
+        diagnostics_in(&index, "templates/demo.html.twig"),
+        ["Undefined route 'demo.page'"]
+    );
+    assert!(
+        diagnostics_in(
+            &index,
+            "codebase/drupal/web/modules/custom/demo/demo.services.yml"
+        )
+        .is_empty()
+    );
+    assert!(diagnostics_in(&index, "config/services.yaml").is_empty());
+}

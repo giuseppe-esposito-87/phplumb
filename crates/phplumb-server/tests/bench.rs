@@ -286,3 +286,44 @@ fn bench_renders_stub_targets_under_stubs() {
     assert_eq!(report["cases_passed"], 1, "{report}");
     assert_eq!(output.status.code(), Some(0));
 }
+
+#[test]
+fn bench_sweeps_twig_and_yaml() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let files = [
+        (
+            "composer.lock",
+            r#"{"packages": [{"name": "symfony/framework-bundle", "version": "8.1.0"}]}"#,
+        ),
+        ("src/Kernel.php", "<?php\nnamespace App;\nclass Kernel {}\n"),
+        ("templates/page.html.twig", "{{ path('missing_route') }}\n"),
+        ("config/services.yaml", "parameters:\n    app.name: x\n"),
+        (
+            "vendor/acme/views/x.html.twig",
+            "{{ path('vendor_route') }}\n",
+        ),
+    ];
+    for (file, content) in files {
+        let path = root.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_phplumb"))
+        .arg("bench")
+        .arg("--root")
+        .arg(&root)
+        .arg("--diagnostics")
+        .arg(".")
+        .output()
+        .unwrap();
+
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"]["count"], 1, "{report}");
+    let entries = report["diagnostics"]["entries"].as_array().unwrap();
+    assert_eq!(
+        entries[0].as_str().unwrap(),
+        "templates/page.html.twig:1:10 Undefined route 'missing_route'"
+    );
+}
