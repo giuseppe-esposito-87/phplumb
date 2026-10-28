@@ -27,10 +27,17 @@ pub fn is_twig(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("twig"))
 }
 
+/// Whether `path` is a Doctrine XML mapping file.
+pub fn is_doctrine_xml(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".orm.xml"))
+}
+
 /// Whether `path` is a file the engine does not read as PHP, where only the
-/// frameworks answer: YAML and Twig.
+/// frameworks answer: YAML, Twig and Doctrine XML mappings.
 pub fn is_framework_file(path: &Path) -> bool {
-    is_yaml(path) || is_twig(path)
+    is_yaml(path) || is_twig(path) || is_doctrine_xml(path)
 }
 
 /// Directories never indexed, whatever the exclusions say.

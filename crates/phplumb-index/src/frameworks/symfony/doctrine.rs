@@ -129,6 +129,63 @@ pub(crate) fn elements(text: &str) -> Vec<Element> {
     found
 }
 
+/// Elements that map a class through their `name` attribute.
+const MAPPED_CLASSES: [&str; 3] = ["entity", "embeddable", "mapped-superclass"];
+
+/// Association elements, whose `field` names a property and whose
+/// `target-entity` names the associated class.
+const ASSOCIATIONS: [&str; 4] = ["one-to-one", "one-to-many", "many-to-one", "many-to-many"];
+
+/// What the attribute value under `offset` of a mapping file names.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Named {
+    Class(String),
+    /// A property of the class.
+    Property(String, String),
+}
+
+/// The class or property the attribute value under `offset` names, from the
+/// element it belongs to and the class the enclosing element maps.
+pub(crate) fn named_at(text: &str, offset: u32) -> Option<Named> {
+    let mut mapped: Option<String> = None;
+    for element in elements(text) {
+        if MAPPED_CLASSES.contains(&element.name.as_str()) {
+            mapped = element
+                .attribute("name")
+                .map(|n| n.trim_start_matches('\\').to_string());
+        }
+        let Some((key, value, ..)) = element
+            .attributes
+            .iter()
+            .find(|(_, _, start, end)| *start <= offset && offset <= *end)
+        else {
+            continue;
+        };
+        let name = element.name.as_str();
+        let class = |written: &str| mapped.as_deref().map(|m| qualify(m, written));
+        return match key.as_str() {
+            "name" if MAPPED_CLASSES.contains(&name) => {
+                Some(Named::Class(value.trim_start_matches('\\').to_string()))
+            }
+            "target-entity" | "repository-class" => class(value).map(Named::Class),
+            "class" if name == "embedded" => class(value).map(Named::Class),
+            "enum-type" if matches!(name, "field" | "id") => class(value).map(Named::Class),
+            "name" if matches!(name, "field" | "id" | "embedded") => {
+                Some(Named::Property(mapped.clone()?, value.clone()))
+            }
+            "field" if ASSOCIATIONS.contains(&name) => {
+                Some(Named::Property(mapped.clone()?, value.clone()))
+            }
+            "mapped-by" | "inversed-by" => {
+                let target = class(element.attribute("target-entity")?)?;
+                Some(Named::Property(target, value.clone()))
+            }
+            _ => None,
+        };
+    }
+    None
+}
+
 /// What the mappings declare: each entity's repository class.
 #[derive(Default)]
 pub(crate) struct Mappings {

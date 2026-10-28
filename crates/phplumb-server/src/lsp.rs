@@ -496,6 +496,8 @@ impl Server<'_> {
                 // Framework modules read YAML files, such as Drupal's services and
                 // Symfony's routes.
                 watcher("**/*.{yml,yaml}".to_string(), None),
+                // Doctrine mappings, which the Symfony module reads.
+                watcher("**/*.orm.xml".to_string(), None),
                 // Creating, moving or deleting a directory reports only the directory.
                 watcher(
                     "**/*".to_string(),

@@ -104,6 +104,24 @@ fn class_targets(index: &Index, fqn: &str) -> Vec<(Location, String)> {
         .collect()
 }
 
+/// The declaration of property `name` on `class` or its parents, at its name.
+fn property_targets(index: &Index, class: &str, name: &str) -> Vec<(Location, String)> {
+    index
+        .find_member(class, crate::summary::MemberKind::Property, name)
+        .into_iter()
+        .map(|(found, member)| {
+            (
+                Location {
+                    path: found.path.to_path_buf(),
+                    start: member.name_start,
+                    end: member.name_end,
+                },
+                member.name.clone(),
+            )
+        })
+        .collect()
+}
+
 /// Targets as `(location, expected text)` pairs.
 fn targets_of(targets: &[RouteTarget]) -> Vec<(Location, String)> {
     targets
@@ -440,8 +458,9 @@ impl Framework for Symfony {
     }
 
     /// In YAML configuration, a parameter, a service reference or a class name leads
-    /// to its definition; in a Twig template, a template name opens its file, and a
-    /// route name in `path()` or `url()` leads to the route.
+    /// to its definition; in a Doctrine mapping, a class or property name opens it;
+    /// in a Twig template, a template name opens its file, and a route name in
+    /// `path()` or `url()` leads to the route.
     fn file_targets(
         &self,
         index: &Index,
@@ -451,6 +470,18 @@ impl Framework for Symfony {
     ) -> Vec<(Location, String)> {
         if crate::filter::is_yaml(path) {
             return self.yaml_targets(index, path, source, offset);
+        }
+        if crate::filter::is_doctrine_xml(path) {
+            let Ok(text) = std::str::from_utf8(source) else {
+                return Vec::new();
+            };
+            return match doctrine::named_at(text, offset) {
+                Some(doctrine::Named::Class(class)) => class_targets(index, &class),
+                Some(doctrine::Named::Property(class, property)) => {
+                    property_targets(index, &class, &property)
+                }
+                None => Vec::new(),
+            };
         }
         if !crate::filter::is_twig(path) {
             return Vec::new();

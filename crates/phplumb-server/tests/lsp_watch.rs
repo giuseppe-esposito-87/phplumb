@@ -105,14 +105,14 @@ fn registers_file_watchers() {
             .as_array()
             .unwrap()
             .len(),
-        4
+        5
     );
     assert_eq!(
         registration["registerOptions"]["watchers"][0]["globPattern"],
         "**/*.php"
     );
     // The catch-all watcher reports created and deleted directories: Create | Delete.
-    assert_eq!(registration["registerOptions"]["watchers"][3]["kind"], 5);
+    assert_eq!(registration["registerOptions"]["watchers"][4]["kind"], 5);
     client.reply_null(&request);
     client.shutdown();
 }

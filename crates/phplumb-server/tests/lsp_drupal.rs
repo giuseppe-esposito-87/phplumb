@@ -138,6 +138,10 @@ fn registers_a_yaml_watcher() {
             .any(|w| w["globPattern"] == "**/*.{yml,yaml}"),
         "{watchers:?}"
     );
+    assert!(
+        watchers.iter().any(|w| w["globPattern"] == "**/*.orm.xml"),
+        "{watchers:?}"
+    );
     client.reply_null(&request);
     client.shutdown();
 }

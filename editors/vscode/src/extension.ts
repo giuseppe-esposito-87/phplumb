@@ -20,6 +20,8 @@ export const DOCUMENT_SELECTOR: { scheme: string; language?: string; pattern?: s
   { scheme: "file", language: "yaml" },
   // Twig templates hold route and template names; no Twig extension is needed.
   { scheme: "file", pattern: "**/*.twig" },
+  // Doctrine XML mappings name classes and properties; no XML extension is needed.
+  { scheme: "file", pattern: "**/*.orm.xml" },
 ];
 
 export async function activate(context: vscode.ExtensionContext): Promise<PhplumbApi> {

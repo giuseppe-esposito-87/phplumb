@@ -841,3 +841,70 @@ fn repositories_come_from_xml_and_attributes() {
     );
     assert_eq!(symfony.repository_of("App\\Entity\\Author"), None);
 }
+
+const POST_XML: &str = "config/doctrine/Post.orm.xml";
+const AUTHOR_XML: &str = "config/doctrine/Author.orm.xml";
+
+#[test]
+fn mapping_class_names_open_their_class() {
+    let mut index = build();
+    for (line, needle, file, text) in [
+        (3, "App\\Entity\\Post", "src/Entity/Post.php", "Post"),
+        (
+            3,
+            "App\\Repository",
+            "src/Repository/PostRepository.php",
+            "PostRepository",
+        ),
+        (6, "\"Author\"", "src/Entity/Author.php", "Author"),
+        (
+            7,
+            "App\\Entity\\Address",
+            "src/Entity/Address.php",
+            "Address",
+        ),
+    ] {
+        assert_eq!(
+            definition_on_line(&mut index, POST_XML, line, needle),
+            [pair(file, text)],
+            "{needle}"
+        );
+    }
+}
+
+#[test]
+fn mapping_property_names_open_their_property() {
+    let mut index = build();
+    let post = "src/Entity/Post.php";
+    for (line, needle, text) in [
+        (4, "\"id\"", "id"),
+        (5, "\"title\"", "title"),
+        (6, "\"author\"", "author"),
+        (7, "\"address\"", "address"),
+    ] {
+        assert_eq!(
+            definition_on_line(&mut index, POST_XML, line, needle),
+            [pair(post, text)],
+            "{needle}"
+        );
+    }
+    assert_eq!(
+        definition_on_line(&mut index, POST_XML, 6, "\"posts\""),
+        [pair("src/Entity/Author.php", "posts")]
+    );
+    assert_eq!(
+        definition_on_line(&mut index, AUTHOR_XML, 6, "\"author\""),
+        [pair(post, "author")]
+    );
+    assert_eq!(
+        definition_on_line(&mut index, "config/doctrine/Address.orm.xml", 4, "street"),
+        [pair("src/Entity/Address.php", "street")]
+    );
+}
+
+#[test]
+fn mapping_comments_and_namespaces_give_nothing() {
+    let mut index = build();
+    assert!(definition_on_line(&mut index, AUTHOR_XML, 3, "App\\Entity").is_empty());
+    assert!(definition_on_line(&mut index, POST_XML, 2, "doctrine-project").is_empty());
+}

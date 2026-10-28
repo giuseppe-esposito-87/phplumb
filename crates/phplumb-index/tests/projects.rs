@@ -365,3 +365,12 @@ fn drupal_and_symfony_yaml_stay_apart() {
         [nested().join("codebase/drupal/web/modules/custom/demo/src/Thing.php")]
     );
 }
+
+#[test]
+fn doctrine_xml_stays_in_its_project() {
+    let mut index = auto(&nested());
+    let path = nested().join("codebase/drupal/web/modules/custom/demo/config/Thing.orm.xml");
+    let source = fs::read(&path).unwrap();
+    let offset = String::from_utf8_lossy(&source).find("Thing\"").unwrap() as u32;
+    assert!(index.definition(&path, &source, offset).is_empty());
+}
