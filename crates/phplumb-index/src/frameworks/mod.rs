@@ -59,10 +59,12 @@ pub enum FrameworkDeclaration<'a> {
         declaration: &'a Declaration,
         file: &'a [Declaration],
     },
+    /// A method, by its name or one of its attributes; `offset` is the cursor.
     Method {
         path: &'a Path,
         class: &'a Declaration,
         member: &'a Member,
+        offset: u32,
     },
     /// One of the class's own attributes.
     Class {

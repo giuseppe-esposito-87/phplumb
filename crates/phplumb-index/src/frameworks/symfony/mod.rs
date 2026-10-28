@@ -11,6 +11,7 @@ use crate::diagnostics::Diagnostic;
 use crate::frameworks::ancestry::is_a;
 use crate::frameworks::{CallTarget, Framework, FrameworkCall, FrameworkDeclaration, Project};
 use crate::index::{Index, Location};
+use crate::metadata::MetaValue;
 use crate::phpdoc::TypeExpr;
 use crate::summary::NameRef;
 
@@ -30,16 +31,46 @@ const ROUTE_METHODS: [(&str, &[&str]); 2] = [
     ),
 ];
 
-/// Whether `call` passes a route name as its argument 0.
-fn route_call(index: &Index, call: &FrameworkCall<'_>) -> bool {
+/// Methods whose argument 0 is a template name, by the class that declares them.
+const TEMPLATE_METHODS: [(&str, &[&str]); 2] = [
+    (
+        "Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController",
+        &[
+            "render",
+            "renderView",
+            "renderBlock",
+            "renderBlockView",
+            "stream",
+        ],
+    ),
+    ("Twig\\Environment", &["render", "display", "load"]),
+];
+
+/// The attribute that names a controller method's template.
+const TEMPLATE_ATTRIBUTE: &str = "Symfony\\Bridge\\Twig\\Attribute\\Template";
+
+/// Whether `call` targets one of `methods`, by declaring class.
+fn calls_one_of(index: &Index, call: &FrameworkCall<'_>, methods: &[(&str, &[&str])]) -> bool {
     call.targets.iter().any(|target| {
         let CallTarget::Method { class, name } = target else {
             return false;
         };
-        ROUTE_METHODS.iter().any(|(owner, methods)| {
-            methods.iter().any(|m| m.eq_ignore_ascii_case(name)) && is_a(index, class, &[owner])
+        methods.iter().any(|(owner, names)| {
+            names.iter().any(|m| m.eq_ignore_ascii_case(name)) && is_a(index, class, &[owner])
         })
     })
+}
+
+/// A file target at its start.
+fn file_start(path: PathBuf) -> (Location, String) {
+    (
+        Location {
+            path,
+            start: 0,
+            end: 0,
+        },
+        String::new(),
+    )
 }
 
 #[derive(Default)]
@@ -123,7 +154,17 @@ impl Framework for Symfony {
         argument: usize,
         value: &str,
     ) -> Vec<(Location, String)> {
-        if argument != 0 || !route_call(index, call) {
+        if argument != 0 {
+            return Vec::new();
+        }
+        if calls_one_of(index, call, &TEMPLATE_METHODS) {
+            return self
+                .template_file(value)
+                .into_iter()
+                .map(file_start)
+                .collect();
+        }
+        if !calls_one_of(index, call, &ROUTE_METHODS) {
             return Vec::new();
         }
         self.route_targets(value)
@@ -179,12 +220,36 @@ impl Framework for Symfony {
             .collect()
     }
 
+    /// The template of a `#[Template]` attribute under the cursor opens its file.
     fn declaration_targets(
         &self,
         _index: &Index,
-        _declaration: &FrameworkDeclaration<'_>,
+        declaration: &FrameworkDeclaration<'_>,
     ) -> Vec<(Location, String)> {
-        Vec::new()
+        let FrameworkDeclaration::Method { member, offset, .. } = declaration else {
+            return Vec::new();
+        };
+        member
+            .metadata
+            .iter()
+            .filter(|m| {
+                m.name.eq_ignore_ascii_case(TEMPLATE_ATTRIBUTE)
+                    && m.span.0 <= *offset
+                    && *offset <= m.span.1
+            })
+            .filter_map(|m| {
+                match m.argument("template").or_else(|| {
+                    m.arguments
+                        .first()
+                        .filter(|(key, _)| key.is_none())
+                        .map(|(_, v)| v)
+                }) {
+                    Some(MetaValue::String(name)) => self.template_file(name),
+                    _ => None,
+                }
+            })
+            .map(file_start)
+            .collect()
     }
 
     fn as_any(&self) -> &dyn Any {

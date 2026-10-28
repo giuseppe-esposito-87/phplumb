@@ -4,14 +4,36 @@
             "name": "symfony/framework-bundle",
             "install-path": "../symfony/framework-bundle",
             "autoload": {
-                "psr-4": {"Symfony\\Bundle\\FrameworkBundle\\": ""}
+                "psr-4": {
+                    "Symfony\\Bundle\\FrameworkBundle\\": ""
+                }
             }
         },
         {
             "name": "symfony/routing",
             "install-path": "../symfony/routing",
             "autoload": {
-                "psr-4": {"Symfony\\Component\\Routing\\": ""}
+                "psr-4": {
+                    "Symfony\\Component\\Routing\\": ""
+                }
+            }
+        },
+        {
+            "name": "twig/twig",
+            "install-path": "../twig/twig",
+            "autoload": {
+                "psr-4": {
+                    "Twig\\": "src/"
+                }
+            }
+        },
+        {
+            "name": "symfony/twig-bridge",
+            "install-path": "../symfony/twig-bridge",
+            "autoload": {
+                "psr-4": {
+                    "Symfony\\Bridge\\Twig\\": ""
+                }
             }
         }
     ]

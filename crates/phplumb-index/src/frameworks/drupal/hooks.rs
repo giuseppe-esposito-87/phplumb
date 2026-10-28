@@ -694,6 +694,7 @@ impl Hooks {
                 path,
                 class,
                 member,
+                ..
             } => self
                 .file_hooks(index, path, &[class])
                 .into_iter()

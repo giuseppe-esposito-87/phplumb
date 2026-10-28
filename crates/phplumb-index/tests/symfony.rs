@@ -277,3 +277,40 @@ fn unknown_names_and_namespaces_give_nothing() {
     assert_eq!(template(&index, "@Twig/Exception/error.html.twig"), None);
     assert_eq!(template(&index, "missing.html.twig"), None);
 }
+
+const PAGES: &str = "src/Controller/PagesController.php";
+
+#[test]
+fn template_names_in_php_open_their_file() {
+    let mut index = build();
+    for (needle, file) in [
+        (
+            "'@Blog/list.html.twig'",
+            "src/Blog/templates/list.html.twig",
+        ),
+        ("'base.html.twig'", "extra/base.html.twig"),
+        (
+            "'@Blog/card.html.twig'",
+            "src/Shared/templates/card.html.twig",
+        ),
+        ("'@Dev/tools.html.twig'", "dev/templates/tools.html.twig"),
+    ] {
+        assert_eq!(
+            definition(&mut index, PAGES, needle),
+            [pair(file, "")],
+            "{needle}"
+        );
+    }
+}
+
+#[test]
+fn unknown_template_names_give_nothing() {
+    let mut index = build();
+    assert!(definition(&mut index, PAGES, "'missing.html.twig'").is_empty());
+    // The method name is not the attribute: it never opens the template.
+    let on_name = definition(&mut index, PAGES, "tools()");
+    assert!(
+        on_name.iter().all(|(path, _)| !path.ends_with(".twig")),
+        "{on_name:?}"
+    );
+}

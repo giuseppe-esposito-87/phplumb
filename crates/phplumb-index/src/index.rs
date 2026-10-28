@@ -1475,6 +1475,7 @@ impl Index {
                     path,
                     class: d,
                     member,
+                    offset,
                 });
             }
             let metadata = shape

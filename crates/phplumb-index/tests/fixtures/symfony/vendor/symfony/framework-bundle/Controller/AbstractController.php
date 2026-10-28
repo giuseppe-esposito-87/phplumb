@@ -9,6 +9,16 @@ abstract class AbstractController
         return '';
     }
 
+    protected function render(string $view, array $parameters = []): object
+    {
+        return new \stdClass();
+    }
+
+    protected function renderView(string $view, array $parameters = []): string
+    {
+        return '';
+    }
+
     protected function redirectToRoute(string $route, array $parameters = []): object
     {
         return new \stdClass();
