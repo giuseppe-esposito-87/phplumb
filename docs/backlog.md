@@ -31,6 +31,10 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Implementations do not inherit `@param` types.** A parameter typed `array` in an implementation gets no element type from the `@param list<X>` of the interface method. Found in step 5c.
 - **Callbacks of generic methods get no element type.** `$items->filter(fn ($i) => $i->label())` on a `Collection<int, Item>` leaves `$i` unknown; only built-in array functions type their callbacks. Found in step 5c.
 - **`static` returns on a generic receiver lose its arguments.** A method returning `static` on an `ArrayCollection<int, Item>` gives a plain `ArrayCollection`. Found in step 5c.
+- **Templates are matched by name.** A method-level `@template T` that shadows the class's `T`, or a conditional return type whose subject is a class template, takes the receiver's argument. Found in the step 5c review.
+- **Hover shows `mixed` for scalar generic arguments.** `Collection<int, Item>` displays as `\Lib\Collection<mixed, \App\Item>`, because types keep only class names. Found in the step 5c review.
+- **Generic arguments are lost in three places.** `parent::method()` reads the parent without the subclass's `@extends` arguments, generic traits (`@use Trait<X>`) are not read, and a class with no templates written `Foo<int, Item>` gives nothing. Found in the step 5c review.
+- **Spread arguments give nothing.** `array_map(fn ($x) => ..., ...$lists)` leaves `$x` unknown instead of typing each spread array's element. Found in the step 5c review.
 - **`instanceof` inside `match (true)` arms does not narrow.** `$message instanceof RunEvidence => $message->ownerId` gives nothing. Found in step 5c.
 
 ## Accepted for now
