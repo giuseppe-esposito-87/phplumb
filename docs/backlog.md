@@ -63,6 +63,9 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **`#[Template]` answers anywhere inside the attribute.** A cursor on another argument of the same attribute opens the template, because attribute arguments keep no positions. Found in the step 6c review.
 - **Some step 6c behaviour has no test.** `renderBlock()`, `renderBlockView()`, `stream()`, `Environment::display()` and `load()`, list-form and relative `paths`, a `default_path` override, and a Twig file of a nested Drupal project are untested. Found in the step 6c review.
 
+- **Some message flows are not followed.** Messages wrapped in `new Envelope(...)`, messages the Scheduler sends with `RecurringMessage`, handlers configured in YAML or service tags, handler methods a handler class inherits, and the `bus` and `fromTransport` options of `#[AsMessageHandler]` are not read. Found in step 6d.
+- **A bare class-level `#[AsMessageHandler]` cannot lead to dispatches.** The attribute is only its name, which opens the attribute class; the handler method does lead to them. Found in step 6d.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.

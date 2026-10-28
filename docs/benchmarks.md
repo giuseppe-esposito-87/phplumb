@@ -2,6 +2,23 @@
 
 Results of `phplumb bench` on the reference Drupal project and, from step 5a, on the reference Symfony project. The case files live outside the repository because they point into project code.
 
+## 2026-10-28, step 6d Symfony Messenger
+
+Same machine and checkouts as step 6c. `dispatch()` lists the handlers of its message, and a handler lists the dispatches of its messages. Both projects were measured with this branch and with the build before it.
+
+| Metric               | Drupal reference                   | Symfony reference          |
+| -------------------- | ---------------------------------- | -------------------------- |
+| Member coverage      | 42,929, the same as before         | 13,097, the same as before |
+| Cold index           | 5.6 to 5.8 s (5.8 to 6.0 s before) | 0.9 s                      |
+| Update of one file   | 108 ms (94 ms before)              | 17 ms (16 ms before)       |
+| Peak resident memory | 578 MB                             | 248 MB                     |
+| All cases            | 87 passed, 7 failed, as before     | 22 passed, 0 failed        |
+| Diagnostics          | 94, the same as before             | 0, the same as before      |
+
+Of the 28 `dispatch()` calls in the Symfony reference project, 27 list their handlers, and 28 of its 30 handlers list their dispatches. The other dispatch sends a message whose type comes from a callable through a method-level template, which also leaves its handler without dispatches; the last handler's message is sent by the Scheduler, not by `dispatch()`. New cases cover a `dispatch()` with its handler and that handler with its dispatch.
+
+The Drupal cold index was measured alternating this branch and the build before it: the first run after a build is about 1 s slower, which explains the differences recorded in steps 6a to 6c.
+
 ## 2026-10-28, step 6c Symfony templates
 
 Same machine and checkouts as step 6b. Template names in PHP and Twig open their Twig file. Both projects were measured with this branch and with the build before it.
