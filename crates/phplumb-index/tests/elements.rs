@@ -300,3 +300,20 @@ fn array_functions_keep_element_types() {
         assert_eq!(in_arrays(&mut index, nth), item_label(), "{nth}");
     }
 }
+
+#[test]
+fn mixed_template_prefixes_keep_their_order() {
+    let shape = shape(
+        "<?php namespace Lib;\n\
+         /**\n\
+          * @phpstan-template TKey of array-key\n\
+          * @template-covariant T\n\
+          * @template-extends \\IteratorAggregate<TKey, T>\n\
+          * @phpstan-extends \\IteratorAggregate<TKey, T>\n\
+          */\n\
+         interface C extends \\IteratorAggregate {}",
+        "Lib\\C",
+    );
+    assert_eq!(shape.templates, ["Lib\\TKey", "Lib\\T"]);
+    assert_eq!(shape.generic_supertypes.len(), 1);
+}

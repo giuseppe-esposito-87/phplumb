@@ -689,6 +689,8 @@ pub fn parse_docblock(text: &str, names: &dyn NameContext) -> DocBlock {
     // Plain tags first, then the analyzer-specific ones, which win.
     let mut plain = DocBlock::default();
     let mut specific = DocBlock::default();
+    // Analyzers read `@template` and `@phpstan-template` as one list, in order.
+    let mut templates: Vec<String> = Vec::new();
     for line in lines {
         let Some(tag_line) = line.strip_prefix('@') else {
             if in_summary && !line.is_empty() {
@@ -721,8 +723,9 @@ pub fn parse_docblock(text: &str, names: &dyn NameContext) -> DocBlock {
             }
             "return" => target.returns = Some(parse_type(type_text, names)),
             "template" | "template-covariant" | "template-contravariant" => {
-                if !type_text.is_empty() {
-                    target.templates.push(names.resolve_class(type_text));
+                let name = names.resolve_class(type_text);
+                if !type_text.is_empty() && !templates.contains(&name) {
+                    templates.push(name);
                 }
             }
             "extends" | "implements" | "template-extends" | "template-implements" => {
@@ -748,17 +751,23 @@ pub fn parse_docblock(text: &str, names: &dyn NameContext) -> DocBlock {
         },
         params,
         returns: specific.returns.or(plain.returns),
-        templates: if specific.templates.is_empty() {
-            plain.templates
-        } else {
-            specific.templates
-        },
-        generic_supertypes: if specific.generic_supertypes.is_empty() {
-            plain.generic_supertypes
-        } else {
-            specific.generic_supertypes
-        },
+        templates,
+        generic_supertypes: merge_supertypes(plain.generic_supertypes, specific.generic_supertypes),
     }
+}
+
+/// The generic parents of both lists, the analyzer-specific one winning for a
+/// class both name.
+fn merge_supertypes(
+    plain: Vec<(String, Vec<TypeExpr>)>,
+    specific: Vec<(String, Vec<TypeExpr>)>,
+) -> Vec<(String, Vec<TypeExpr>)> {
+    let mut merged = plain;
+    for (class, args) in specific {
+        merged.retain(|(known, _)| !known.eq_ignore_ascii_case(&class));
+        merged.push((class, args));
+    }
+    merged
 }
 
 #[cfg(test)]
