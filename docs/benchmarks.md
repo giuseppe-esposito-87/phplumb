@@ -11,16 +11,16 @@ Drupal reference project, where Drupal is the only module and reads the whole ro
 | Metric                                  | Value                             | Target          |
 | --------------------------------------- | --------------------------------- | --------------- |
 | Member coverage in `web/modules/custom` | 42,929 of 45,837 accesses (93.7%) | at least 42,929 |
-| Cold index                              | 7.6 s                             | under 10 s      |
-| Warm start from the cache               | 5.2 s                             | under 2 s       |
-| Update of one file                      | 139 ms                            | under 0.5 s     |
-| Update of 1,000 files                   | 7.6 s                             | under 5 s       |
-| Peak resident memory                    | 580 MB                            | under 1024 MB   |
+| Cold index                              | 6.5 s                             | under 10 s      |
+| Warm start from the cache               | 4.7 s                             | under 2 s       |
+| Update of one file                      | 96 ms                             | under 0.5 s     |
+| Update of 1,000 files                   | 6.8 s                             | under 5 s       |
+| Peak resident memory                    | 627 MB                            | under 1024 MB   |
 | Slowest query case                      | 189 ms                            | under 1 s       |
 | All cases                               | 87 passed, 7 failed               | all pass        |
 | Diagnostics in `web/modules/custom`     | 94, the same as before            | no new ones     |
 
-Coverage, cases and diagnostics match the build before this step, which measures 6.6 s cold, 109 ms for one update and 597 MB in the same run. The 7 failing cases point into files this branch of the project does not have, as in step 5b.
+Coverage, cases and diagnostics match the build before this step, which measures 5.8 s cold, 91 ms for one update and 619 MB in the same run. A project that covers the whole root skips the scope check, which otherwise added about 30% to every update. The 7 failing cases point into files this branch of the project does not have, as in step 5b.
 
 Symfony reference project, 16,931 PHP files:
 

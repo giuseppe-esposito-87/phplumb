@@ -37,6 +37,16 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Spread arguments give nothing.** `array_map(fn ($x) => ..., ...$lists)` leaves `$x` unknown instead of typing each spread array's element. Found in the step 5c review.
 - **`instanceof` inside `match (true)` arms does not narrow.** `$message instanceof RunEvidence => $message->ownerId` gives nothing. Found in step 5c.
 
+### Framework projects
+
+- **Modules linked in from outside a nested project are lost.** With the Drupal `composer.lock` below the root and a module symlinked from a sibling folder, as a Composer path repository does, the module's files lie outside the Drupal project, so its services, routes and plugins are not read. Found in the step 6a review.
+- **Annotation navigation is gated by the class's indexed path.** In a file the index does not hold yet, or one `phplumb.exclude` leaves out, Drupal is not asked about `@Block`-style annotations. Pass the file's path to `annotation_classes`. Found in the step 6a review.
+- **Hook invocation search reads outside the Drupal project.** `calls_named` runs inference on every candidate file, Symfony files included; the results are right but the work is wasted. Found in the step 6a review.
+- **Detection walks the tree once per module.** Each module reads every `composer.lock` up to depth 4, before checking `off`, and detection runs two to three times per start: about 20 ms where it took 6 ms. Found in the step 6a review.
+- **Method calls build framework arguments before checking that a module applies.** On a Symfony-only project the empty module makes every call look up its targets twice. Check `frameworks_for(path)` first. Found in the step 6a review.
+- **The server log does not name module projects.** Logging `drupal (codebase/drupal), symfony` would show users which folder each module reads. Found in the step 6a review.
+- **Some gating has no test.** YAML file targets, declaration targets and keyed strings outside a module's project, and the Drupal update filter on its own, are untested; `Framework::set_project` has no doc comment. Found in the step 6a review.
+
 ## Accepted for now
 
 - **Implementations miss project classes below a built-in class.** On `$c->count()` with `$c` a `\Countable`, a project `Bag extends \ArrayObject` is missing, because subtypes come from the project table only.
@@ -49,3 +59,4 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 - **Hover on `->value` shows `int|string`.** The type comes from the `BackedEnum` stub, not from the enum's backing type.
 - **Arrays built by assignment have no element type.** `$teams[$id] = $team` in a loop gives `$teams` no element type, as the design takes element types only from declarations.
 - **Template bounds are not used.** A template with no argument gives nothing, even with `@template T of Item`.
+- **Projects are fixed when the index is built.** A `composer.lock` added later takes effect only after a rebuild or a restart.
