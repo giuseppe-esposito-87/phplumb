@@ -167,6 +167,9 @@ pub struct Member {
     pub ty: Option<TypeExpr>,
     /// Methods: parameter names without `$`, with their types.
     pub params: Vec<(String, Option<TypeExpr>)>,
+    /// Methods: each parameter's declared type, PHPDoc left out.
+    #[serde(default)]
+    pub hints: Vec<Option<TypeExpr>>,
     /// An abstract method or an interface method.
     #[serde(default)]
     pub is_abstract: bool,
@@ -1338,6 +1341,7 @@ impl Collector<'_> {
                             doc: doc.clone(),
                             ty: None,
                             params: Vec::new(),
+                            hints: Vec::new(),
                             is_abstract: false,
                             is_private: false,
                             range: (start, constant.span().end.offset),
@@ -1362,6 +1366,7 @@ impl Collector<'_> {
                         doc: self.doc(case.span().start.offset),
                         ty: None,
                         params: Vec::new(),
+                        hints: Vec::new(),
                         is_abstract: false,
                         is_private: false,
                         range: (case.span().start.offset, case.span().end.offset),
@@ -1426,6 +1431,7 @@ impl Collector<'_> {
                 doc: doc.clone(),
                 ty: pick_type(doc_type, declared.clone()),
                 params: Vec::new(),
+                hints: Vec::new(),
                 is_abstract: false,
                 is_private: has_private(modifiers),
                 range: (start, property.span().end.offset),
@@ -1464,6 +1470,7 @@ impl Collector<'_> {
                     doc: None,
                     ty: ty.clone(),
                     params: Vec::new(),
+                    hints: Vec::new(),
                     is_abstract: false,
                     is_private: has_private(&param.modifiers),
                     range: (param.span().start.offset, param.span().end.offset),
@@ -1487,6 +1494,12 @@ impl Collector<'_> {
             ),
             doc,
             params,
+            hints: method
+                .parameter_list
+                .parameters
+                .iter()
+                .map(|param| param.hint.as_ref().map(|h| self.hint_type(h)))
+                .collect(),
             is_abstract: in_interface || has_abstract(&method.modifiers),
             is_private: has_private(&method.modifiers),
             range: (start, method.span().end.offset),

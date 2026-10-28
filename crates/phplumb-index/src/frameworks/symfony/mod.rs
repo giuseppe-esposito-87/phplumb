@@ -69,17 +69,6 @@ fn calls_one_of(index: &Index, call: &FrameworkCall<'_>, methods: &[(&str, &[&st
     })
 }
 
-/// The method name a handler location covers, read from its file.
-fn handler_name(location: &Location) -> String {
-    std::fs::read(&location.path)
-        .ok()
-        .and_then(|text| {
-            text.get(location.start as usize..location.end as usize)
-                .map(|name| String::from_utf8_lossy(name).into_owned())
-        })
-        .unwrap_or_default()
-}
-
 /// A file target at its start.
 fn file_start(path: PathBuf) -> (Location, String) {
     (
@@ -114,7 +103,11 @@ impl Symfony {
 
     /// The handler methods of the message class `message`, at their names.
     pub fn handlers_of(&self, index: &Index, message: &str) -> Vec<Location> {
-        self.handlers.of(index, message)
+        self.handlers
+            .of(index, message)
+            .into_iter()
+            .map(|(location, _)| location)
+            .collect()
     }
 
     /// The message classes the handler method named at `start` in `path` handles.
@@ -272,12 +265,11 @@ impl Framework for Symfony {
         let Some(message) = arguments.first() else {
             return Vec::new();
         };
-        let mut found = Vec::new();
+        let mut found: Vec<(Location, String)> = Vec::new();
         for class in crate::infer::class_names(message) {
-            for location in self.handlers_of(index, &class) {
+            for (location, name) in self.handlers.of(index, &class) {
                 if !found.iter().any(|(known, _)| *known == location) {
-                    let text = handler_name(&location);
-                    found.push((location, text));
+                    found.push((location, name));
                 }
             }
         }

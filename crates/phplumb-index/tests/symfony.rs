@@ -443,6 +443,7 @@ fn handlers_of_a_message() {
             pair("src/Handler/NotifyLogger.php", "handle"),
             pair("src/Handler/SendEmailHandler.php", "__invoke"),
             pair("src/Handler/SmsHandlers.php", "onSms"),
+            pair("src/Handler/StaleDoc.php", "__invoke"),
         ]
     );
     assert_eq!(
@@ -502,6 +503,7 @@ fn dispatch_lists_the_handlers() {
             pair("src/Handler/NotifyLogger.php", "handle"),
             pair("src/Handler/SendEmailHandler.php", "__invoke"),
             pair("src/Handler/SmsHandlers.php", "onSms"),
+            pair("src/Handler/StaleDoc.php", "__invoke"),
         ]
     );
     assert_eq!(
@@ -588,4 +590,60 @@ fn the_handler_attribute_lists_the_dispatches() {
         lines_of(&mut index, "src/Handler/NotifyLogger.php", 8, "method:"),
         [(19, "dispatch".to_string()), (20, "dispatch".to_string())]
     );
+}
+
+#[test]
+fn dispatch_keeps_hover_and_references() {
+    let mut index = build();
+    let path = fixture().join(MESSAGES);
+    let source = std::fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&source).into_owned();
+    let offset = text.find("dispatch(new SendEmail").unwrap() as u32 + 1;
+    let hover = index.hover(&path, &source, offset).expect("a hover");
+    assert!(
+        hover.markdown.contains("dispatch(object $message"),
+        "{}",
+        hover.markdown
+    );
+    let references = index.references(&path, &source, offset, false);
+    assert_eq!(references.len(), 5, "{references:?}");
+}
+
+#[test]
+fn handler_targets_follow_edits_on_disk() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dir(&fixture(), &root);
+    let mut index = Index::build(&root, &DiscoverOptions::default()).unwrap().0;
+    let handler = root.join("src/Handler/SendEmailHandler.php");
+    let content = std::fs::read_to_string(&handler).unwrap();
+    let shifted = format!("<?php\n// one\n// two\n// three\n{}", &content[6..]);
+    std::fs::write(&handler, shifted).unwrap();
+    let path = root.join(MESSAGES);
+    let source = std::fs::read(&path).unwrap();
+    let offset = String::from_utf8_lossy(&source)
+        .find("dispatch(new SendEmail")
+        .unwrap() as u32
+        + 1;
+    for location in index.definition(&path, &source, offset) {
+        let text = std::fs::read(&location.path).unwrap();
+        let name = String::from_utf8_lossy(&text[location.start as usize..location.end as usize])
+            .into_owned();
+        if location.path == handler {
+            assert_eq!(name, "__invoke", "{location:?}");
+        }
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
 }

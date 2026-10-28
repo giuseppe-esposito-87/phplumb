@@ -13,9 +13,10 @@ use crate::summary::{Declaration, Member, MemberKind, SymbolKind};
 /// The attribute that marks a message handler.
 const HANDLER_ATTRIBUTE: &str = "Symfony\\Component\\Messenger\\Attribute\\AsMessageHandler";
 
-/// A handler method and the message classes it handles.
+/// A handler method, its name and the message classes it handles.
 struct Handler {
     location: Location,
+    name: String,
     handles: Vec<String>,
 }
 
@@ -72,17 +73,21 @@ impl Handlers {
     }
 
     /// The handler `method`, handling the attribute's `handles` class or the
-    /// classes of its first parameter's type.
+    /// classes of its first parameter's declared type, as `MessengerPass` reads it.
+    /// Symfony registers public methods only.
     fn add(&mut self, path: &Path, method: &Member, attribute: &Metadata) {
+        if !is_public(method) {
+            return;
+        }
         let handles = match argument(attribute, "handles", 2) {
             Some(MetaValue::Class(class) | MetaValue::String(class)) => {
                 vec![class.trim_start_matches('\\').to_string()]
             }
             Some(_) => return,
             None => method
-                .params
+                .hints
                 .first()
-                .and_then(|(_, ty)| ty.as_ref())
+                .and_then(Option::as_ref)
                 .map(class_names)
                 .unwrap_or_default(),
         };
@@ -95,20 +100,22 @@ impl Handlers {
                 start: method.name_start,
                 end: method.name_end,
             },
+            name: method.name.clone(),
             handles,
         });
     }
 
-    /// The handlers whose handled class `message` is, extends or implements.
-    pub(crate) fn of(&self, index: &Index, message: &str) -> Vec<Location> {
-        let mut found: Vec<Location> = Vec::new();
+    /// The handlers whose handled class `message` is, extends or implements, each
+    /// with its method name.
+    pub(crate) fn of(&self, index: &Index, message: &str) -> Vec<(Location, String)> {
+        let mut found: Vec<(Location, String)> = Vec::new();
         for handler in &self.list {
             let handles = handler
                 .handles
                 .iter()
                 .any(|class| is_a(index, message, &[class]));
-            if handles && !found.contains(&handler.location) {
-                found.push(handler.location.clone());
+            if handles && !found.iter().any(|(known, _)| *known == handler.location) {
+                found.push((handler.location.clone(), handler.name.clone()));
             }
         }
         found
@@ -150,6 +157,16 @@ pub(crate) fn handler_method<'a>(
         .members
         .iter()
         .find(|m| m.kind == MemberKind::Method && m.name.eq_ignore_ascii_case(name))
+}
+
+/// Whether `method` is public: declared without `private` or `protected`.
+fn is_public(method: &Member) -> bool {
+    let modifiers = method
+        .signature
+        .split_once("function")
+        .map_or("", |(before, _)| before)
+        .to_ascii_lowercase();
+    !method.is_private && !modifiers.contains("protected") && !modifiers.contains("private")
 }
 
 fn is_handler(metadata: &Metadata) -> bool {

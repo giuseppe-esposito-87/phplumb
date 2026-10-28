@@ -297,8 +297,6 @@ impl Framework for Drupal {
         )
     }
 
-    /// A render element type or a widget or formatter type in display options leads
-    /// to its plugin class.
     fn call_targets(
         &self,
         _index: &Index,
@@ -308,6 +306,8 @@ impl Framework for Drupal {
         Vec::new()
     }
 
+    /// A render element type or a widget or formatter type in display options leads
+    /// to its plugin class.
     fn keyed_string_targets(
         &self,
         index: &Index,

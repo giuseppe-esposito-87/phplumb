@@ -1617,7 +1617,9 @@ impl Index {
                 }
             };
         }
-        if let Some(found) = self.framework_call(path, &summary, source, offset) {
+        // Only a definition request: hover, references and hierarchies keep the
+        // method's own declaration.
+        if declarations && let Some(found) = self.framework_call(path, &summary, source, offset) {
             return found;
         }
         if let Some((receiver, kind, name)) = infer::member_at(self, path, &summary, source, offset)

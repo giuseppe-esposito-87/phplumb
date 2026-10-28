@@ -12,4 +12,9 @@ final class SmsHandlers
     public function onSms(SendSms|SendEmail $message): void
     {
     }
+
+    #[AsMessageHandler]
+    private function onPrivate(SendSms $message): void
+    {
+    }
 }
