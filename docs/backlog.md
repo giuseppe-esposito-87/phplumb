@@ -72,6 +72,8 @@ Known gaps and deferred work. Each step adds what it leaves behind and removes w
 
 - **Some configuration is not read.** Services and parameters defined by bundles, in XML or PHP configuration, in `config/packages/*.yml` or `config/packages/<env>/`, and parameters set from PHP code give nothing; `_instanceof` and `bind` are not followed. Found in step 6e.
 - **`@id` on an alias opens the alias, not the service it points to.** Following aliases is one more click away. Found in step 6e.
+- **Some service and parameter forms give nothing.** `@!id` and `@>id` references, `#[Autowire('@id')]` and the positional `#[Autowire(null, 'id')]`, files loaded through `imports:`, and a `%name%` after a lone `%` in the same string (`'50% of %app.name%'`) give nothing. Found in the step 6e review.
+- **Some step 6e behaviour has no test.** Another argument of `#[Template]` giving nothing, and aliased or fully qualified `#[Autowire]`, are untested. Found in the step 6e review.
 
 ## Accepted for now
 
