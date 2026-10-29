@@ -85,6 +85,8 @@ PHPlumb runs on macOS (Apple silicon) and Linux (x64), in VS Code 1.140 or later
 
 **Disable Intelephense and other PHP navigation extensions** in workspaces where you use PHPlumb, or you will see every result twice.
 
+For Zed, see [the Zed extension](editors/zed/README.md).
+
 ## Settings
 
 | Setting                       | Default  | Description                                                                                                                                                                        |
@@ -111,7 +113,7 @@ PHPlumb is young (0.4.0). Core PHP navigation, diagnostics and the Drupal and Sy
 
 ## Development
 
-PHPlumb has two parts: an engine in Rust (`crates/`) that speaks the Language Server Protocol, and a thin VS Code extension (`editors/vscode`) that starts it. See the [development guide](docs/development.md) to build, test and package it.
+PHPlumb has two parts: an engine in Rust (`crates/`) that speaks the Language Server Protocol, and thin extensions for VS Code (`editors/vscode`) and Zed (`editors/zed`) that start it. See the [development guide](docs/development.md) to build, test and package it.
 
 ## License
 
